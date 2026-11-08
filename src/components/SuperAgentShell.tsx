@@ -166,6 +166,9 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [crossChecks, setCrossChecks] = useState<CrossCheck[]>(() => loadCrossChecks());
   const [groupDetails, setGroupDetails] = useState<Record<string, WorkTicketDetail>>({});
   const [selectedAgents, setSelectedAgents] = useState<string[]>(['claude-acp']);
+  // 新对话绑定的工作文件夹：选中后指令会作为项目任务分派，Agent 在该目录内读写。
+  const [newFolder, setNewFolder] = useState<string>(() => { try { return localStorage.getItem('dataagent.newchatfolder.v1') || ''; } catch { return ''; } });
+  useEffect(() => { try { localStorage.setItem('dataagent.newchatfolder.v1', newFolder); } catch { /* 存储禁用时仅当前会话生效。 */ } }, [newFolder]);
   const [synthesisAgent, setSynthesisAgent] = useState('');
   const [synthesizing, setSynthesizing] = useState(false);
   const threadRef = useRef<HTMLDivElement | null>(null);
@@ -630,6 +633,30 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     };
     const problem = chosen.length === 1 ? validateSingleInput(execIdFor(chosen[0])) : chosen.some(id => execIdFor(id) === 'analysis') ? (datasets.length === 0 ? '交叉验证包含数据分析，请先上传数据集。' : datasets.length > 1 && !datasetId ? '交叉验证包含数据分析，请先选择数据集。' : null) : null;
     if (problem) { notify(problem, true); return; }
+    // 新对话绑定了工作文件夹：走项目分派，工单在项目目录内执行。
+    const scope = isLanding ? folderState.projects.find(item => item.id === newFolder) : undefined;
+    if (scope) {
+      const execs = chosen.filter(id => !id.startsWith('win:') && projectExecutors.includes(id));
+      if (!execs.length) { notify('这个工作文件夹只接受 Claude Code、Codex、ACP 或窗口 Agent，请重新选择 Agent。', true); return; }
+      setSending(true);
+      try {
+        const result = await api.workProjectDispatch(scope.id, value, execs);
+        const chatId = result.tickets.map(ticket => ticket.projectChatId).filter(Boolean)[0] || null;
+        const targets = result.tickets.map(ticket => ticket.executor).filter(Boolean);
+        setCommand('');
+        setActiveGroupId(null);
+        setActiveTicketId(null);
+        // 先切到项目页再补数据：分派已经落库，等待刷新只会让点击像是没反应。
+        setView('projects');
+        setProjectFocus(scope.id);
+        setChatFocus(chatId);
+        setSending(false);
+        notify(`已把任务分派给 ${targets.length || execs.length} 个 Agent，确认后在 ${scope.name} 目录内执行。`);
+        void refresh();
+        void reloadProjects();
+      } catch (cause) { notify((cause as Error).message, true); setSending(false); }
+      return;
+    }
     setSending(true);
     try {
       if (chosen.length === 1) {
@@ -948,6 +975,15 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             return <button key={id} type="button" className={`sa-agent-pick ${on ? 'on' : ''}`} title={`${window.title || window.process} · PID ${window.pid}`} aria-pressed={on} onClick={() => toggleAgent(id)}>{on ? <Check size={12} /> : <Plus size={12} />}窗口 · {window.process}</button>;
           })}
           {selectedAgents.length > 1 && <span className="sa-xc-badge"><Users size={12} />交叉验证</span>}
+        </div>}
+        {isLanding && folderState.projects.length > 0 && <div className="sa-scope">
+          <FolderGit2 size={13} />
+          <label htmlFor="sa-scope-select">工作文件夹</label>
+          <select id="sa-scope-select" value={newFolder} onChange={event => setNewFolder(event.target.value)} aria-label="选择工作文件夹">
+            <option value="">不使用（在软件内执行）</option>
+            {sortedFolders.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+          <span className="sa-scope-hint">{newFolder ? 'Agent 会在这个目录里读写文件，工单仍需你确认' : '选择一个文件夹，Agent 才能改项目里的文件'}</span>
         </div>}
         <textarea id="sa-command" value={command} maxLength={3000} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} rows={2} placeholder={selectedAgents.length > 1 ? '描述要交叉验证的问题，例如：审查这段鉴权逻辑是否有漏洞？' : '描述目标，例如：检查 DataAgent 仓库的 CI，修复失败项并开 PR'} />
         {singleExecutor === 'analysis' && (datasets.length > 1 ? <div className="sa-executor-fields"><label className="sa-field"><span>数据集</span><select value={datasetId} onChange={event => setDatasetId(event.target.value)}><option value="">请选择数据集</option>{datasets.map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.name} · {dataset.rowCount.toLocaleString()} 行</option>)}</select></label></div> : datasets.length === 1 ? <div className="sa-executor-fields"><span className="sa-inline-note"><Check size={13} />数据集：{datasets[0].name}</span></div> : <div className="sa-executor-fields"><span className="sa-inline-note">还没有数据集，请先在工作区上传或加载示例数据。</span></div>)}

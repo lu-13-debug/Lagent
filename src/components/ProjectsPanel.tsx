@@ -67,8 +67,9 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const [sessions, setSessions] = useState<WorkProjectSession[] | null>(null);
   const [chatDraft, setChatDraft] = useState('');
   const [newChatOpen, setNewChatOpen] = useState(false);
-  const [newExecutor, setNewExecutor] = useState(allowedExecutors[0] || 'claude-code');
+  const [newExecutors, setNewExecutors] = useState<string[]>([]);
   const [newTitle, setNewTitle] = useState('');
+  const [newTask, setNewTask] = useState('');
   const [windows, setWindows] = useState<{ id: string; handle: number; pid: number; process: string; title: string }[]>([]);
   const [windowId, setWindowId] = useState('');
   const [planOpen, setPlanOpen] = useState(false);
@@ -222,27 +223,52 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   };
   const openNewChat = async () => {
     setNewChatOpen(true);
-    setNewExecutor(allowedExecutors[0] || 'claude-code');
+    setNewExecutors([allowedExecutors[0] || 'claude-code']);
     setNewTitle('');
+    setNewTask('');
     if (allowedExecutors.includes('window')) {
       try { setWindows((await api.workWindows()).windows); } catch { setWindows([]); }
     }
   };
+  const toggleNewExecutor = (id: string) => setNewExecutors(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id]);
   const createChat = async () => {
     if (!project) return;
-    if (newExecutor === 'window' && !windowId) { notify('请选择要接管的窗口。', true); return; }
+    const execs = [...new Set(newExecutors)].filter(id => allowedExecutors.includes(id));
+    if (!execs.length) { notify('请至少选择一个 Agent。', true); return; }
+    if (execs.length > 4) { notify('一次最多选择 4 个 Agent。', true); return; }
+    if (execs.includes('window') && execs.length > 1) { notify('窗口 Agent 只能单独使用，请取消其他选择。', true); return; }
+    if (execs.includes('window') && !windowId) { notify('请选择要接管的窗口。', true); return; }
     setBusy('new-chat');
     try {
+      const task = newTask.trim();
+      if (execs.length > 1) {
+        // 多 Agent：同一任务并行分派，每个 Agent 一条待确认工单，各自在自己的会话里执行。
+        if (!task) { notify('多 Agent 协同需要写下要一起完成的任务。', true); return; }
+        const result = await api.workProjectDispatch(project.id, task, execs);
+        await loadProjects(true);
+        setNewChatOpen(false);
+        const chatId = result.tickets.map(ticket => ticket.projectChatId).filter(Boolean)[0];
+        if (chatId) setActiveChatId(chatId);
+        notify(`已把任务分派给 ${execs.length} 个 Agent，确认后各自在项目目录内执行。`);
+        return;
+      }
       const target = windows.find(item => item.id === windowId);
       const result = await api.workCreateProjectChat(project.id, {
-        executorId: newExecutor,
+        executorId: execs[0],
         ...(newTitle.trim() ? { title: newTitle.trim() } : {}),
-        ...(newExecutor === 'window' && target ? { handle: target.handle, process: target.process, title: target.title } : {})
+        ...(execs[0] === 'window' && target ? { handle: target.handle, process: target.process, title: target.title } : {})
       });
+      let ticketId = '';
+      if (task) {
+        const sent = await api.workProjectChatMessage(result.chat.id, task);
+        ticketId = sent.ticket.id;
+      }
       await loadProjects(true);
       setActiveChatId(result.chat.id);
       setNewChatOpen(false);
-      notify(`已创建与 ${EXECUTOR_LABELS[newExecutor] || newExecutor} 的项目对话。`);
+      notify(task
+        ? `已创建与 ${EXECUTOR_LABELS[execs[0]] || execs[0]} 的项目对话，并提交了任务（待确认）。`
+        : `已创建与 ${EXECUTOR_LABELS[execs[0]] || execs[0]} 的项目对话。`);
     } catch (cause) { notify((cause as Error).message, true); }
     finally { setBusy(''); }
   };
@@ -502,12 +528,22 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
           </div>}
 
           {tab === 'chat' && newChatOpen && <div className="pj-newchat">
-            <label>Agent<select value={newExecutor} onChange={event => setNewExecutor(event.target.value)}>{(allowedExecutors.length ? allowedExecutors : ['claude-code', 'codex']).map(id => <option key={id} value={id}>{EXECUTOR_LABELS[id] || id}</option>)}</select></label>
-            {newExecutor === 'window' && <label>目标窗口<select value={windowId} onChange={event => setWindowId(event.target.value)}><option value="">选择窗口…</option>{windows.map(item => <option key={item.id} value={item.id}>{item.process} · {item.title}</option>)}</select></label>}
+            <div className="pj-newchat-agents">
+              <span>Agent</span>
+              <div className="pj-newchat-chips">
+                {(allowedExecutors.length ? allowedExecutors : ['claude-code', 'codex']).map(id => {
+                  const on = newExecutors.includes(id);
+                  return <button type="button" key={id} className={`pj-chip ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => toggleNewExecutor(id)}>{on && <Check size={11} />}{EXECUTOR_LABELS[id] || id}</button>;
+                })}
+              </div>
+              <small>可选多个 Agent；多选时会用同一条任务并行分派，每个 Agent 各有一条待确认工单。</small>
+            </div>
+            {newExecutors.includes('window') && <label>目标窗口<select value={windowId} onChange={event => setWindowId(event.target.value)}><option value="">选择窗口…</option>{windows.map(item => <option key={item.id} value={item.id}>{item.process} · {item.title}</option>)}</select></label>}
             <label>对话标题（可选）<input value={newTitle} onChange={event => setNewTitle(event.target.value)} placeholder="例如 修复登录页" /></label>
+            <label>任务（可选）<textarea rows={3} maxLength={3000} value={newTask} onChange={event => setNewTask(event.target.value)} placeholder={newExecutors.length > 1 ? '写下要一起完成的任务，创建后立即并行分派' : '写下要完成的任务，创建后立即提交（仍需审批）'} /></label>
             <div className="pj-editor-actions">
               <button type="button" className="pj-btn" onClick={() => setNewChatOpen(false)}>取消</button>
-              <button type="button" className="pj-btn pj-primary" disabled={busy === 'new-chat'} onClick={() => void createChat()}>{busy === 'new-chat' ? '创建中…' : '创建'}</button>
+              <button type="button" className="pj-btn pj-primary" disabled={busy === 'new-chat'} onClick={() => void createChat()}>{busy === 'new-chat' ? '创建中…' : newExecutors.length > 1 ? `分派给 ${newExecutors.length} 个 Agent` : '创建'}</button>
             </div>
           </div>}
 

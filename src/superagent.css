@@ -4290,34 +4290,37 @@ html[data-theme="dark"] .sa-newchat kbd {
 
 
 
-/* 侧栏中段统一滚动：工作文件夹 + 对话共用一个滚动容器，底部用户行保持贴底。 */
+/* 侧栏中段：工作文件夹与对话各自滚动，两段都始终可见，底部用户行贴底。 */
 .sa-side-scroll {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
   flex-direction: column;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
+  overflow: hidden;
 }
 
 .sa-side-scroll .sa-folders {
-  flex: none;
+  flex: 0 0 auto;
 }
 
 .sa-side-scroll .sa-folder-list {
-  flex: none;
-  max-height: none;
-  overflow: visible;
+  flex: 0 1 auto;
+  max-height: 34vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .sa-side-scroll .sa-conv-section {
-  flex: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .sa-side-scroll .sa-conversations {
-  flex: none;
-  overflow: visible;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* 落地页：内容与命令条作为一个整体垂直居中，避免中间出现大片空白。 */
@@ -4377,4 +4380,83 @@ html[data-theme="dark"] .sa-newchat kbd {
   .sa-sidebar-foot {
     padding-top: 6px;
   }
+}
+
+/* 新对话顶部的工作文件夹选择条 */
+.sa-scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--sa-line);
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-scope label {
+  color: var(--sa-text-2);
+  white-space: nowrap;
+}
+
+.sa-scope select {
+  height: 26px;
+  max-width: 180px;
+  padding: 0 6px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-xs);
+  background: var(--sa-surface);
+  color: var(--sa-text);
+  font: inherit;
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-scope-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sa-text-3);
+}
+
+@media (max-width: 760px) {
+  .sa-scope {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .sa-scope-hint {
+    display: none;
+  }
+}
+
+/* 项目新建对话里的 Agent 多选 */
+.pj-newchat-agents {
+  display: grid;
+  gap: 6px;
+}
+
+.pj-newchat-agents > span {
+  font-size: var(--sa-fs-xs);
+  color: var(--sa-text-2);
+}
+
+.pj-newchat-agents small {
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+  line-height: 1.6;
+}
+
+.pj-newchat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 两段并存的最终配额：文件夹列表最多 240px（可内部滚动），对话区至少 200px。 */
+.sa-side-scroll .sa-folder-list {
+  max-height: min(34vh, 240px);
+}
+
+.sa-side-scroll .sa-conv-section {
+  min-height: 200px;
 }

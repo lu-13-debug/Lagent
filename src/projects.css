@@ -384,3 +384,42 @@
 .pj-note-bar .sa-keyhint {
   margin-left: auto;
 }
+
+/* 新建对话表单改为单列表单（含多 Agent 选择与任务），沿用 2 列旧栅格会把标签挤到右侧 */
+.pj-newchat {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+}
+
+.pj-newchat label {
+  display: grid;
+  gap: 6px;
+}
+
+.pj-newchat textarea {
+  padding: 9px 10px;
+  border: 1px solid var(--sa-line-strong);
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface);
+  color: var(--sa-text);
+  font: inherit;
+  font-size: var(--sa-fs-sm);
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.pj-newchat textarea:focus-visible {
+  outline: none;
+  border-color: var(--sa-accent);
+  box-shadow: var(--sa-ring);
+}
+
+.pj-newchat-chips .pj-chip {
+  flex: 0 0 auto;
+}
+
+.pj-newchat-chips .pj-chip {
+  flex: 0 0 auto;
+  min-height: 28px;
+}
