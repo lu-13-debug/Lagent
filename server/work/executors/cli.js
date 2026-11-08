@@ -76,10 +76,19 @@ export function writablePrompt(input) {
   ].join('\n');
 }
 
+export const CLI_ENV_PASSTHROUGH = 'DATAAGENT_CLI_ENV_PASSTHROUGH';
+
+// 默认只给 CLI 子进程最小环境（不带任何 API Key），避免把本地凭据泄露给它读到的任意命令。
+// 但本机 CLI 往往自带 provider 配置（例如 ~/.codex/config.toml 里 env_key = "OPENCODE_API_KEY"），
+// 所以留一个显式开关：只有操作者在 DATAAGENT_CLI_ENV_PASSTHROUGH 里点名的变量才会透传。
 export function cliEnvironment(source = process.env) {
   const env = {};
   for (const key of ALLOWED_ENVIRONMENT) {
     if (typeof source?.[key] === 'string') env[key] = source[key];
+  }
+  const declared = String(source?.[CLI_ENV_PASSTHROUGH] ?? '').split(',').map(item => item.trim()).filter(Boolean);
+  for (const key of declared) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && typeof source?.[key] === 'string') env[key] = source[key];
   }
   env.NO_COLOR = '1';
   env.CI = '1';

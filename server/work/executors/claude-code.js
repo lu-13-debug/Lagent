@@ -52,12 +52,12 @@ export function claudeCodeExecutor({
   store,
   cwd,
   binary = process.env.DATAAGENT_CLAUDE_CLI,
-  timeoutMs = 300_000,
-  maxOutputBytes = 512 * 1024,
+  timeoutMs = 900_000,
+  maxOutputBytes = 8 * 1024 * 1024,
   spawnImpl,
   environment = process.env
 }) {
-  const validateInput = input => normalizeCliInput(input, { defaultMaxTurns: 5, maxTurns: 20 });
+  const validateInput = input => normalizeCliInput(input, { defaultMaxTurns: 12, maxTurns: 60 });
   const detected = binary ? { binary, prefix: [] } : findClaudeCodeCli(environment);
   const resolvedBinary = binary || detected?.binary;
   const binaryPrefix = detected?.prefix || [];

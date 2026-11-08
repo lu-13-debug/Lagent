@@ -153,7 +153,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     }
     if (!executor || executor.kind !== 'cli') throw workError('该执行器暂不支持项目对话', 400);
     const requestedTurns = Number(options?.maxTurns);
-    const maxTurns = Number.isInteger(requestedTurns) && requestedTurns >= 1 && requestedTurns <= 20 ? requestedTurns : 12;
+    // 项目内的一次真实改动常常要读十来个文件、改几处、再验证一次；
+    // 12 个回合会在「刚开始动手」时就被 error_max_turns 掐断。
+    const maxTurns = Number.isInteger(requestedTurns) && requestedTurns >= 1 && requestedTurns <= 60 ? requestedTurns : 24;
     const resuming = typeof chat.sessionId === 'string' && chat.sessionId;
     const context = resuming ? '' : projectBriefContext(project);
     // ACP 的文件读写走客户端回调，性能上等价于给 Agent 项目目录写权限，

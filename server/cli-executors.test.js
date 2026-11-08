@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { Store } from './store.js';
 import { codexExecutor, parseCodexOutput } from './work/executors/codex.js';
 import { claudeCodeExecutor, parseClaudeOutput } from './work/executors/claude-code.js';
+import { cliEnvironment } from './work/executors/cli.js';
 
 async function waitFor(predicate, message = '等待条件超时', timeoutMs = 2500) {
   const deadline = Date.now() + timeoutMs;
@@ -57,7 +58,7 @@ test('E2 CLI 可用性只接受显式可执行文件并校验输入边界', t =>
   assert.deepEqual(codex.validateInput({ prompt: '  只读检查  ', maxTurns: 3 }), { prompt: '只读检查', maxTurns: 3 });
   assert.throws(() => codex.validateInput({ prompt: '' }), { status: 400 });
   assert.throws(() => codex.validateInput({ prompt: '检查', maxTurns: 0 }), { status: 400 });
-  assert.throws(() => codex.validateInput({ prompt: '检查', maxTurns: 21 }), { status: 400 });
+  assert.throws(() => codex.validateInput({ prompt: '检查', maxTurns: 61 }), { status: 400 });
   assert.throws(() => codex.validateInput({ prompt: 'x'.repeat(17 * 1024) }), { status: 400 });
   assert.throws(() => relative.start({ command: 'x' }, { id: 'a' }, { prompt: 'x' }), { status: 503 });
 });
@@ -96,11 +97,11 @@ test('E2 Codex 固定 argv、环境过滤、JSONL 脱敏与 artifact 统计', as
   await waitFor(() => store.get('task', task.id)?.status === 'completed');
   const saved = store.get('task', task.id);
   assert.equal(invocation.executable, resolve(binary));
-  assert.deepEqual(invocation.args.slice(0, 6), ['exec', '--json', '--sandbox', 'read-only', '-C', resolve(dir)]);
-  assert.equal(invocation.args.length, 7);
-  assert.match(invocation.args[6], /只读分析模式/);
-  assert.match(invocation.args[6], /不得启动子智能体/);
-  assert.match(invocation.args[6], /检查; \$\(whoami\) && echo no/);
+  assert.deepEqual(invocation.args.slice(0, 7), ['exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check', '-C', resolve(dir)]);
+  assert.equal(invocation.args.length, 8);
+  assert.match(invocation.args[7], /只读分析模式/);
+  assert.match(invocation.args[7], /不得启动子智能体/);
+  assert.match(invocation.args[7], /检查; \$\(whoami\) && echo no/);
   assert.equal(invocation.options.cwd, resolve(dir));
   assert.equal(invocation.options.shell, false);
   assert.equal(invocation.options.env.OPENAI_API_KEY, undefined);
@@ -223,4 +224,50 @@ test('E2 输出解析器不保留 reasoning/thinking 或原始事件', () => {
   assert.deepEqual(codex.stats, { events: 3, malformedLines: 0, agentMessages: 1, commands: 0, fileChanges: 0, tools: 0 });
   assert.equal(claude.summary, '最终结果');
   assert.doesNotMatch(JSON.stringify({ codex, claude }), /private reasoning|private thinking/);
+});
+
+test('E2 CLI 子进程默认零凭据，只透传显式点名的环境变量', () => {
+  const base = cliEnvironment({ PATH: '/usr/bin', OPENAI_API_KEY: 'sk-openai', OPENCODE_API_KEY: 'oc-key' });
+  assert.equal(base.PATH, '/usr/bin');
+  assert.equal(base.OPENAI_API_KEY, undefined);
+  assert.equal(base.OPENCODE_API_KEY, undefined);
+  assert.equal(base.NO_COLOR, '1');
+
+  const opted = cliEnvironment({
+    PATH: '/usr/bin',
+    OPENCODE_API_KEY: 'oc-key',
+    DATAAGENT_CLI_ENV_PASSTHROUGH: 'OPENCODE_API_KEY, not a name, '
+  });
+  assert.equal(opted.OPENCODE_API_KEY, 'oc-key');
+  assert.equal(opted.OPENAI_API_KEY, undefined);
+  assert.equal(opted['not a name'], undefined);
+  assert.equal(opted.DATAAGENT_CLI_ENV_PASSTHROUGH, undefined);
+});
+
+test('E2 codex 失败时优先给出真正的错误，配置提示不算失败', () => {
+  const failed = parseCodexOutput({
+    stdout: jsonl([
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'item.completed', item: { type: 'error', message: 'Codex is ignoring 1 unrecognized configuration setting.' } },
+      { type: 'turn.started' },
+      { type: 'error', message: 'Upstream request failed: Model is unavailable.' },
+      { type: 'turn.failed', error: { message: 'Upstream request failed: Model is unavailable.' } }
+    ]),
+    stderr: '',
+    exitCode: 1
+  });
+  assert.match(failed.error, /Model is unavailable/);
+  assert.doesNotMatch(failed.error, /unrecognized configuration/);
+
+  const warningsOnly = parseCodexOutput({
+    stdout: jsonl([
+      { type: 'item.completed', item: { type: 'error', message: 'Codex is ignoring 1 unrecognized configuration setting.' } },
+      { type: 'item.completed', item: { type: 'agent_message', text: 'OK' } },
+      { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }
+    ]),
+    stderr: '',
+    exitCode: 0
+  });
+  assert.equal(warningsOnly.error, '');
+  assert.equal(warningsOnly.summary, 'OK');
 });

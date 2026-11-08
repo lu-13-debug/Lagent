@@ -22,7 +22,8 @@ export function parseCodexOutput({ stdout, stderr, exitCode }) {
   const { events, malformed } = parseJsonLines(stdout);
   const summaries = [];
   const artifacts = [];
-  const errors = [];
+  const fatal = [];
+  const warnings = [];
   const stats = { events: events.length, malformedLines: malformed, agentMessages: 0, commands: 0, fileChanges: 0, tools: 0 };
   let usage = {};
   let sessionId = '';
@@ -31,8 +32,13 @@ export function parseCodexOutput({ stdout, stderr, exitCode }) {
     if (event.type === 'thread.started' && typeof event.thread_id === 'string') sessionId = event.thread_id;
     if (typeof event.thread_id === 'string' && event.thread_id && !sessionId) sessionId = event.thread_id;
     if (event.type === 'turn.completed' && event.usage) usage = event.usage;
+    // codex 会把「配置项被忽略」这类无害提示也发成 error 事件；真正的失败是顶层 error 或 turn.failed。
+    // 若不区分，用户只会看到噪音提示，看不到「Model is unavailable」这类真正的原因。
     const error = eventError(event);
-    if (error) errors.push(sanitizeText(String(error), 2000));
+    if (error) {
+      const bucket = event?.item?.type === 'error' ? warnings : fatal;
+      bucket.push(sanitizeText(String(error), 2000));
+    }
     const item = event.item || event;
     if (event.type === 'item.completed' && item?.type === 'agent_message') {
       stats.agentMessages += 1;
@@ -49,11 +55,12 @@ export function parseCodexOutput({ stdout, stderr, exitCode }) {
     }
   }
 
-  if (!errors.length && exitCode !== 0) errors.push(sanitizeText(stderr, 2000));
+  const stderrText = sanitizeText(stderr, 2000);
+  const failure = exitCode !== 0 ? (fatal.find(Boolean) || stderrText || warnings.find(Boolean) || '') : '';
   return {
     summary: sanitizeText(summaries.join('\n\n'), MAX_SUMMARY),
     usage,
-    error: errors.find(Boolean) || '',
+    error: failure,
     artifacts,
     stats,
     ...(sessionId ? { sessionId } : {})
@@ -64,20 +71,22 @@ export function codexExecutor({
   store,
   cwd,
   binary = process.env.DATAAGENT_CODEX_CLI,
-  timeoutMs = 300_000,
-  maxOutputBytes = 512 * 1024,
+  timeoutMs = 900_000,
+  maxOutputBytes = 8 * 1024 * 1024,
   spawnImpl,
   environment = process.env
 }) {
-  const validateInput = input => normalizeCliInput(input, { defaultMaxTurns: 5, maxTurns: 20 });
+  const validateInput = input => normalizeCliInput(input, { defaultMaxTurns: 12, maxTurns: 60 });
   const resolvedBinary = binary || findCodexBinary(environment);
   const buildArgs = (input, workspace) => {
     const write = input.write === true;
     const prompt = write ? writablePrompt(input) : readOnlyPrompt(input);
+    // 项目目录不一定是 git 仓库（例如 D:\test），codex 默认会拒绝非受信目录并直接退出；
+    // 写入范围已经由本软件的审批闸门与 sandbox 参数限制，这里放开仓库检查。
     if (input.resume) {
-      return ['exec', 'resume', '--json', ...(write ? ['-c', 'sandbox_mode="workspace-write"'] : []), input.resume, prompt];
+      return ['exec', 'resume', '--json', '--skip-git-repo-check', ...(write ? ['-c', 'sandbox_mode="workspace-write"'] : []), input.resume, prompt];
     }
-    return ['exec', '--json', '--sandbox', write ? 'workspace-write' : 'read-only', '-C', workspace, prompt];
+    return ['exec', '--json', '--sandbox', write ? 'workspace-write' : 'read-only', '--skip-git-repo-check', '-C', workspace, prompt];
   };
   const executor = createCliExecutor({
     id: 'codex',
