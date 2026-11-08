@@ -15,9 +15,11 @@
     "cloud": "node server/cloud-index.js",
     "cloud:dev": "node --watch server/cloud-index.js",
     "test": "node --test server/*.test.js desktop/*.test.cjs src/*.test.mjs",
+    "bench:dataset": "node scripts/bench-dataset.mjs",
     "desktop:dev": "npm run build && electron .",
     "desktop:pack": "npm run build && electron-builder --dir --win --x64 --publish never",
-    "desktop:build": "npm run build && electron-builder --win nsis --x64 --publish never"
+    "desktop:build": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "csv-parse": "^6.1.0",
@@ -25,11 +27,13 @@
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
     "multer": "^2.0.2",
+    "playwright": "^1.64.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "recharts": "^3.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.7.0",

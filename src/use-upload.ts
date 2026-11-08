@@ -6,12 +6,12 @@ export function useUpload(onSuccess: (dataset: Dataset) => void) {
   const controller = useRef<AbortController | null>(null); const mounted = useRef(true); const callback = useRef(onSuccess); callback.current = onSuccess;
   const [state, setState] = useState<{ status: 'idle' | 'transferring' | 'processing' | 'failed' | 'cancelled' | 'success'; progress: number | null; error: string; issues: DataIssue[] }>({ status: 'idle', progress: null, error: '', issues: [] });
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; controller.current?.abort(); }; }, []);
-  async function start(files: File[]) {
+  async function start(files: File[], options: { timezone?: string; domain?: string } = {}) {
     if (controller.current || !files.length) return;
     const current = new AbortController(); controller.current = current;
     setState({ status: 'transferring', progress: 0, error: '', issues: [] });
     try {
-      const { dataset } = await api.upload(files, { signal: current.signal, onProgress: progress => { if (mounted.current && !current.signal.aborted) setState(previous => ({ ...previous, progress, status: progress === 100 ? 'processing' : 'transferring' })); } });
+      const { dataset } = await api.upload(files, { domain: options.domain, timezone: options.timezone, signal: current.signal, onProgress: progress => { if (mounted.current && !current.signal.aborted) setState(previous => ({ ...previous, progress, status: progress === 100 ? 'processing' : 'transferring' })); } });
       if (mounted.current && !current.signal.aborted) { setState({ status: 'success', progress: 100, error: '', issues: [] }); callback.current(dataset); }
     } catch (error) {
       if (mounted.current) setState({ status: (error as Error).name === 'AbortError' ? 'cancelled' : 'failed', progress: null, error: (error as Error).name === 'AbortError' ? '' : (error as Error).message, issues: (error as { issues?: DataIssue[] }).issues || [] });

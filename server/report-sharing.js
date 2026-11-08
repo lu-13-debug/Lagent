@@ -15,7 +15,7 @@ function coverage(id, metric) {
   let match;
   if (['dau','pay_rate','arpdau'].includes(id)) {
     const suffix = id === 'dau' ? '；按 user_id 去重' : id === 'pay_rate' ? '；活跃且支付用户 / DAU' : '；当日成功支付总额 / DAU';
-    const pattern = /^(\d{4}-\d{2}-\d{2}) 最后完整活跃覆盖自然日(.*)$/;
+    const pattern = /^(\d{4}-\d{2}-\d{2}) 最后(?:完整)?活跃覆盖自然日(?:（完整性未验证）)?(.*)$/;
     match = pattern.exec(metric.note);
     return match && match[2] === suffix ? range(match[1], match[1]) : null;
   }
@@ -45,7 +45,9 @@ export function shareSnapshot(report, hideRevenue, datasetSource) {
   });
   const periodMatch = typeof report.period === 'string' ? /^(\d{4}-\d{2}-\d{2}) 至 (\d{4}-\d{2}-\d{2})$/.exec(report.period) : null;
   const sample = datasetSource === 'demo' ? true : datasetSource === 'upload' ? false : null;
+  const timeZone = typeof report.timezone?.name === 'string' && report.timezone.name.length <= 80 ? report.timezone.name : null;
   return { source: report.source === 'ai' ? 'ai' : 'local', hideRevenue,
+    timeZone, timeZoneAssumed: timeZone ? report.timezone.assumed !== false : null,
     sample, sampleNotice: sample === true ? '本报告使用示例数据，不代表真实业务。' : sample === false ? '数据源标记为上传数据。' : '数据来源是否为示例未知。',
     period: periodMatch ? range(periodMatch[1], periodMatch[2]) : null,
     dailyTruncated: Array.isArray(report.daily) && report.daily.length > 366,

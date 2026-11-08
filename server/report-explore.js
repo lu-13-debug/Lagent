@@ -1,5 +1,6 @@
 import { Worker } from 'node:worker_threads';
 import { SCHEMA, analyze, analysisRange, dateOf, normalizeRecords, round, shiftDate, yesterday } from './analytics.js';
+import { normalizeTimezone, timezoneMinutes } from './timezone.js';
 import { maskSkippedReport } from './workflow.js';
 
 const failure = (message, status = 400) => Object.assign(new Error(message), { status });
@@ -24,26 +25,29 @@ export function explorationInput(body, task) {
   if (task.status !== 'completed' || !task.report) throw failure('仅已完成且有报告的任务可以探索', 409);
   const generatedAt = task.report.generatedAt;
   if (typeof generatedAt !== 'string' || !Number.isFinite(Date.parse(generatedAt))) throw failure('原报告缺少有效生成时间，请重新分析源数据', 409);
-  if (range.end > yesterday(generatedAt)) throw failure('仅可探索原报告生成时已结束的完整自然日');
+  const tz = timezoneMinutes(normalizeTimezone(task.report.timezone));
+  if (range.end > yesterday(generatedAt, tz)) throw failure('仅可探索原报告生成时已结束的自然日');
   if (body.comparePrevious && !/^[1-9]\d{3}-/.test(shiftDate(range.start, -range.length))) throw failure('上期日期超出支持范围');
   return { start: range.start, end: range.end, channels: [...new Set((body.channels || []).map(name => name.trim()))].sort(), comparePrevious: body.comparePrevious === true };
 }
 
-function tableCoverage(records, cutoff) {
+function tableCoverage(records, cutoff, completeness, tz) {
+  const partial = completeness?.declared === 'partial';
   return Object.fromEntries(Object.entries(timeFields).map(([type, field]) => {
-    const dates = (records[type] || []).map(row => dateOf(row[field])).sort();
-    const end = dates.length ? (dates.at(-1) < cutoff ? dates.at(-1) : cutoff) : null;
+    const dates = (records[type] || []).map(row => dateOf(row[field], tz)).sort();
+    let end = dates.length ? (dates.at(-1) < cutoff ? dates.at(-1) : cutoff) : null;
+    if (end && partial) end = shiftDate(end, -1);
     return [type, end && dates[0] <= end ? { start: dates[0], end } : null];
   }));
 }
 const overlaps = (coverage, type, range) => Boolean(coverage[type] && coverage[type].start <= range.end && coverage[type].end >= range.start);
 const covers = (coverage, type, range) => Boolean(coverage[type] && coverage[type].start <= range.start && coverage[type].end >= range.end);
 
-function derivedPeriod(dataset, records, task, input, coverage) {
+function derivedPeriod(dataset, records, task, input, coverage, tz) {
   const generatedAt = task.report.generatedAt, skippedSteps = task.skippedSteps || [];
   const userMap = new Map((records.users || []).map(user => [user.user_id, user]));
   const selected = row => !input.channels.length || input.channels.includes(userMap.get(row.user_id)?.channel);
-  const inRange = (row, field) => { const date = dateOf(row[field]); return date >= input.start && date <= input.end; };
+  const inRange = (row, field) => { const date = dateOf(row[field], tz); return date >= input.start && date <= input.end; };
   const rows = Object.fromEntries(Object.entries(timeFields).map(([type, field]) => [type, (records[type] || []).filter(row => selected(row) && inRange(row, field))]));
   const selectedRowsByTable = Object.fromEntries(Object.entries(rows).map(([type, values]) => [type, values.length]));
   const sourceRows = Object.values(dataset.records).reduce((total, values) => total + values.length, 0);
@@ -56,7 +60,7 @@ function derivedPeriod(dataset, records, task, input, coverage) {
   report.methodology = [...report.methodology, sampleNote, '本结果未调用模型；原报告的 AI 摘要、洞察、建议及模型用量不移植到筛选结果。指标 change 不表示上期比较，统一保留 null；比较见 comparison.metrics。'];
   report.metrics = report.metrics.map(metric => ({ ...metric, change: null }));
   return { report, scope: {
-    start: input.start, end: input.end, channels: input.channels, timeZone: 'Asia/Shanghai', statisticsVersion: 'report-explore-v1', generatedAt, coverage,
+    start: input.start, end: input.end, channels: input.channels, timeZone: report.timezone?.name || 'Asia/Shanghai', statisticsVersion: 'report-explore-v1', generatedAt, coverage,
     sample: { sourceRows, selectedRows, selectedRowsByTable,
       registeredUsers: overlaps(coverage, 'users', input) ? rows.users.length : null,
       payingUsers: !skippedSteps.includes('monetization') && overlaps(coverage, 'payments', input) ? new Set(rows.payments.filter(row => successful.has(row.status)).map(row => row.user_id)).size : null,
@@ -68,7 +72,7 @@ function compareMetrics(current, previous, coverage, skippedSteps) {
   const requirements = { dau: ['activity'], new_users: ['users'], d1_retention: ['users'], d7_retention: ['users'], revenue: ['payments'], arppu: ['payments'], pay_rate: ['activity', 'payments'], arpdau: ['activity', 'payments'] };
   return current.report.metrics.map(metric => {
     const prior = previous.report.metrics.find(item => item.id === metric.id)?.value ?? null;
-    let reason = null;
+    let reason = current.report.dataCompleteness?.declared !== 'full' ? current.report.dataCompleteness.comparisonMessage : null;
     if ((skippedSteps.includes('retention') && ['d1_retention', 'd7_retention'].includes(metric.id)) || (skippedSteps.includes('monetization') && ['revenue', 'arppu', 'pay_rate', 'arpdau'].includes(metric.id))) reason = '原任务已跳过此分析分支';
     if (!reason && (requirements[metric.id] || []).some(type => !covers(coverage, type, current.scope) || !covers(coverage, type, previous.scope))) reason = '当前期或上期的源表未完整覆盖等长区间';
     if (!reason && ['d1_retention', 'd7_retention'].includes(metric.id)) {
@@ -84,17 +88,22 @@ function compareMetrics(current, previous, coverage, skippedSteps) {
 export function computeExploration(dataset, task, body) {
   const input = explorationInput(body, task);
   assertExplorationSource(dataset);
+  const tz = timezoneMinutes(normalizeTimezone(dataset.timezone));
   let records;
-  try { ({ records } = normalizeRecords(dataset.records, dataset.warnings || [])); }
+  try { ({ records } = normalizeRecords(dataset.records, dataset.warnings || [], tz)); }
   catch { throw failure('报告源数据结构无法安全分析，请核对后重新上传', 409); }
   if (input.channels.length && !records.users?.length) throw failure('缺少注册表，无法按注册渠道筛选');
   if (input.channels.some(name => !(records.users || []).some(user => user.channel === name))) throw failure('所选渠道未出现在源注册表，请刷新渠道后重试');
-  const coverage = tableCoverage(records, yesterday(task.report.generatedAt));
-  const current = derivedPeriod(dataset, records, task, input, coverage);
+  const coverage = tableCoverage(records, yesterday(task.report.generatedAt, tz), dataset.completeness, tz);
+  if (dataset.completeness?.declared === 'partial') {
+    const usableEnd = Object.values(coverage).filter(Boolean).map(range => range.end).sort().at(-1);
+    if (usableEnd && input.end > usableEnd) throw failure(`分片数据仅可探索至 ${usableEnd}；各表边界日期已排除，请缩小日期范围或补充其他分片`);
+  }
+  const current = derivedPeriod(dataset, records, task, input, coverage, tz);
   if (!input.comparePrevious) return { ...current, comparison: { requested: false, comparable: false, reasons: ['未请求上期比较'], metrics: [] } };
   const length = analysisRange(input).length;
   const previousRange = { start: shiftDate(input.start, -length), end: shiftDate(input.start, -1) };
-  const previous = derivedPeriod(dataset, records, task, { ...input, ...previousRange }, coverage);
+  const previous = derivedPeriod(dataset, records, task, { ...input, ...previousRange }, coverage, tz);
   const metrics = compareMetrics(current, previous, coverage, task.skippedSteps || []);
   return { ...current, previous: previous.report, previousScope: previous.scope, comparison: { requested: true, comparable: metrics.some(metric => metric.comparable), reasons: [...new Set(metrics.filter(metric => !metric.comparable).map(metric => metric.reason))], previousRange, metrics } };
 }
@@ -116,7 +125,7 @@ export class ReportExplorer {
     return new Promise((resolve, reject) => {
       // Only calculation inputs cross the worker boundary: never credentials, model context or AI prose.
       const startedAt = performance.now();
-      const worker = this.workerFactory({ dataset: { id: dataset.id, name: dataset.name, source: dataset.source, warnings: dataset.warnings, records: dataset.records }, task: { status: task.status, title: task.title, datasetName: task.datasetName, skippedSteps: task.skippedSteps, report: { generatedAt: task.report.generatedAt } }, input });
+      const worker = this.workerFactory({ dataset: { id: dataset.id, name: dataset.name, source: dataset.source, warnings: dataset.warnings, completeness: dataset.completeness, timezone: dataset.timezone, records: dataset.records }, task: { status: task.status, title: task.title, datasetName: task.datasetName, skippedSteps: task.skippedSteps, report: { generatedAt: task.report.generatedAt, timezone: task.report.timezone } }, input });
       let finished = false, timer;
       const finish = async (error, result) => {
         if (finished) return; finished = true;

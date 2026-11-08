@@ -1,19 +1,48 @@
+import { registerWork } from './work/routes.js';
+import { createWindowBridge } from './window-bridge.js';
+import { workEnabled } from './work/policy.js';
+import { analysisExecutor } from './work/executors/analysis.js';
+import { createExecutorRegistry } from './work/executors/index.js';
+import { terminalExecutor } from './work/executors/terminal.js';
+import { windowExecutor } from './work/executors/window.js';
+import { acpExecutors } from './work/executors/acp.js';
+import { createProviderRegistry } from './work/providers.js';
+import { codexExecutor } from './work/executors/codex.js';
+import { claudeCodeExecutor } from './work/executors/claude-code.js';
+import { browserExecutor } from './work/executors/browser.js';
+import { githubExecutor } from './work/executors/github.js';
+import { registerMemory } from './memory-api.js';
 import express from 'express';
 import multer from 'multer';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { Store } from './store.js';
-import { generateDemo, parseFiles, publicDataset } from './datasets.js';
-import { assertAnalyzable } from './inspection.js';
+import { normalizeCompleteness } from './completeness.js';
+import { normalizeTimezone, timezoneMinutes, timezoneCaption } from './timezone.js';
+import { DATASET_LIMITS, generateDemo, parseFiles, publicDataset } from './datasets.js';
+import { buildCapability } from './capability.js';
+import { assertAnalyzable, inspectDataset } from './inspection.js';
 import { Workflow, publicTask, createTask, demoTask, makeMessage, makeEvent, SKILLS, DOMAINS, PROJECT } from './workflow.js';
-import { DEFAULT_SETTINGS, validateSettings, validateKey, normalizeBaseUrl, chat, redact } from './gateway.js';
+import { DEFAULT_MODEL_TIMEOUT_MS, DEFAULT_SETTINGS, validateSettings, validateKey, normalizeBaseUrl, chat, redact } from './gateway.js';
 import { listModels } from './model-catalog.js';
-import { TaskMonitor, TASK_CAPABILITIES } from './task-monitor.js';
+import { TaskMonitor, TASK_CAPABILITIES, taskCapabilities } from './task-monitor.js';
+import { summarizeModelUsage } from './model-usage.js';
 import { requestIdentity, repeatedTask, recoveryInput, recoverTask } from './task-recovery.js';
 import { isModelErrorCode } from './task-errors.js';
 import { ReportExplorer, assertExplorationSource, REPORT_EXPLORE_TIMEOUT_MESSAGE } from './report-explore.js';
 import { reportMetadata, updateReportMetadata, continuationInput, continueFromReport } from './report-assets.js';
+import { getProfile } from './domain-profiles.js';
+import { registerModelHub } from './model-hub.js';
+import { configureMultiTask } from './multi-workflow.js';
+import { restoreReusableArtifacts } from './artifact-lifecycle.js';
+import { reportContentHash } from './report-version.js';
+import { getMetricCatalog } from './metric-catalog.js';
+import { buildProvenance } from './provenance.js';
+import { buildQualityReceipts } from './quality-receipts.js';
+import { runAnalysisTool } from './analysis-tools.js';
+import { buildReportPdf } from './report-pdf.js';
+import { MobileGateway, hasDeviceToken, registerMobilePairingRoutes } from './mobile-gateway.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const statusError = (message, status = 400) => Object.assign(new Error(message), { status });
@@ -22,10 +51,17 @@ const textField = (value, label, max, required = true) => {
   return value.trim();
 };
 const markdownText = value => String(value ?? '').replace(/[<>]/g, c => c === '<' ? '&lt;' : '&gt;').replace(/\r/g, '');
+const selectedDomain = (value, fallback = 'game') => {
+  const id = value === undefined || value === null || value === '' ? fallback : String(value);
+  const profile = getProfile(id);
+  if (profile.id !== id) throw statusError('未知的分析领域');
+  if (!profile.enabled) throw statusError(`暂未开放「${profile.name}」分析`);
+  return profile.id;
+};
 function reportMarkdown(task) {
   const r = task.report;
   return [
-    `# ${markdownText(r.title)}`, '', `分析期间：${r.period}  |  币种：${r.currency}`, `生成时间：${r.generatedAt}`, `分析来源：${r.source === 'ai' ? '自带 Key 模型 + 本地计算' : '本地确定性分析'}`, '',
+    `# ${markdownText(r.title)}`, '', `分析期间：${r.period}  |  币种：${r.currency}`, `生成时间：${r.generatedAt}`, `统计时区：${r.timezone ? `${markdownText(timezoneCaption(r.timezone))}${r.timezone.assumed ? '未确认' : '已确认'}` : '未记录'}`, `分析来源：${r.source === 'ai' ? '自带 Key 模型 + 本地计算' : '本地确定性分析'}`, '',
     markdownText(r.summary), '', '## 关键指标', '',
     '| 指标 | 数值 | 口径 |', '| --- | --- | --- |',
     ...r.metrics.map(m => `| ${markdownText(m.label)} | ${m.value === null ? '无数据' : `${m.value} ${m.unit}`} | ${markdownText(m.note).replaceAll('|', '\\|')} |`), '',
@@ -39,14 +75,35 @@ function reportMarkdown(task) {
 
 export function createApp(options = {}) {
   const app = express();
+  const enableWork=workEnabled(options);let closeWork;let mobileGateway;let ownsMobileGateway=false;
   app.disable('x-powered-by');
-  const store = new Store(options.dataDir || process.env.DATAAGENT_DATA_DIR || path.join(root, 'data'));
+  const storeDir = options.dataDir || process.env.DATAAGENT_DATA_DIR || path.join(root, 'data');
+  const store = new Store(storeDir);
   let key = ''; let keyBaseUrl = '';
   let settings = store.config('settings') || { ...DEFAULT_SETTINGS };
   const getKey = (req, target = settings) => options.getKey ? options.getKey(req, normalizeBaseUrl(target.baseUrl)) || '' : keyBaseUrl === normalizeBaseUrl(target.baseUrl) ? key : '';
   const setKey = (req, value, target = settings) => { const baseUrl = normalizeBaseUrl(target.baseUrl); if (options.setKey) options.setKey(req, value, baseUrl); else { key = value; keyBaseUrl = baseUrl; } };
-  const publicSettings = req => ({ ...settings, hasKey: Boolean(getKey(req)) });
-  const workflow = new Workflow(store);
+  let modelHub;
+  const publicSettings = req => {
+    const hub = modelHub?.publicState();
+    const profile = hub?.profiles.find(item => item.id === hub.workflow.defaultProfileId);
+    const enabled = Boolean(profile && !profile.unavailable && hub.vault.available && hub.credentials.some(credential => credential.id === profile.credentialId));
+    const sessionHasKey = Boolean(getKey(req));
+    return { ...settings, ...(enabled ? { model: profile.model } : {}), hasKey: enabled || sessionHasKey, sessionHasKey, workflowEnabled: enabled };
+  };
+  async function ensurePdf(task, signal) {
+    if (!task.report || (task.workflowSnapshot ? !task.artifacts?.verify?.verified : task.status !== 'completed')) throw statusError('报告尚未核验完成，无法导出 PDF', 409);
+    const contentHash = reportContentHash(task.report);
+    if (task.verifiedReportHash && task.verifiedReportHash !== contentHash) throw statusError('报告内容已变化，请重新核验后导出 PDF', 409);
+    const cached = store.get('report-pdf', task.id);
+    if (cached?.contentHash === contentHash) return { ready: true, bytes: cached.bytes, generatedAt: cached.generatedAt };
+    const buffer = await (options.pdfBuilder || buildReportPdf)({ ...task, report: { ...task.report, qualityReceipts: buildQualityReceipts(task, task.report) } }, { signal });
+    if (!Buffer.isBuffer(buffer) || buffer.length > 20 * 1024 * 1024 || buffer.subarray(0, 4).toString() !== '%PDF') throw statusError('PDF 生成结果无效或超过 20MB', 503);
+    signal?.throwIfAborted();
+    const artifact = { id: task.id, contentHash, content: buffer.toString('base64'), bytes: buffer.length, generatedAt: new Date().toISOString() };
+    store.put('report-pdf', artifact); return { ready: true, bytes: artifact.bytes, generatedAt: artifact.generatedAt };
+  }
+  const workflow = new Workflow(store, { fetchImpl: options.fetchImpl, runTool: options.analysisTool || runAnalysisTool, createPdf: ensurePdf });
   const monitor = new TaskMonitor(store, options);
   const explorer = new ReportExplorer({ maxConcurrent: options.maxReportExplorations, workerFactory: options.reportExploreWorkerFactory, timeoutMs: options.reportExploreTimeoutMs });
   let activeAsync = 0;
@@ -58,7 +115,7 @@ export function createApp(options = {}) {
   app.locals.explorer = explorer;
   app.locals.isBusy = () => explorer.size > 0 || monitor.size > 0 || activeAsync > 0 || workflow.running.size > 0 || store.list('task').some(t => ['running', 'awaiting_approval'].includes(t.status));
   let closed = false;
-  app.locals.close = () => { if (closed) return; closed = true; explorer.close(); monitor.close(); workflow.close(); key = ''; store.close(); };
+  app.locals.close = () => { if (closed) return; closed = true; closeWork?.(); if (ownsMobileGateway) mobileGateway?.close(); explorer.close(); monitor.close(); workflow.close(); key = ''; store.close(); };
   function ensureDemo() {
     let dataset = store.list('dataset').find(x => x.source === 'demo');
     if (!dataset) { dataset = generateDemo(); store.put('dataset', dataset); }
@@ -71,8 +128,21 @@ export function createApp(options = {}) {
   const datasetById = id => { const dataset = store.get('dataset', id); if (!dataset) throw statusError('数据集不存在', 404); return dataset; };
   const taskById = id => { const task = store.get('task', id); if (!task) throw statusError('任务不存在', 404); return task; };
   const taskView = task => {
+    const view = publicTask(task);
+    if (view.report) view.qualityReceipts = buildQualityReceipts(task, view.report);
+    // Reports written before the capability field existed still need an honest scope block.
+    if (view.report && !view.report.capability && task.datasetId) {
+      const dataset = store.get('dataset', task.datasetId);
+      if (dataset) {
+        const capability = dataset.inspection?.capability || buildCapability((dataset.tables || []).map(table => table.type));
+        const title = capability.missingTables.length
+          ? view.report.title.replace('完整运营报告', '部分数据分析报告').replace('运营分析报告', '部分数据分析报告')
+          : view.report.title;
+        view.report = { ...view.report, capability, title };
+      }
+    }
     const metadata = reportMetadata(store, task.id);
-    return { ...publicTask(task), ...(metadata ? { metadata } : {}) };
+    return { ...view, ...(metadata ? { metadata } : {}) };
   };
   const taskWallet = task => ({ task: taskView(task), ...store.walletSnapshot() });
 
@@ -95,16 +165,57 @@ export function createApp(options = {}) {
     next();
   });
   app.use(express.json({ limit: '128kb' }));
-  app.get('/api/runtime', (_req, res) => res.json({ mode: 'local', authRequired: false, serviceName: 'DataAgent', version: '1.1.0', capabilities: TASK_CAPABILITIES }));
+  app.use('/api', (req, res, next) => {
+    if (hasDeviceToken(req) && req.path.startsWith('/work/')) return res.status(401).json({ error: '设备 token 仅可用于移动 Work API' });
+    next();
+  });
+  registerMemory(app, store, options.userId || 'local');
+  modelHub = registerModelHub(app, { store, ownerId: options.userId || 'local', masterKey: options.credentialMasterKey ?? process.env.DATAAGENT_CREDENTIAL_MASTER_KEY, assertModelSettings: options.assertModelSettings, fetchImpl: options.fetchImpl });
+  workflow.modelHub = modelHub;
+  app.locals.modelHub = modelHub;
+  if(enableWork) {
+    const analysis=analysisExecutor({store,workflow,create:({ticket,assignment,dataset,useAI})=>{
+      const domain=dataset.domain||'game';assertAnalyzable(dataset,{domain});
+      const snapshot=useAI?modelHub.captureWorkflow():null;
+      if(store.list('task').filter(t=>['running','awaiting_approval'].includes(t.status)).length>=(options.maxConcurrentTasks??Infinity))throw statusError('工作区并发分析已达上限',429);
+      const task=createTask({title:ticket.title,goal:ticket.command,mode:'collaborative',domain,datasetId:dataset.id,useAI},dataset,settings.model);
+      task.workAssignmentId=assignment.id;task.sourceProvenance=buildProvenance(dataset);
+      if(snapshot)configureMultiTask(task,snapshot);
+      return store.createTask(task);
+    }});
+    const workCwd=options.cloud?storeDir:root;
+    const acp = acpExecutors({ store, cwd: workCwd });
+    const terminal=terminalExecutor({store,cwd:workCwd});
+    const codex=codexExecutor({store,cwd:workCwd,binary:process.env.DATAAGENT_CODEX_CLI});
+    const claudeCode=claudeCodeExecutor({store,cwd:workCwd,binary:process.env.DATAAGENT_CLAUDE_CLI});
+    const browser=browserExecutor({store});
+    const github=githubExecutor({store,fetchImpl:options.fetchImpl||fetch});
+    const mobileOwnerId=options.userId||'local';
+    const windowBridge=options.cloud?null:(options.windowBridge??createWindowBridge());
+    const providerRegistry=options.providerRegistry??createProviderRegistry(windowBridge?{desktopProbe:()=>windowBridge.listWindows()}:{});
+    const window=windowBridge?windowExecutor({store,bridge:windowBridge,...(process.env.DATAAGENT_WINDOW_WAIT_MS?{maxWaitMs:Number(process.env.DATAAGENT_WINDOW_WAIT_MS)}:{})}):null;
+    const executors=createExecutorRegistry([analysis,terminal,codex,claudeCode,browser,github,...(window?[window]:[]),...acp]);
+    mobileGateway=options.mobileGateway||new MobileGateway({dataDir:path.join(storeDir,'mobile'),now:options.now});
+    ownsMobileGateway=!options.mobileGateway;
+    registerMobilePairingRoutes(app,mobileGateway,{desktopOwner:options.mobileDesktopOwner||(()=>mobileOwnerId)});
+    closeWork=registerWork(app,store,executors,{isSessionValid:options.isSessionValid,onConnect:options.onTaskEventConnect,mobileGateway,mobileOwnerId,onMobileEventConnect:options.onMobileEventConnect,planner:options.workPlanner??(input=>modelHub.suggestWorkPlan(input)),windowBridge,providerRegistry,allowFilesystemBrowser:!options.cloud});
+  }
+  app.get('/api/runtime', (_req, res) => res.json({ mode: 'local', authRequired: false, serviceName: 'DataAgent', version: '1.1.0', capabilities: taskCapabilities(enableWork) }));
+  app.get('/api/model-usage', (req, res) => {
+    const days = req.query.days ?? '30';
+    if (typeof days !== 'string' || !['7', '30', '90', 'all'].includes(days)) return res.status(400).json({ error: '用量范围仅支持7、30、90或all' });
+    res.json(summarizeModelUsage({ calls: store.list('model-call'), tasks: store.list('task'), days: days === 'all' ? days : Number(days), now: new Date() }));
+  });
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
-  app.get('/api/bootstrap', (req, res) => res.json({ project: { ...PROJECT, ...(options.cloud ? { description: '游戏运营数据分析工作台 · 云端个人工作空间' } : {}) }, tasks: store.list('task').map(taskView), datasets: store.list('dataset').map(publicDataset), ...store.walletSnapshot(), skills: SKILLS, domains: DOMAINS, settings: publicSettings(req) }));
+  app.get('/api/metric-catalog', (req, res) => res.json({ metrics: getMetricCatalog(selectedDomain(req.query.domain)) }));
+  app.get('/api/bootstrap', (req, res) => res.json({ project: { ...PROJECT, ...(options.cloud ? { description: '数据分析工作台 · 云端个人工作空间' } : {}) }, tasks: store.list('task').map(taskView), datasets: store.list('dataset').map(publicDataset), ...store.walletSnapshot(), skills: SKILLS, domains: DOMAINS, settings: publicSettings(req) }));
   const checkDatasetLimit = () => { if (store.list('dataset').length >= (options.maxDatasets ?? Infinity)) throw statusError('每个账号最多保存 20 份数据，请先删除不再使用的数据', 429); };
   app.post('/api/datasets/demo', (_req, res) => {
     checkDatasetLimit();
     const dataset = generateDemo(); store.put('dataset', dataset); res.status(201).json({ dataset: publicDataset(dataset) });
   });
-  const upload = multer({ storage: multer.memoryStorage(), limits: { files: 3, fileSize: 20 * 1024 * 1024, fields: 2, parts: 5 } });
-  app.post('/api/datasets/upload', upload.array('files', 3), trackAsync(async (req, res) => {
+  const upload = multer({ storage: multer.memoryStorage(), limits: { files: DATASET_LIMITS.maxFiles, fileSize: DATASET_LIMITS.maxBytes, fields: 3, parts: DATASET_LIMITS.maxFiles + 3 } });
+  app.post('/api/datasets/upload', upload.array('files', DATASET_LIMITS.maxFiles), trackAsync(async (req, res) => {
     try {
       checkDatasetLimit();
       const files = req.files?.map(file => {
@@ -115,11 +226,40 @@ export function createApp(options = {}) {
         }
         return { ...file, originalname };
       });
-      const dataset = await parseFiles(files); checkDatasetLimit(); store.put('dataset', dataset); res.status(201).json({ dataset: publicDataset(dataset) });
+      const domain = selectedDomain(req.body?.domain);
+      const dataset = await parseFiles(files, { completeness: req.body?.completeness, timezone: req.body?.timezone, domain }); checkDatasetLimit(); store.put('dataset', dataset); res.status(201).json({ dataset: publicDataset(dataset) });
     }
     catch (error) { throw Object.assign(statusError(error.message, error.status || 400), error.issues ? { issues: error.issues } : {}); }
   }));
   app.get('/api/datasets/:id', (req, res) => res.json({ dataset: publicDataset(datasetById(req.params.id)) }));
+  app.put('/api/datasets/:id/completeness', (req, res) => {
+    const dataset = datasetById(req.params.id);
+    if (store.list('task').some(t => t.datasetId === dataset.id && ['running', 'awaiting_approval'].includes(t.status))) throw statusError('该数据集正在分析，请结束任务后修改声明', 409);
+    try { dataset.completeness = normalizeCompleteness(req.body, { strict: true }); }
+    catch (error) { throw statusError(error.message, 400); }
+    store.put('dataset', dataset);
+    res.json({ dataset: publicDataset(dataset) });
+  });
+  app.put('/api/datasets/:id/timezone', (req, res) => {
+    const dataset = datasetById(req.params.id);
+    if (store.list('task').some(t => t.datasetId === dataset.id && ['running', 'awaiting_approval'].includes(t.status))) throw statusError('该数据集正在分析，请结束任务后修改时区', 409);
+    let timezone;
+    try { timezone = normalizeTimezone(req.body?.timezone, { strict: true }); }
+    catch (error) { throw statusError(error.message, 400); }
+    const current = normalizeTimezone(dataset.timezone, { legacyAt: dataset.createdAt });
+    if (timezone.offsetMinutes !== current.offsetMinutes && dataset.timezoneZoneless > 0) throw statusError('原始时间未带时区，已按当前时区解析；修改时区需重新上传数据', 409);
+    dataset.timezone = { ...timezone, declaredAt: new Date().toISOString() };
+    dataset.warnings = (dataset.warnings || []).filter(text => !/^(未声明时区|另有 .* 条时间未带时区)/.test(text));
+    if (timezone.offsetMinutes !== current.offsetMinutes) {
+      const mappings = dataset.inspection?.mappings;
+      dataset.inspection = inspectDataset(dataset, { mappings });
+    } else if (dataset.inspection) {
+      dataset.inspection.timezone = { name: timezone.name, offsetMinutes: timezone.offsetMinutes, assumed: false, source: 'user' };
+      dataset.inspection.issues = dataset.inspection.issues.filter(issue => issue.code !== 'timezone_unconfirmed');
+    }
+    store.put('dataset', dataset);
+    res.json({ dataset: publicDataset(dataset), note: `${timezoneCaption(current)} → ${timezoneCaption(timezone)}` });
+  });
   app.delete('/api/datasets/:id', (req, res) => {
     const dataset = datasetById(req.params.id);
     if (store.list('task').some(t => t.datasetId === dataset.id && ['running', 'awaiting_approval'].includes(t.status))) throw statusError('该数据集正在被未完成任务使用，请先完成或取消任务', 409);
@@ -130,28 +270,33 @@ export function createApp(options = {}) {
     const title = textField(input.title, '任务名称', 100);
     const goal = textField(input.goal, '分析目标', 3000);
     if (!['collaborative', 'automatic'].includes(input.mode)) throw statusError('请选择协作模式或自动模式');
-    if (input.domain !== 'game') throw statusError('当前仅开放游戏运营分析');
     if (typeof input.useAI !== 'boolean') throw statusError('useAI 必须为布尔值');
     const continuation = continuationInput(input);
-    const normalized = { title, goal, mode: input.mode, domain: input.domain, datasetId: input.datasetId, useAI: input.useAI, ...continuation };
+    const dataset = datasetById(input.datasetId);
+    const datasetDomain = dataset.domain || 'game';
+    const domain = selectedDomain(input.domain, datasetDomain);
+    if (domain !== datasetDomain) throw statusError('数据集所属领域与任务领域不一致，请重新上传对应领域的数据');
+    const normalized = { title, goal, mode: input.mode, domain, datasetId: input.datasetId, useAI: input.useAI, ...continuation };
     const identity = requestIdentity(input.clientRequestId, { action: 'create', ...normalized });
     const previous = repeatedTask(store, identity);
     if (previous) return res.json(taskWallet(previous));
     const source = continuation.sourceTaskId ? taskById(continuation.sourceTaskId) : null;
-    const dataset = datasetById(input.datasetId);
-    try { assertAnalyzable(dataset); }
+    try { assertAnalyzable(dataset, { domain }); }
     catch (error) { throw Object.assign(statusError(error.message), { issues: error.issues }); }
+    const multiSnapshot = input.useAI && modelHub.publicState().workflow.defaultProfileId ? modelHub.captureWorkflow() : null;
     const candidate = Object.assign(createTask(normalized, dataset, settings.model), identity);
+    candidate.sourceProvenance = buildProvenance(dataset);
+    if (multiSnapshot) configureMultiTask(candidate, multiSnapshot);
     if (source) continueFromReport(candidate, source, continuation.inheritContext);
     const requestKey = getKey(req);
-    if (input.useAI) {
+    if (input.useAI && !multiSnapshot) {
       options.assertModelSettings?.(settings);
       if (!requestKey) throw statusError('尚未设置 API Key；请先配置模型或切换为本地分析');
     }
     if (store.list('task').filter(t => ['running', 'awaiting_approval'].includes(t.status)).length >= (options.maxConcurrentTasks ?? Infinity)) throw statusError('每个账号最多同时运行 2 个任务，请先完成或取消现有任务', 429);
     const task = store.createTask(candidate);
     if (task.id !== candidate.id) return res.json(taskWallet(task));
-    if (task.useAI) workflow.captureModel(task.id, { settings, key: requestKey, fetchImpl: options.fetchImpl || fetch, timeoutMs: options.modelTimeoutMs || 30000 });
+    if (task.useAI && !multiSnapshot) workflow.captureModel(task.id, { settings, key: requestKey, fetchImpl: options.fetchImpl || fetch, timeoutMs: options.modelTimeoutMs || DEFAULT_MODEL_TIMEOUT_MS });
     res.status(201).json(taskWallet(task)); workflow.schedule(task.id);
   });
   app.get('/api/tasks/summary', (_req, res) => res.json(monitor.snapshot()));
@@ -191,18 +336,22 @@ export function createApp(options = {}) {
     if (previous) return res.json(taskWallet(previous));
     if (!['failed', 'cancelled'].includes(source.status)) throw statusError('仅失败或取消的任务可以创建恢复尝试', 409);
     const dataset = datasetById(source.datasetId);
-    try { assertAnalyzable(dataset); }
+    try { assertAnalyzable(dataset, { domain: source.domain || dataset.domain }); }
     catch (error) { throw Object.assign(statusError(error.message), { issues: error.issues }); }
     const requestKey = getKey(req);
-    if (input.useAI) {
+    const multiSnapshot = input.useAI && modelHub.publicState().workflow.defaultProfileId ? modelHub.captureWorkflow() : null;
+    if (input.useAI && !multiSnapshot) {
       options.assertModelSettings?.(settings);
       if (!requestKey) throw statusError('尚未设置当前会话的 API Key；请先配置模型或切换为本地分析');
     }
     if (store.list('task').filter(task => ['running', 'awaiting_approval'].includes(task.status)).length >= (options.maxConcurrentTasks ?? Infinity)) throw statusError('每个账号最多同时运行 2 个任务，请先完成或取消现有任务', 429);
     const candidate = Object.assign(recoverTask(source, dataset, input, settings.model), identity);
+    candidate.sourceProvenance = buildProvenance(dataset);
+    if (multiSnapshot) configureMultiTask(candidate, multiSnapshot);
+    if (multiSnapshot && input.strategy === 'resume') restoreReusableArtifacts(source, candidate, dataset);
     const task = store.createTask(candidate);
     if (task.id !== candidate.id) return res.json(taskWallet(task));
-    if (task.useAI) workflow.captureModel(task.id, { settings, key: requestKey, fetchImpl: options.fetchImpl || fetch, timeoutMs: options.modelTimeoutMs || 30000 });
+    if (task.useAI && !multiSnapshot) workflow.captureModel(task.id, { settings, key: requestKey, fetchImpl: options.fetchImpl || fetch, timeoutMs: options.modelTimeoutMs || DEFAULT_MODEL_TIMEOUT_MS });
     res.status(201).json(taskWallet(task)); workflow.schedule(task.id);
   });
   app.post('/api/tasks/:id/skip', (req, res) => res.json(taskWallet(workflow.skip(taskById(req.params.id), req.body?.stepId))));
@@ -210,7 +359,7 @@ export function createApp(options = {}) {
     const message = req.body?.message === undefined ? '' : textField(req.body.message, '消息', 3000, false);
     const stepId = req.body?.stepId;
     if (stepId !== undefined && !['plan', 'report'].includes(stepId)) throw statusError('批准节点必须为 plan 或 report');
-    res.json(taskWallet(workflow.approve(taskById(req.params.id), message, stepId)));
+    res.json(taskWallet(workflow.approve(taskById(req.params.id), message, stepId, req.body?.approvalSnapshot)));
   });
   app.post('/api/tasks/:id/message', (req, res) => {
     const message = textField(req.body?.message, '消息', 3000);
@@ -223,6 +372,19 @@ export function createApp(options = {}) {
     store.put('task', task); res.json({ task: taskView(task) });
   });
   app.post('/api/tasks/:id/cancel', (req, res) => res.json(taskWallet(workflow.cancel(taskById(req.params.id)))));
+  app.get('/api/tasks/:id/report.pdf', trackAsync(async (req, res) => {
+    const task = taskById(req.params.id);
+    const controller = new AbortController();
+    const abort = () => { if (!res.writableEnded) controller.abort(); }; res.once('close', abort);
+    try {
+      await ensurePdf(task, controller.signal);
+      if (options.isSessionValid && !options.isSessionValid(req)) throw statusError('登录已失效，请重新登录', 401);
+      if (res.destroyed) return;
+      const artifact = store.get('report-pdf', task.id);
+      res.setHeader('Content-Disposition', `attachment; filename="dataagent-report-${task.id}.pdf"`);
+      res.type('application/pdf').send(Buffer.from(artifact.content, 'base64'));
+    } finally { res.off('close', abort); }
+  }));
   app.get('/api/tasks/:id/report.md', (req, res) => {
     const task = taskById(req.params.id);
     if (task.status !== 'completed' || !task.report) throw statusError('报告尚未完成', 409);
@@ -249,7 +411,7 @@ export function createApp(options = {}) {
     const requestKey = getKey(req);
     try {
       options.assertModelSettings?.(settings);
-      const text = await chat({ settings, key: requestKey, fetchImpl: options.fetchImpl || fetch, timeoutMs: options.modelTimeoutMs || 30000, maxTokens: 1024, connectionTest: true, messages: [{ role: 'user', content: '只回复 OK，用于检查连接。' }] });
+      const text = await chat({ settings, key: requestKey, fetchImpl: options.fetchImpl || fetch, timeoutMs: options.modelTimeoutMs || DEFAULT_MODEL_TIMEOUT_MS, maxTokens: 1024, connectionTest: true, messages: [{ role: 'user', content: '只回复 OK，用于检查连接。' }] });
       res.json({ ok: true, message: text ? '模型连接成功。本次进行了真实的小型模型调用，供应商可能计入用量。' : '模型已连接并返回推理内容；本次测试达到输出上限，未生成最终答案。正式分析使用更高上限，供应商可能计入用量。' });
     } catch (error) { throw Object.assign(statusError(redact(error.message, requestKey), 400), isModelErrorCode(error.code) ? { code: error.code } : {}); }
   }));
@@ -269,6 +431,7 @@ export function createApp(options = {}) {
   }));
   app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在' }));
   const dist = options.distDir || path.join(root, 'dist');
+  app.use('/api/mobile', (_req, res) => res.status(404).json({ error: '移动接口不存在' }));
   if (options.serveStatic !== false && existsSync(dist)) {
     app.use(express.static(dist, { index: false }));
     app.use((req, res, next) => { if (req.method === 'GET' && req.accepts('html')) res.sendFile(path.join(dist, 'index.html')); else next(); });
@@ -276,7 +439,7 @@ export function createApp(options = {}) {
   app.use((error, req, res, _next) => {
     let status = error.status || (error instanceof multer.MulterError ? 400 : 500);
     let message = error.message || '服务内部错误';
-    if (error instanceof multer.MulterError) message = error.code === 'LIMIT_FILE_SIZE' ? '单个文件不能超过 20MB' : '上传受限：最多 3 个文件，总大小 20MB，请检查文件字段 files';
+    if (error instanceof multer.MulterError) message = error.code === 'LIMIT_FILE_SIZE' ? '单个文件不能超过 20MB；请按时间范围拆分文件、只导出必要列，或压缩日期范围后重试' : `上传受限：最多 ${DATASET_LIMITS.maxFiles} 个文件、单文件 20MB；请按时间范围拆分、只导出必要列或压缩日期范围后重试`;
     if (error.type === 'entity.parse.failed') { status = 400; message = 'JSON 请求格式无效'; }
     if (status >= 500) message = '服务处理失败，请检查数据或重试；敏感错误细节已隐藏';
     const issues = status < 500 && Array.isArray(error.issues) ? JSON.parse(JSON.stringify(error.issues, (_field, value) => typeof value === 'string' ? redact(value, getKey(req)) : value)) : undefined;

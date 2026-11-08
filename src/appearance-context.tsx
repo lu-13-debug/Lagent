@@ -1,15 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { readAppearance, resolveAppearance, saveAppearance, readRail, resolveRail, saveRail } from './appearance';
-import type { Appearance, ThemePreference, ViewDensity } from './appearance';
+import type { Appearance, ThemePreference } from './appearance';
 
-type ContextValue = Appearance & { railCollapsed: boolean; setRailCollapsed: (value: boolean) => void; setTheme: (value: ThemePreference) => void; setView: (value: ViewDensity) => void };
+type ContextValue = Appearance & { railCollapsed: boolean; setRailCollapsed: (value: boolean) => void; setTheme: (value: ThemePreference) => void };
 const AppearanceContext = createContext<ContextValue | null>(null);
 const systemDark = () => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: dark)').matches;
 export function AppearanceProvider({ children, userId }: { children: ReactNode; userId?: string }) {
   const origin = window.location.origin;
   const [preference, setPreference] = useState(() => {
-    try { return readAppearance(localStorage, origin, userId); } catch { return { theme: 'system' as const, view: 'standard' as const }; }
+    try { return readAppearance(localStorage, origin, userId); } catch { return { theme: 'system' as const, view: 'concise' as const }; }
   });
   const [dark, setDark] = useState(systemDark);
   const [railPreference, setRailPreference] = useState<boolean | null>(() => { try { return readRail(localStorage, origin, userId); } catch { return null; } });
@@ -40,9 +40,8 @@ export function AppearanceProvider({ children, userId }: { children: ReactNode; 
     try { window.dataagentDesktop?.setTheme?.(current.theme); } catch { /* 旧客户端仍使用页面主题。 */ }
   }, [current, origin, preference, userId]);
   const setTheme = useCallback((theme: ThemePreference) => setPreference(previous => ({ ...previous, theme })), []);
-  const setView = useCallback((view: ViewDensity) => setPreference(previous => ({ ...previous, view })), []);
   const setRailCollapsed = useCallback((value: boolean) => { setRailPreference(value); try { saveRail(localStorage, origin, userId, value); } catch { /* 当前会话仍可使用。 */ } }, [origin, userId]);
-  return <AppearanceContext.Provider value={{ ...current, railCollapsed, setRailCollapsed, setTheme, setView }}>{children}</AppearanceContext.Provider>;
+  return <AppearanceContext.Provider value={{ ...current, railCollapsed, setRailCollapsed, setTheme }}>{children}</AppearanceContext.Provider>;
 }
 export function useAppearance() {
   const value = useContext(AppearanceContext);

@@ -30,6 +30,8 @@ cp .env.example .env
 
 修改 `.env` 中的 `DATAAGENT_DOMAIN` 为实际域名，例如 `analysis.your-domain.com`。`DATAAGENT_MODEL_HOSTS` 默认包含 `api.deepseek.com,api.anthropic.com,api.openai.com`，开放三家的官方兼容接口。填写其他主机列表会覆盖默认值，只填精确主机名，英文逗号分隔，不含协议、路径、端口或通配符；显式设置为空可关闭 AI。API Key 由各用户在登录后填写，不写进这个文件。
 
+如管理员确认 OpenCode Go 适用于自己的使用场景，可将 `opencode.ai` 加入上述完整主机列表并重新部署服务，例如 `DATAAGENT_MODEL_HOSTS=api.deepseek.com,api.anthropic.com,api.openai.com,opencode.ai`。由于环境变量会替换默认列表，不要只填写新主机而误关闭已有供应商。OpenCode Go 主要面向编码代理，游戏数据分析是否符合套餐范围应向供应商确认；各模型的数据使用政策也需核对。
+
 ```bash
 docker compose up -d --build
 docker compose ps
@@ -95,3 +97,14 @@ docker compose up -d --build
 云端服务支持为已完成报告生成有限期、可撤销的只读快照。链接中的令牌位于 `#` 片段；公开读取通过同源 POST 请求体传递令牌。请确保 Caddy、反向代理、APM、错误监控及调试中间件不记录请求体、分享令牌或完整带片段的浏览器地址；分享与公开 API 响应使用 `no-store` 和 `no-referrer`。不要添加会捕获请求体的日志插件。
 
 隐藏收入时，公开快照仅保留安全字段，不提供玩家明细或数据下载；它不包含原报告中的自由文本和 AI 叙述。分享数据和去重计数保存在账号数据库中，因此也属于上述备份范围。访问和注册计数基于随机访客标识去重，不代表自然人数量；到期超过 30 天的记录会按服务策略清理。升级前仍需检查正在运行的任务并备份数据，服务重启会清除会话中的模型 Key。
+
+
+## 持久凭据库与分析工具部署
+
+新版支持每账号多凭据。配置 `DATAAGENT_CREDENTIAL_MASTER_KEY` 为32字节随机值的base64，并通过Compose环境变量注入；例如在可信管理终端运行 `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`，将结果写入不提交Git的部署 `.env`。主密钥应独立备份，不能随着数据库一起公开；丢失后无法解密已有Key。更换主密钥前需制定迁移方案，当前不提供自动批量轮换。
+
+数据库中只保存认证加密密文；退出、重启和会话过期不会删除持久凭据。旧会话Key仍会清除。缺少主密钥时新凭据库不可写，旧功能可用。不要记录凭据请求体、Authorization、模型提示或主密钥。
+
+运行镜像新增Playwright Chromium、Noto中文字体和隔离Python虚拟环境，依赖版本位于 `server/tools/requirements.txt`。分析工具不继承云服务的模型Key或主密钥环境。首次镜像构建需要下载浏览器与Python依赖；仅源码测试通过不等于容器或公网部署已验证。
+
+PDF导出默认最多2个并发、8个等待；图表仅使用本站受控产物，排版页面禁用脚本和网络。Linux工具设CPU/内存/文件大小限制，Windows开发环境主要依赖数据大小与超时限制。建议监控资源占用后再调整服务并发。

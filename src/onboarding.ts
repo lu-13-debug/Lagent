@@ -15,7 +15,7 @@ export function writeOnboarding(storage: Pick<Storage, 'setItem'>, key: string, 
 }
 export function isPresetSample(task: Pick<Task, 'events'>) {
   // 同一示例数据的新建分析仍收费；只有预置历史具有此事件。
-  return task.events.some(event => event.type === 'info' && event.title === '示例报告已生成');
+  return Array.isArray(task.events) && task.events.some(event => event.type === 'info' && event.title === '示例报告已生成');
 }
 export function progressFromData(progress: OnboardingProgress, datasets: Pick<Dataset, 'source'>[], tasks: Pick<Task, 'status' | 'events' | 'report'>[]): OnboardingProgress {
   return { ...progress, selectedData: progress.selectedData || datasets.some(dataset => dataset.source === 'upload'), generatedReport: progress.generatedReport || tasks.some(task => task.status === 'completed' && Boolean(task.report) && !isPresetSample(task)) };

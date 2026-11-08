@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {memoryError,filterMemory} from './memory.ts';
+test('记忆名称内容校验与范围类型过滤',()=>{assert.ok(memoryError('','x'));assert.ok(memoryError('x','x'.repeat(2001)));assert.equal(memoryError('语言','中文'),'');const items=[{scope:'user',type:'preference'},{scope:'project',type:'constraint'}];assert.equal(filterMemory(items,'user','').length,1);assert.equal(filterMemory(items,'','constraint').length,1);assert.equal(filterMemory(items,'user','constraint').length,0);});

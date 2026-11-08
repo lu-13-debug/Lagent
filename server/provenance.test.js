@@ -1,0 +1,3 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+test('来源登记稳定hash、脱敏映射与演示标记',async()=>{const {buildProvenance}=await import('./provenance.js'); const d={source:'demo',records:{users:[{user_id:'secret-user',registered_at:'2026-01-01'}]},shardManifest:[{source:'users.csv',table:'users',rowCount:1}],inspection:{mappings:[{table:'users',source:'users.csv',field:'user_id',sourceColumn:'uid',rawValue:'secret-user'}]}}; const p=buildProvenance(d); assert.equal(p.demo,true); assert.equal(p.rowCount,1); assert.equal(p.files[0].name,'users.csv'); assert.equal(p.hash,buildProvenance(d).hash); assert.ok(!JSON.stringify(p).includes('secret-user')); assert.notEqual(p.hash,buildProvenance({...d,records:{users:[]}}).hash); });

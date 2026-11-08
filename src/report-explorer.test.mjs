@@ -19,7 +19,7 @@ test('calendar validation and brush indices preserve exact complete dates', () =
   assert.deepEqual(explorer.brushIndices(['2026-10-01', '2026-10-03', '2026-10-05'], { start: '2026-10-02', end: '2026-10-04' }), { startIndex: 1, endIndex: 1 });
   assert.equal(explorer.rangeFromBrush([], 0, 1), undefined);
   assert.match(explorer.validateExploreInput({ start: '2026-10-03', end: '2026-10-01' }, '2026-10-12'), /开始/);
-  assert.match(explorer.validateExploreInput({ start: '2026-10-01', end: '2026-10-13' }, '2026-10-12'), /完整自然日/);
+  assert.match(explorer.validateExploreInput({ start: '2026-10-01', end: '2026-10-13' }, '2026-10-12'), /已结束[的]?自然日/);
   assert.match(explorer.validateExploreInput({ start: '2000-01-01', end: '2026-10-01' }, '2026-10-12'), /3660/);
   assert.equal(explorer.frozenCutoff('2026-10-13T00:00:00Z'), '2026-10-12');
   assert.equal(explorer.frozenCutoff('2026-10-12T15:59:59Z'), '2026-10-11');
@@ -135,6 +135,41 @@ test('trend series keeps real previous dates and separates paths across missing 
   assert.equal(rows[1].previousDate, '2026-10-02'); assert.equal(rows[1].previousDau, 0);
   const paths = explorer.linePaths(rows, 'dau', { left: 10, top: 10, width: 100, height: 100, max: 4 });
   assert.equal(paths.length, 2); assert.ok(paths.every(path => !path.includes('NaN')));
+});
+
+test('trend aggregation adapts to range, averages activity and totals flows without filling gaps', () => {
+  assert.equal(explorer.autoTrendGranularity([]), 'day');
+  assert.equal(explorer.autoTrendGranularity(new Array(120).fill('2026-01-01')), 'day');
+  assert.equal(explorer.autoTrendGranularity(new Array(121).fill('2026-01-01')), 'week');
+  assert.equal(explorer.autoTrendGranularity(new Array(730).fill('2026-01-01')), 'week');
+  assert.equal(explorer.autoTrendGranularity(new Array(731).fill('2026-01-01')), 'month');
+
+  const daily = [
+    { date: '2026-10-01', dau: 2, newUsers: 1, revenue: 5, payers: 1, previousDate: '2026-09-24', previousDau: 1, previousNewUsers: 2, previousRevenue: 4, previousPayers: 1 },
+    { date: '2026-10-02', dau: null, newUsers: 2, revenue: null, payers: null, previousDate: '2026-09-25', previousDau: 3, previousNewUsers: null, previousRevenue: 6, previousPayers: 2 },
+    { date: '2026-10-03', dau: 4, newUsers: null, revenue: 5, payers: 1, previousDate: '2026-09-26', previousDau: null, previousNewUsers: 1, previousRevenue: null, previousPayers: null },
+    { date: '2026-10-05', dau: 6, newUsers: 3, revenue: 2, payers: 2, previousDate: '2026-09-28', previousDau: 2, previousNewUsers: 2, previousRevenue: 3, previousPayers: 1 },
+  ];
+  const days = explorer.aggregateTrendRows(daily, 'day');
+  assert.equal(days.length, 4); assert.equal(days[0].label, days[0].date); assert.equal(days[0].previousDau, 1);
+
+  const weeks = explorer.aggregateTrendRows(daily, 'week');
+  assert.equal(weeks.length, 2);
+  assert.equal(weeks[0].start, '2026-10-01'); assert.equal(weeks[0].end, '2026-10-03'); assert.equal(weeks[0].days, 3);
+  assert.equal(weeks[0].label, '2026-10-01 至 2026-10-03');
+  assert.equal(weeks[0].dau, 3); assert.equal(weeks[0].newUsers, 3); assert.equal(weeks[0].revenue, 10); assert.equal(weeks[0].payers, 2);
+  assert.equal(weeks[0].previousStart, '2026-09-24'); assert.equal(weeks[0].previousEnd, '2026-09-26'); assert.equal(weeks[0].previousDau, 2);
+  assert.equal(weeks[1].dau, 6); assert.equal(weeks[1].previousNewUsers, 2);
+
+  const month = explorer.aggregateTrendRows(daily, 'month');
+  assert.equal(month.length, 1); assert.equal(month[0].label, '2026-10'); assert.equal(month[0].days, 4);
+  assert.equal(month[0].dau, 4); assert.equal(month[0].newUsers, 6); assert.equal(month[0].revenue, 12); assert.equal(month[0].payers, 4);
+
+  const box = { left: 0, top: 0, width: 100, height: 40, max: 6 };
+  const full = explorer.linePaths(weeks, 'dau', box);
+  const range = explorer.linePathsRange(weeks, 'dau', box, 1, 1);
+  assert.equal(full.length, 1); assert.equal(range.length, 1);
+  assert.ok(range[0].startsWith('M100.00'));
 });
 
 const flush = async () => { for (let n = 0; n < 10; n++) await Promise.resolve(); };

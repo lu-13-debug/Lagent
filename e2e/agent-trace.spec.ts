@@ -1,0 +1,8 @@
+import {test,expect} from '@playwright/test';
+for(const enabled of [true,false])test(`轨迹能力 ${enabled}`,async({page})=>{
+ await page.request.post('/api/auth/register',{data:{username:`trace${Date.now()}${enabled}`,displayName:'轨迹',password:'test-password-123'}});
+ const boot=await(await page.request.get('/api/bootstrap')).json();const task=boot.tasks.find((t:any)=>t.report);const step=task.steps[0];task.artifacts={[step.id]:{summary:'阶段摘要',trace:{round:4,actions:[{tool:'profile',status:'completed',durationMs:20,resultBytes:100}],usage:{calls:4,totalTokens:40},stopReason:'round_budget',prompt:'SECRET'},retrieval:{ids:['metric:dau'],count:1},critic:{verdict:'revise',issues:[{severity:'warning',message:'SECRET'}]}}};
+ await page.route('**/api/bootstrap',r=>r.fulfill({json:boot}));await page.route('**/api/runtime',async r=>{const response=await r.fetch();const data=await response.json();data.capabilities.agentTrace=enabled;await r.fulfill({json:data});});await page.goto('/');
+ const summary=page.locator('.agent-trace > summary');if(!enabled){await expect(summary).toHaveCount(0);return;}await expect(summary).toHaveCount(1);await summary.click();const block=page.locator('.agent-trace');await expect(block).toContainText('轮次预算耗尽');await expect(block).toContainText('Token 40');await expect(block).not.toContainText('SECRET');await summary.click();await expect(block).not.toHaveAttribute('open','');
+ await summary.click();await page.setViewportSize({width:390,height:844});for(const theme of ['light','dark']){await page.evaluate(t=>document.documentElement.setAttribute('data-theme',t),theme);await block.screenshot({path:`artifacts/agent-trace-390-${theme}.png`});}
+});

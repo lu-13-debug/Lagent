@@ -47,6 +47,11 @@ async function start() {
       return { ok: true };
     } catch (error) { switching = false; return { ok: false, error: friendlyError(error) }; }
   });
+  ipcMain.handle('dataagent:pick-folder', async event => {
+    if (!trustedSender(event, window?.webContents, cloudOrigin)) throw new Error('选择文件夹的请求来源无效。');
+    const result = await dialog.showOpenDialog(window, { title: '选择要导入的项目文件夹', buttonLabel: '导入项目', properties: ['openDirectory'] });
+    return result.canceled || !result.filePaths?.[0] ? null : result.filePaths[0];
+  });
   ipcMain.handle('dataagent:tray-summary', handleTraySummary);
   ipcMain.handle('dataagent:tray-state', handleTrayState);
   ipcMain.handle('dataagent:show-window', event => { if (!trustedSender(event, window?.webContents, cloudOrigin)) return false; showMainWindow(); return true; });
@@ -128,7 +133,7 @@ function trackWindowState(win, restored) {
 function makeWindow(local) {
   const state = local ? null : restoreWindowState();
   const win = new BrowserWindow({
-    title: local ? '连接 DataAgent 服务' : 'DataAgent · 游戏数据分析',
+    title: local ? '连接 DataAgent 服务' : 'DataAgent · 数据分析工作台',
     width: local ? 760 : 1500, height: local ? 760 : 960, minWidth: local ? 520 : 1000, minHeight: local ? 620 : 700,
     ...(state ? { ...state.bounds, minWidth: Math.min(1000, state.bounds.width), minHeight: Math.min(700, state.bounds.height) } : {}),
     backgroundColor: local ? '#f6f8fb' : '#0d1110', show: false, autoHideMenuBar: true, icon: path.join(__dirname, '..', 'build', 'icon.png'),
@@ -232,7 +237,7 @@ function installMenu() {
     { label: '文件', submenu: [{ label: '切换服务器…', click: () => void switchServer().catch(fail) }, { type: 'separator' }, { label: '退出 DataAgent', role: 'quit' }] },
     { label: '编辑', submenu: [{ label: '撤销', role: 'undo' }, { label: '重做', role: 'redo' }, { type: 'separator' }, { label: '剪切', role: 'cut' }, { label: '复制', role: 'copy' }, { label: '粘贴', role: 'paste' }, { label: '全选', role: 'selectAll' }] },
     { label: '视图', submenu: [{ label: '重新载入', role: 'reload' }, { label: '实际大小', role: 'resetZoom' }, { label: '放大', role: 'zoomIn' }, { label: '缩小', role: 'zoomOut' }, { label: '全屏', role: 'togglefullscreen' }] },
-    { label: '帮助', submenu: [{ id: 'check-updates', label: '检查更新…', click: () => void checkForUpdates() }, { label: '问题反馈…', click: openFeedback }, { label: '复制诊断信息', click: copySupportDiagnostic }, { label: '打开日志目录', click: () => void shell.openPath(paths.logs) }, { label: '关于 DataAgent', click: () => void dialog.showMessageBox(window, { type: 'info', title: '关于 DataAgent', message: 'DataAgent', detail: `版本 ${app.getVersion()}\n游戏运营 AI 数据分析工作台\n云端账号客户端 · 数据保存在所连接的服务` }) }] },
+    { label: '帮助', submenu: [{ id: 'check-updates', label: '检查更新…', click: () => void checkForUpdates() }, { label: '问题反馈…', click: openFeedback }, { label: '复制诊断信息', click: copySupportDiagnostic }, { label: '打开日志目录', click: () => void shell.openPath(paths.logs) }, { label: '关于 DataAgent', click: () => void dialog.showMessageBox(window, { type: 'info', title: '关于 DataAgent', message: 'DataAgent', detail: `版本 ${app.getVersion()}\n多领域 AI 数据分析工作台\n云端账号客户端 · 数据保存在所连接的服务` }) }] },
   ]));
   session.defaultSession.on('will-download', (_event, item) => { item.setSaveDialogOptions({ title: '保存分析报告', defaultPath: path.join(app.getPath('downloads'), item.getFilename()), filters: downloadFilters(item.getFilename()) }); });
 }

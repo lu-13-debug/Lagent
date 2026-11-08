@@ -1,8 +1,11 @@
+import { MemoryPanel } from './components/MemoryPanel';
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowDownToLine, ArrowRight, Check, ChevronDown, ChevronRight, FileText, Gamepad2, Menu, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRight, Plus, RefreshCw, Search, Settings2, Sparkles, SunMoon, Wifi, Zap } from 'lucide-react';
+import { ArrowDownToLine, ArrowRight, Check, ChevronDown, ChevronRight, Database, FileText, Gamepad2, Menu, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRight, Plus, RefreshCw, Search, Settings2, Sparkles, SunMoon, Wifi, Zap } from 'lucide-react';
 import { api } from './api';
 import { useAppearance } from './appearance-context';
 import { AppearanceSettings } from './components/AppearanceSettings';
+import { ConciseWorkspace } from './components/ConciseWorkspace';
+import { SuperAgentShell } from './components/SuperAgentShell';
 import { useAuth } from './auth-context';
 import type { Bootstrap, Dataset, Mode, Settings, Skill, Task, TaskSnapshot, TaskSummary, View, Wallet } from './types';
 import { Sidebar } from './components/Sidebar';
@@ -34,7 +37,7 @@ import './task-control.css';
 import './commands.css';
 import './report-assets.css';
 
-const viewNames: Record<View, string> = { workspace: '分析工作台', datasets: '数据源', reports: '分析报告', skills: 'Skill 能力库', wallet: '额度与记录' };
+const viewNames: Record<View, string> = { workspace: '分析工作台', datasets: '数据源', reports: '分析报告', skills: 'Skill 能力库', wallet: '额度与记录', memory: '记忆' };
 export default function App() {
   const { runtime, user } = useAuth();
   const appearance = useAppearance();
@@ -45,7 +48,7 @@ export default function App() {
   const [exportFocusRequest, setExportFocusRequest] = useState(0);
   const [helpSection, setHelpSection] = useState<'general' | 'collaboration'>('general');
   const [data, setData] = useState<Bootstrap | null>(null); const [error, setError] = useState(''); const [view, setView] = useState<View>('workspace'); const [activeId, setActiveId] = useState<string | null>(null);
-  const [mode, setMode] = useState<Mode>(() => { try { return readChoices(localStorage, choiceKey(runtime.mode, user?.id, window.location.origin)).mode || 'collaborative'; } catch { return 'collaborative'; } }); const [newDraft, setNewDraft] = useState<{ goal: string; datasetId?: string; mode?: Mode; context?: string; source?: Task } | null>(null); const [settingsOpen, setSettingsOpen] = useState(false); const [domainOpen, setDomainOpen] = useState(false); const [helpOpen, setHelpOpen] = useState(false); const [preview, setPreview] = useState<Dataset | null>(null); const [skill, setSkill] = useState<Skill | null>(null); const [fullReport, setFullReport] = useState(false); const [sidebarOpen, setSidebarOpen] = useState(false); const [panelOpen, setPanelOpen] = useState(false); const [exportOpen, setExportOpen] = useState(false); const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
+  const [mode, setMode] = useState<Mode>(() => { try { return readChoices(localStorage, choiceKey(runtime.mode, user?.id, window.location.origin)).mode || 'collaborative'; } catch { return 'collaborative'; } }); const [newDraft, setNewDraft] = useState<{ goal: string; datasetId?: string; mode?: Mode; context?: string; source?: Task } | null>(null); const [settingsOpen, setSettingsOpen] = useState(false); const [domainOpen, setDomainOpen] = useState(false); const [selectedDomain, setSelectedDomain] = useState(() => { try { return localStorage.getItem('dataagent.domain') || 'game'; } catch { return 'game'; } }); const chooseDomain = useCallback((id: string) => { setSelectedDomain(id); try { localStorage.setItem('dataagent.domain', id); } catch { /* 存储禁用时仅当前会话生效。 */ } }, []); const [helpOpen, setHelpOpen] = useState(false); const [preview, setPreview] = useState<Dataset | null>(null); const [skill, setSkill] = useState<Skill | null>(null); const [fullReport, setFullReport] = useState(false); const [sidebarOpen, setSidebarOpen] = useState(false); const [panelOpen, setPanelOpen] = useState(false); const [exportOpen, setExportOpen] = useState(false); const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
   const onboarding = useOnboarding(data);
   const sampleReport = data?.tasks.find(candidate => Boolean(candidate.report) && isPresetSample(candidate));
   const notify = useCallback((text: string, isError = false) => setToast({ text, error: isError }), []);
@@ -60,6 +63,8 @@ export default function App() {
   useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, [load]);
   useEffect(() => { if (!toast) return; const timeout = setTimeout(() => setToast(null), 5500); return () => clearTimeout(timeout); }, [toast]);
   const task = data?.tasks.find(t => t.id === activeId);
+  const activeDomain = data?.domains.find(domain => domain.id === selectedDomain && domain.enabled) || data?.domains.find(domain => domain.id === 'game');
+  useEffect(() => { if (data && !data.domains.some(domain => domain.id === selectedDomain && domain.enabled)) chooseDomain('game'); }, [data, selectedDomain, chooseDomain]);
   const onUpdate = useCallback((next: Task, wallet?: Wallet, walletVersion?: number) => setData(previous => {
     if (!previous) return previous;
     return { ...previous, ...(wallet ? mergeWalletState(previous, { wallet, walletVersion }) : {}), tasks: mergeTaskDetails(previous.tasks, [next]) };
@@ -113,6 +118,16 @@ export default function App() {
   function onSettingsSaved(settings: Settings) { setData(prev => prev ? { ...prev, settings } : prev); }
   useEffect(() => { window.scrollTo({ top: 0, behavior: 'auto' }); }, [view]);
   useEffect(() => {
+    const header = document.querySelector<HTMLElement>('.topbar');
+    const main = header?.closest<HTMLElement>('.app-main');
+    if (!header || !main) return;
+    const syncHeight = () => main.style.setProperty('--topbar-h', `${header.getBoundingClientRect().height}px`);
+    syncHeight();
+    const observer = new ResizeObserver(syncHeight);
+    observer.observe(header);
+    return () => { observer.disconnect(); main.style.removeProperty('--topbar-h'); };
+  }, [Boolean(data)]);
+  useEffect(() => {
     if (view !== 'workspace' || !fullReport) return;
     const frame = requestAnimationFrame(() => {
       const target = document.querySelector<HTMLElement>('.sample-report-banner') || document.querySelector<HTMLElement>('.full-report');
@@ -130,16 +145,16 @@ export default function App() {
     return () => cancelAnimationFrame(frame);
   }, [exportOpen, view, exportFocusRequest]);
   if (!data) return <div className="app-loading"><div className="loading-brand"><Logo /><strong>DataAgent.</strong></div>{error ? <><h2>连接分析服务时遇到问题</h2><p role="alert">{error}</p><button className="button primary" onClick={() => void load()}><RefreshCw size={15} />重试连接</button><small>{cloud ? '请检查网络；若问题持续，请联系本服务管理员。' : '开发环境请运行 npm run dev；生产环境请运行 npm start。'}</small></> : <><Spinner size={24} /><p role="status">正在准备你的分析工作空间…</p></>}</div>;
+  if (runtime.capabilities?.superagent) return <SuperAgentShell user={user} runtime={runtime} settings={data.settings} onSettingsSaved={settings => setData(previous => previous ? { ...previous, settings } : previous)} notify={notify} />;
   const access = analysisAccess(runtime, data.settings, data.wallet);
   const currentDataset = data.datasets.find(d => d.id === task?.datasetId);
   const commands: Command[] = [
-    ...Object.entries(viewNames).map(([id, title]) => ({ id: `page:${id}`, title, group: '页面', keywords: id, run: () => { setView(id as View); setSidebarOpen(false); } })),
+    ...Object.entries(viewNames).filter(([id]) => id !== 'memory' || runtime.capabilities?.memory).map(([id, title]) => ({ id: `page:${id}`, title, group: '页面', keywords: id, run: () => { setView(id as View); setSidebarOpen(false); } })),
     { id: 'action:new', title: '新建分析', group: '动作', hint: '在摘要页明确确认后才创建任务', keywords: 'new analysis', run: () => onNew() },
     { id: 'action:collaborative', title: '下一次分析使用协作模式', group: '动作', hint: '计划和报告生成前由你确认', run: () => { setMode('collaborative'); notify('下一次新建分析使用协作模式，创建时仍可修改。'); } },
     { id: 'action:automatic', title: '下一次分析使用自动模式', group: '动作', hint: '不修改已经创建的任务', run: () => { setMode('automatic'); notify('下一次新建分析使用自动模式，创建时仍可修改。'); } },
     { id: 'action:settings', title: '模型与 API 设置', group: '动作', keywords: 'key model settings', run: () => setSettingsOpen(true) },
     { id: 'appearance:open', title: '打开显示设置', group: '动作', run: () => setAppearanceOpen(true) },
-    { id: 'appearance:view', title: '切换简洁版 / 正常版', group: '动作', run: () => appearance.setView(appearance.view === 'concise' ? 'standard' : 'concise') },
     ...(['system', 'light', 'dark'] as const).map(theme => ({ id: `appearance:${theme}`, title: theme === 'system' ? '主题跟随系统' : theme === 'light' ? '浅色主题' : '深色主题', group: '动作', run: () => appearance.setTheme(theme) })),
     { id: 'action:help', title: '使用指南', group: '动作', keywords: 'help', run: openHelp },
     { id: 'action:shortcuts', title: '查看全部快捷键', group: '动作', keywords: 'keyboard shortcuts', run: () => setShortcutsOpen(true) },
@@ -148,30 +163,34 @@ export default function App() {
     ...data.datasets.map(item => ({ id: `data:${item.id}`, title: item.name, group: '数据源', hint: `${item.rowCount.toLocaleString()} 行 · ${item.dateRange.start} 至 ${item.dateRange.end}`, run: () => showData(item) })),
     ...data.skills.map(item => ({ id: `skill:${item.id}`, title: item.name, group: 'Skill', hint: item.description, keywords: item.id, run: () => setSkill(item) })),
   ];
-  return <div className={`app-shell ${view === 'workspace' ? 'with-run-panel' : ''} ${appearance.railCollapsed ? 'rail-collapsed' : ''}`}>
+  const concise = appearance.view === 'concise';
+  return <div className={`app-shell ${view === 'workspace' ? 'with-run-panel' : ''} ${appearance.railCollapsed ? 'rail-collapsed' : ''} ${concise ? 'concise-workspace-shell' : ''} ${concise && panelOpen ? 'concise-details-open' : ''}`}>
     <a className="skip-link" href="#main-content">跳到主内容</a>
-    <Sidebar collapsed={appearance.railCollapsed} view={view} setView={setView} wallet={data.wallet} tasks={data.tasks} selectedId={activeId} selectTask={selectTask} onNew={() => onNew()} onSettings={() => setSettingsOpen(true)} onHelp={openHelp} onAccount={() => { setSidebarOpen(false); setAccountOpen(true); }} open={sidebarOpen} close={() => setSidebarOpen(false)} onDomain={() => setDomainOpen(true)} />
+    <Sidebar collapsed={appearance.railCollapsed} view={view} setView={setView} wallet={data.wallet} tasks={data.tasks} selectedId={activeId} selectTask={selectTask} onNew={() => onNew()} onSettings={() => setSettingsOpen(true)} onHelp={openHelp} onAccount={() => { setSidebarOpen(false); setAccountOpen(true); }} open={sidebarOpen} close={() => setSidebarOpen(false)} onDomain={() => setDomainOpen(true)} domainId={activeDomain?.id} domainName={activeDomain?.name} />
     <div className="app-main"><header className="topbar"><div className="breadcrumb"><button className="icon-button rail-toggle" aria-label={appearance.railCollapsed ? "展开侧栏" : "折叠侧栏"} title={appearance.railCollapsed ? "展开侧栏" : "折叠侧栏"} aria-pressed={appearance.railCollapsed} onClick={() => appearance.setRailCollapsed(!appearance.railCollapsed)}>{appearance.railCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button><button className="icon-button mobile-menu" aria-label="打开导航" onClick={() => setSidebarOpen(true)}><Menu size={19} /></button><span>工作空间</span><ChevronRight size={12} /><strong>{viewNames[view]}</strong></div><div className="topbar-right"><span className={`connection-state ${monitor.connection === 'reconnecting' ? 'disconnected' : ''}`} role="status" aria-live="polite" title={cloud ? window.location.host : undefined}><span className="online-dot" /><span className="connection-label">{monitor.connection === 'reconnecting' ? '连接中断，正在重连' : cloud ? '云端服务已连接' : '本地服务已连接'}</span></span><button className="icon-button command-trigger" aria-label="打开命令面板" title="查找并执行（Ctrl / ⌘ K）" onClick={() => setCommandOpen(true)}><Search size={17} /></button><button className="icon-button" aria-label="显示设置" title="显示设置（Ctrl / ⌘ + Shift + D）" onClick={() => setAppearanceOpen(true)}><SunMoon size={17} /></button><span className="topbar-divider" /><button className={`model-status ${access.canUseAI ? 'configured' : ''}`} onClick={() => setSettingsOpen(true)}><Sparkles size={13} />{access.modelLabel}<ArrowRight size={12} /></button>{!access.canStart && <span className="quota-status" role="status">额度不足 · 需 20 额度</span>}<button className="topbar-avatar" onClick={() => cloud ? setAccountOpen(true) : openHelp()} aria-label={cloud ? `账号与安全，${user?.displayName}，用户名 ${user?.username}` : '打开使用指南'} title={user ? `${user.displayName} @${user.username}` : undefined}>{user?.displayName.slice(0, 1).toUpperCase() || 'D'}</button></div></header>
-      <div className="page-toolbar no-print"><button className="domain-switch" onClick={() => setDomainOpen(true)}><Gamepad2 size={15} /><span>游戏运营</span><ChevronDown size={12} /></button><div className="toolbar-right">{view === 'workspace' && <><div className="mode-switch segmented" aria-label="新分析默认工作方式" title="用于下一次新建分析"><button className={mode === 'collaborative' ? 'selected' : ''} onClick={() => setMode('collaborative')}><MessageSquare size={13} />协作模式</button><button className={mode === 'automatic' ? 'selected' : ''} onClick={() => setMode('automatic')}><Zap size={13} />自动模式</button></div>{task?.status === 'completed' && task.report && <div className="export-dropdown"><button className="button secondary export-button" onClick={() => setExportOpen(!exportOpen)} aria-expanded={exportOpen}><ArrowDownToLine size={14} /><span>导出报告</span><ChevronDown size={11} /></button>{exportOpen && <><button className="dropdown-dismiss" aria-label="关闭导出菜单" onClick={() => setExportOpen(false)} /><div className="dropdown-menu"><ReportDownload id={task.id} name={task.title} label="下载原始 Markdown" onDone={() => setExportOpen(false)} onError={message => notify(message, true)}><FileText size={14} />下载原始 Markdown</ReportDownload><button onClick={() => { setExportOpen(false); setFullReport(true); setTimeout(() => window.print(), 200); }}><ArrowDownToLine size={14} />打印 / 保存 PDF</button></div></>}</div>}</>}<button className="button primary toolbar-new" onClick={() => onNew()}><Plus size={15} /><span>新建分析</span></button></div></div>
+      <div className="page-toolbar no-print"><button className="domain-switch" onClick={() => setDomainOpen(true)}>{activeDomain?.id === 'game' ? <Gamepad2 size={15} /> : <Database size={15} />}<span>{activeDomain?.name || '游戏运营'}</span><ChevronDown size={12} /></button><div className="toolbar-right">{view === 'workspace' && <><div className="mode-switch segmented" aria-label="新分析默认工作方式" title="用于下一次新建分析"><button className={mode === 'collaborative' ? 'selected' : ''} onClick={() => setMode('collaborative')}><MessageSquare size={13} />协作模式</button><button className={mode === 'automatic' ? 'selected' : ''} onClick={() => setMode('automatic')}><Zap size={13} />自动模式</button></div>{task?.status === 'completed' && task.report && <div className="export-dropdown"><button className="button secondary export-button" onClick={() => setExportOpen(!exportOpen)} aria-expanded={exportOpen}><ArrowDownToLine size={14} /><span>导出报告</span><ChevronDown size={11} /></button>{exportOpen && <><button className="dropdown-dismiss" aria-label="关闭导出菜单" onClick={() => setExportOpen(false)} /><div className="dropdown-menu"><ReportDownload id={task.id} name={task.title} label="下载原始 Markdown" onDone={() => setExportOpen(false)} onError={message => notify(message, true)}><FileText size={14} />下载原始 Markdown</ReportDownload><button onClick={() => { setExportOpen(false); setFullReport(true); setTimeout(() => window.print(), 200); }}><ArrowDownToLine size={14} />打印 / 保存 PDF</button></div></>}</div>}</>}{view !== 'reports' && <button className="button primary toolbar-new" onClick={() => onNew()}><Plus size={15} /><span>新建分析</span></button>}</div></div>
       <main id="main-content" tabIndex={-1} className={`page-content ${view === 'workspace' ? 'workspace-content' : 'inner-page'}`}>
-        {view === 'workspace' && <AnalysisTemplates datasets={data.datasets} onSelect={(goal, id) => onNew(goal, id)} />}
-        {view === 'workspace' && onboarding.visible && <OnboardingChecklist progress={onboarding.progress} hasSample={Boolean(sampleReport)} onSample={showSampleReport} onData={() => setView('datasets')} onCreate={() => onNew('', data.datasets.find(dataset => dataset.source === 'upload')?.id || data.datasets[0]?.id)} dismiss={onboarding.dismiss} />}
-        {view === 'workspace' && <Workspace tasks={data.tasks} onContinue={onContinue} onSelectSource={source => selectTask(source, true)} task={task} dataset={currentDataset} onNew={goal => onNew(goal, task?.datasetId)} onShowData={showData} full={fullReport} setFull={setFullReport} onSampleGuide={() => { setHelpSection('collaboration'); setHelpOpen(true); }} />}
+        {view === 'workspace' && !concise && <AnalysisTemplates datasets={data.datasets} onSelect={(goal, id) => onNew(goal, id)} />}
+        {view === 'workspace' && !concise && onboarding.visible && <OnboardingChecklist progress={onboarding.progress} hasSample={Boolean(sampleReport)} onSample={showSampleReport} onData={() => setView('datasets')} onCreate={() => onNew('', data.datasets.find(dataset => dataset.source === 'upload')?.id || data.datasets[0]?.id)} dismiss={onboarding.dismiss} />}
+        {view === 'workspace' && concise && !fullReport && <ConciseWorkspace defaultModelName={data.settings.workflowEnabled ? undefined : data.settings.model} onOpenSettings={() => setSettingsOpen(true)} onOpenReports={() => setView('reports')} tasks={data.tasks} task={task} dataset={currentDataset} onNew={goal => onNew(goal, task?.datasetId)} onShowData={showData} onSelectTask={next => selectTask(next)} onOpenData={() => setView('datasets')} onOpenDetails={() => setPanelOpen(true)} onFullReport={() => setFullReport(true)} />}
+        {view === 'workspace' && concise && fullReport && <button className="button secondary concise-back no-print" onClick={() => setFullReport(false)}>返回简洁首页</button>}
+        {view === 'workspace' && (!concise || fullReport) && <Workspace tasks={data.tasks} onContinue={onContinue} onSelectSource={source => selectTask(source, true)} task={task} dataset={currentDataset} onNew={goal => onNew(goal, task?.datasetId)} onShowData={showData} full={fullReport} setFull={setFullReport} onSampleGuide={() => { setHelpSection('collaboration'); setHelpOpen(true); }} />}
         {view === 'datasets' && <DataPage datasets={data.datasets} tasks={data.tasks} onSampleReport={showSampleReport} hasSampleReport={Boolean(sampleReport)} onUploaded={onDataset} onPreview={showData} onAnalyze={d => onNew('', d.id)} onRemoved={id => setData(prev => prev ? { ...prev, datasets: prev.datasets.filter(d => d.id !== id) } : prev)} notify={notify} />}
         {view === 'reports' && <ReportsPage metadata={reportMetadata} notify={notify} onContinue={onContinue} tasks={data.tasks} onSelect={t => selectTask(t, true)} onNew={() => onNew()} />}
         {view === 'skills' && <SkillsPage skills={data.skills} onSelect={setSkill} />}
-        {view === 'wallet' && <WalletPage wallet={data.wallet} notify={notify} />}
+        {view === 'memory' && runtime.capabilities?.memory && <MemoryPanel />}
+        {view === 'wallet' && <WalletPage wallet={data.wallet} tasks={data.tasks} notify={notify} />}
       </main>
     </div>
     {view === 'workspace' && <><button className="mobile-agent-toggle button primary" onClick={() => setPanelOpen(!panelOpen)}><Sparkles size={16} />{task?.status === 'awaiting_approval' ? '需要你的确认' : 'AI 工作动态'}<PanelRight size={15} /></button>{panelOpen && <button className="run-panel-shade" aria-label="关闭 AI 动态" onClick={() => setPanelOpen(false)} />}<RunPanel connection={monitor.connection} notificationPermission={monitor.permission} onEnableNotifications={monitor.enableNotifications} dataset={currentDataset} onNotice={message => notify(message)} onSettings={() => setSettingsOpen(true)} onRetryCreated={(next, wallet, walletVersion) => { onUpdate(next, wallet, walletVersion); selectTask(next); notify("已创建恢复尝试，重新冻结 20 额度。"); }} task={task} settings={data.settings} wallet={data.wallet} open={panelOpen} close={() => setPanelOpen(false)} onUpdate={onUpdate} onError={m => notify(m, true)} onNew={goal => onNew(goal, task?.datasetId)} /></>}
-    {newDraft && <NewAnalysis sourceTask={newDraft.source} initialContext={newDraft.context} datasets={data.datasets} defaultMode={mode} initialMode={newDraft.mode} onModeChange={setMode} settings={data.settings} wallet={data.wallet} initialGoal={newDraft.goal} initialDatasetId={newDraft.datasetId} close={closeNew} onDataset={onDataset} onCreated={(next, wallet, walletVersion) => { onUpdate(next, wallet, walletVersion); selectTask(next); setPanelOpen(window.matchMedia('(max-width: 1050px)').matches); notify(`${next.mode === 'collaborative' ? '协作' : '自动'}分析已开始，已冻结 20 服务额度。`); }} onSettings={() => { closeNew(); setSettingsOpen(true); }} />}
+    {newDraft && <NewAnalysis sourceTask={newDraft.source} initialContext={newDraft.context} datasets={data.datasets} domain={activeDomain?.id || 'game'} defaultMode={mode} initialMode={newDraft.mode} onModeChange={setMode} settings={data.settings} wallet={data.wallet} initialGoal={newDraft.goal} initialDatasetId={newDraft.datasetId} close={closeNew} onDataset={onDataset} onCreated={(next, wallet, walletVersion) => { onUpdate(next, wallet, walletVersion); selectTask(next); setPanelOpen(window.matchMedia('(max-width: 1050px)').matches); notify(`${next.mode === 'collaborative' ? '协作' : '自动'}分析已开始，已冻结 20 服务额度。`); }} onSettings={() => { closeNew(); setSettingsOpen(true); }} />}
     {appearanceOpen && <AppearanceSettings close={closeAppearance} />}
     {settingsOpen && <SettingsModal settings={data.settings} close={closeSettings} onSaved={onSettingsSaved} notify={notify} />}
     {commandOpen && <CommandPalette commands={commands} close={closeCommands} />}
     {shortcutsOpen && <ShortcutHelp close={closeShortcuts} />}
     {accountOpen && cloud && <AccountModal close={closeAccount} />}
     {preview && <DataPreview dataset={preview} close={closePreview} onAnalyze={() => { onNew('', preview.id); closePreview(); }} />}
-    {domainOpen && <DomainModal domains={data.domains} close={closeDomain} />}
+    {domainOpen && <DomainModal domains={data.domains} selected={selectedDomain} select={chooseDomain} close={closeDomain} />}
     {helpOpen && <HelpModal onShortcuts={() => { closeHelp(); setShortcutsOpen(true); }} close={closeHelp} section={helpSection} canStart={access.canStart} onReviewOnboarding={() => { closeHelp(); setView('workspace'); onboarding.reopen(); }} onStartCollaborative={() => { closeHelp(); onNew('', task?.datasetId || sampleReport?.datasetId, 'collaborative'); }} />}
     {skill && <SkillModal skill={skill} close={closeSkill} />}
     {toast && <Toast message={toast.text} error={toast.error} close={() => setToast(null)} />}

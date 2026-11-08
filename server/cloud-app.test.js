@@ -8,8 +8,40 @@ import { DatabaseSync } from 'node:sqlite';
 import { request } from 'node:http';
 const module = await import('./cloud-app.js').catch(() => ({}));
 const password = 'account-password-2026';
+test('Memory云端需登录、A/B隔离及拒绝跨账号修改',async t=>{
+ const s=await setup(t);assert.equal((await s.client().api('/api/memory')).status,401);
+ const a=await s.register('memoryowner'),b=await s.register('memoryother');
+ const saved=await a.api('/api/memory','POST',{scope:'project',type:'constraint',key:'口径',value:'先核对币种',status:'confirmed'});assert.equal(saved.status,201);
+ assert.equal((await b.api('/api/memory')).memories.length,0);
+ assert.equal((await b.api(`/api/memory/${saved.memory.id}`,'PATCH',{value:'替换'})).status,404);
+ assert.equal((await b.api(`/api/memory/${saved.memory.id}`,'DELETE')).status,404);
+ assert.equal((await a.api('/api/memory')).memories[0].value,'先核对币种');
+});
 const taskBody = (datasetId, extra = {}) => ({ title: '账号分析', goal: '核对活跃与收入', domain: 'game', mode: 'automatic', useAI: false, datasetId, ...extra });
 
+test('模型用量需要登录并按账号隔离',async t=>{
+ const s=await setup(t);assert.equal((await s.client().api('/api/model-usage?days=all')).status,401);
+ const a=await s.register('usageowner'),b=await s.register('usageother');
+ const boot=await a.api('/api/bootstrap');await b.api('/api/bootstrap');
+ const db=new DatabaseSync(path.join(s.dir,'users',a.user.id,'dataagent.sqlite'));
+ const entry={id:'owner-call',taskId:boot.tasks[0].id,stageId:'insights',stageName:'洞察',kind:'stage',provider:'测试',model:'mock',recordedAt:new Date().toISOString(),inputTokens:7,outputTokens:3,totalTokens:10};
+ db.prepare('INSERT INTO entities(kind,id,body) VALUES(?,?,?)').run('model-call',entry.id,JSON.stringify(entry));db.close();
+ assert.equal((await a.api('/api/model-usage?days=all')).totals.calls,1);
+ assert.equal((await b.api('/api/model-usage?days=all')).totals.calls,0);
+ assert.equal((await a.api('/api/runtime')).capabilities.modelUsage,true);
+});
+
+test('Super-agent Work需登录且按云账号隔离',async t=>{
+ const s=await setup(t,{workEnabled:true});assert.equal((await s.client().api('/api/work/bootstrap')).status,401);
+ const a=await s.register('workowner'),b=await s.register('workother');
+ assert.equal((await a.api('/api/runtime')).capabilities.superagent,true);
+ const created=await a.api('/api/work/command','POST',{text:'检查留存',clientRequestId:'cloud-work-once'});assert.equal(created.status,201,created.error);
+ const ticket=created.ticket;assert.equal((await a.api('/api/work/command','POST',{text:' 检查留存 ',clientRequestId:'cloud-work-once'})).ticket.id,ticket.id);
+ const otherBoot=await b.api('/api/work/bootstrap');assert.equal(otherBoot.tickets.some(item=>item.id===ticket.id),false);assert.equal(otherBoot.attention.some(item=>item.ticketId===ticket.id),false);
+ assert.equal((await b.api('/api/work/tickets/'+ticket.id)).status,404);
+ assert.equal((await b.api('/api/work/tickets/'+ticket.id+'/actions','POST',{action:'stop'})).status,404);
+ const own=await a.api('/api/work/tickets/'+ticket.id);assert.equal(own.status,200);assert.equal(own.ticket.id,ticket.id);
+});
 async function setup(t, options = {}) {
   assert.equal(typeof module.createCloudApp, 'function', '必须提供 createCloudApp');
   const dir = await mkdtemp(path.join(tmpdir(), 'dataagent-cloud-'));
@@ -98,10 +130,26 @@ async function files(dir) {
   return result;
 }
 
+test('OpenCode Go requires an explicit cloud allowlist and keeps credentials session scoped', async t => {
+  const baseUrl = 'https://opencode.ai/inference/go/openai/v1';
+  const closed = await setup(t); const blocked = await closed.register('go_blocked');
+  assert.equal((await blocked.api('/api/settings', 'PUT', { baseUrl, model: 'glm-5.3', apiKey: 'private-go-key' })).status, 400);
+  const seen = [];
+  const open = await setup(t, { modelHosts: ['opencode.ai'], fetchImpl: async (url, init) => { seen.push({ url, init }); return Response.json({ choices: [{ message: { content: '已连接' }, finish_reason: 'stop' }] }); } });
+  const user = await open.register('go_allowed');
+  assert.equal((await user.api('/api/settings', 'PUT', { baseUrl: 'https://opencode.ai.evil.example/inference/go/openai/v1', model: 'glm-5.3', apiKey: 'private-go-key' })).status, 400);
+  const saved = await user.api('/api/settings', 'PUT', { baseUrl, model: 'glm-5.3', apiKey: 'private-go-key' });
+  assert.equal(saved.status, 200); assert.equal(JSON.stringify(saved).includes('private-go-key'), false);
+  assert.equal((await user.api('/api/settings/test', 'POST', {})).status, 200);
+  assert.equal(seen[0].url, `${baseUrl}/chat/completions`);
+  assert.equal(seen[0].init.headers.authorization, 'Bearer private-go-key');
+  assert.equal(seen[0].init.redirect, 'error');
+});
+
 test('cloud runtime, password hashing, opaque secure cookie and duplicate identity validation', async t => {
   const s = await setup(t, { production: true });
   const anon = s.client();
-  assert.deepEqual(await anon.api('/api/runtime'), { mode: 'cloud', authRequired: true, serviceName: 'DataAgent', version: '1.1.0', modelHosts: ['api.deepseek.com', 'api.anthropic.com', 'api.openai.com'], capabilities: { taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, reportSharing: true }, status: 200, setCookie: null });
+  assert.deepEqual(await anon.api('/api/runtime'), { mode: 'cloud', authRequired: true, serviceName: 'DataAgent', version: '1.1.0', modelHosts: ['api.deepseek.com', 'api.anthropic.com', 'api.openai.com'], capabilities: { taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, modelHub: true, reportPdf: true, agentTrace: true, memory: true, modelUsage: true, reportSharing: true }, status: 200, setCookie: null });
   assert.equal((await anon.api('/api/bootstrap')).status, 401);
   assert.equal((await anon.api('/api/auth/session')).user, null);
   const r = await anon.api('/api/auth/register', 'POST', { username: 'Alice_01', displayName: '阿丽丝', password });

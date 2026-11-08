@@ -59,7 +59,7 @@ for (const cloud of [false, true]) test(`${cloud ? 'cloud' : 'local'} runtime ad
   const s = await setup(t, {}, cloud); const runtime = await s.api('/api/runtime');
   assert.equal(runtime.status, 200); assert.equal(runtime.mode, cloud ? 'cloud' : 'local'); assert.equal(runtime.authRequired, cloud);
   assert.equal(runtime.serviceName, 'DataAgent'); assert.equal(runtime.version, '1.1.0');
-  assert.deepEqual(runtime.capabilities, { taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, ...(cloud ? { reportSharing: true } : {}) });
+  assert.deepEqual(runtime.capabilities, { taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, modelHub: true, reportPdf: true, agentTrace: true, memory: true, modelUsage: true, ...(cloud ? { reportSharing: true } : {}) });
 });
 
 test('summary is bounded, preserves older active tasks, and excludes full task content', async t => {

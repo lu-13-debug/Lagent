@@ -11,7 +11,7 @@ import { analyze } from './analytics.js';
 const exploreModule = await import('./report-explore.js').catch(() => ({}));
 let nextPort = 23000 + Math.floor(Math.random() * 10000);
 
-const dataset = () => ({ id: 'scope-data', name: '范围样本', source: 'upload', warnings: [], records: {
+const dataset = () => ({ completeness: { declared: 'full' }, id: 'scope-data', name: '范围样本', source: 'upload', warnings: [], records: {
   users: [
     { user_id: 'private-old', registered_at: '2026-09-30', channel: '自然' },
     { user_id: 'private-new', registered_at: '2026-10-02', channel: '自然' },
@@ -184,7 +184,7 @@ test('request cancellation and service close release workers, busy state and con
   while (!events.includes('event: heartbeat')) { const chunk = await reader.read(); events += new TextDecoder().decode(chunk.value); }
   streamController.abort(); controller.abort(); await cancelled;
   await waitUntil(() => s.app.locals.explorer.size === 0 && !s.app.locals.isBusy()); assert.equal(workers[0].threadId, -1);
-  assert.deepEqual(Object.keys(payloads[0].task.report), ['generatedAt']);
+  assert.deepEqual(Object.keys(payloads[0].task.report), ['generatedAt', 'timezone']);
   assert.equal(JSON.stringify(payloads).includes('private-model'), false); assert.equal(JSON.stringify(payloads).includes('apiKey'), false);
   const next = s.api(`/api/tasks/${task.id}/explore`, 'POST', input());
   await waitUntil(() => s.app.locals.explorer.size === 1); s.app.locals.close();

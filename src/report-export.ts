@@ -2,6 +2,11 @@ import type { ExploreScope, Report } from './types';
 
 export type ReportCsvKind = 'metrics' | 'channels' | 'retention' | 'daily';
 type ExportScope = Pick<ExploreScope, 'start' | 'end' | 'channels'>;
+function exportTimeZone(timezone: Report['timezone']) {
+  if (!timezone) return '未记录';
+  const offset = `UTC${timezone.offsetMinutes < 0 ? '-' : '+'}${String(Math.floor(Math.abs(timezone.offsetMinutes) / 60)).padStart(2, '0')}:${String(Math.abs(timezone.offsetMinutes) % 60).padStart(2, '0')}`;
+  return `${timezone.name === offset ? offset : `${timezone.name}（${offset}）`}${timezone.assumed ? '未确认' : '已确认'}`;
+}
 export function csvCell(value: unknown): string {
   if (value == null) return '';
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
@@ -11,21 +16,27 @@ export function csvCell(value: unknown): string {
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 export function reportCsv(report: Report, kind: ReportCsvKind, scope?: ExportScope, tableFilterNote = '') {
+  const labels = report.labels || {};
+  const activeEntity = labels.entity ? `${labels.entity}活跃` : '活跃玩家';
+  const newEntity = labels.newEntity || '新增玩家';
+  const payerEntity = labels.payerEntity || '付费玩家';
+  const revenueName = labels.revenueName || '支付收入';
   const range = scope || { start: report.daily[0]?.date || '', end: report.daily.at(-1)?.date || '', channels: [] };
-  const contextHeaders = ['当前开始日', '当前结束日', '注册渠道筛选', '来源说明', '表内筛选说明'];
-  const context = [range.start, range.end, range.channels.length ? range.channels.join('、') : '全部渠道', scope ? '确定性派生；无数据留空；不含批注' : '原始报告；无数据留空；不含批注', tableFilterNote];
+  const contextHeaders = ['当前开始日', '当前结束日', '注册渠道筛选', '统计时区', '来源说明', '表内筛选说明'];
+  const timeZone = exportTimeZone(report.timezone);
+  const context = [range.start, range.end, range.channels.length ? range.channels.join('、') : '全部渠道', timeZone, scope ? '确定性派生；无数据留空；不含批注' : '原始报告；无数据留空；不含批注', tableFilterNote];
   let headers: unknown[], rows: unknown[][];
   if (kind === 'metrics') {
     headers = ['指标', '数值', '单位', '统计口径'];
     rows = report.metrics.map(metric => [metric.label, metric.value, metric.unit, metric.note]);
   } else if (kind === 'channels') {
-    headers = ['注册渠道', '新增玩家', '归属玩家支付收入', '成熟群体次日留存(%)', '币种', '数据说明'];
+    headers = [labels.channelColumn || '注册渠道', labels.channelUsers || '新增玩家', labels.channelRevenue || '归属玩家支付收入', labels.channelD1 || '成熟群体次日留存(%)', '币种', '数据说明'];
     rows = report.channels.map(channel => [channel.name, channel.users, channel.revenue, channel.d1, report.currency, channel.users == null || channel.revenue == null || channel.d1 == null ? '空值表示覆盖不足、观察期不足或原任务跳过；请查统计口径并补齐源数据' : '']);
   } else if (kind === 'retention') {
-    headers = ['注册日期', '新增玩家', '次日留存(%)', '七日留存(%)'];
+    headers = [labels.cohortColumn || '注册日期', labels.cohortUsers || '新增玩家', '次日留存(%)', '七日留存(%)'];
     rows = report.retention.map(cohort => [cohort.date, cohort.users, cohort.d1, cohort.d7]);
   } else {
-    headers = ['日期', '活跃玩家', '新增玩家', '支付收入', '付费玩家', '币种'];
+    headers = ['日期', activeEntity, newEntity, revenueName, payerEntity, '币种'];
     rows = report.daily.map(day => [day.date, day.dau, day.newUsers, day.revenue, day.payers, report.currency]);
   }
   const body = rows.length ? rows : [Array(headers.length).fill(null)];

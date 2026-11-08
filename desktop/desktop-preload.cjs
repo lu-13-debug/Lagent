@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('dataagentDesktop', {
   },
   setTrayState: state => ipcRenderer.invoke('dataagent:tray-state', state),
   showWindow: () => ipcRenderer.invoke('dataagent:show-window'),
+  pickFolder: () => ipcRenderer.invoke('dataagent:pick-folder'),
   setTaskSummaries: summaries => ipcRenderer.invoke('dataagent:tray-summary', summaries),
   onNewAnalysis: callback => {
     if (typeof callback !== 'function') return () => {};

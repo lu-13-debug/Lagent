@@ -19,3 +19,21 @@ progress.md
 cloud-data/
 backups/
 tmp-sharing-test/
+
+# 本地浏览器验收产物（失败时保留供排查）
+test-results/
+playwright-report/
+
+# 本地临时产物（截图脚本、实验、工具缓存）
+tmp/
+data-public/
+.memsearch/
+.playwright-mcp/
+.spec-workflow/
+/gamelytics-*.png
+/trend-dark.png
+/charts-customize.png
+/nav-snapshot.yml
+/light-report-home.yml
+/readfiles.py
+/readtmp.py

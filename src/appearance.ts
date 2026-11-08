@@ -9,18 +9,18 @@ export function appearanceKey(origin?: string, userId?: string) {
 }
 export function resolveAppearance(stored: PartialAppearance | null | undefined, systemPrefersDark: boolean): Appearance {
   const theme: ThemePreference = stored?.theme === undefined ? 'system' : stored.theme === 'light' || stored.theme === 'dark' || stored.theme === 'system' ? stored.theme : 'light';
-  const view: ViewDensity = stored?.view === 'concise' ? 'concise' : 'standard';
-  return { theme, resolvedTheme: theme === 'system' ? (systemPrefersDark ? 'dark' : 'light') : theme, view };
+  // The product now has a single concise shell; stored standard preferences are migrated here.
+  return { theme, resolvedTheme: theme === 'system' ? (systemPrefersDark ? 'dark' : 'light') : theme, view: 'concise' };
 }
 export function readAppearance(storage: Pick<Storage, 'getItem'>, origin?: string, userId?: string): AppearancePreference {
   let raw: string | null;
-  try { raw = storage.getItem(appearanceKey(origin, userId)); } catch { return { theme: 'system', view: 'standard' }; }
-  if (!raw) return { theme: 'system', view: 'standard' };
+  try { raw = storage.getItem(appearanceKey(origin, userId)); } catch { return { theme: 'system', view: 'concise' }; }
+  if (!raw) return { theme: 'system', view: 'concise' };
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { theme: 'light', view: 'standard' };
-    const { theme, view } = resolveAppearance(parsed, false); return { theme, view };
-  } catch { return { theme: 'light', view: 'standard' }; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { theme: 'light', view: 'concise' };
+    const { theme } = resolveAppearance(parsed, false); return { theme, view: 'concise' };
+  } catch { return { theme: 'light', view: 'concise' }; }
 }
 export function saveAppearance(storage: Pick<Storage, 'setItem'>, origin: string | undefined, userId: string | undefined, value: AppearancePreference) {
   try { const { theme, view } = resolveAppearance(value, false); storage.setItem(appearanceKey(origin, userId), JSON.stringify({ theme, view })); } catch { /* 存储不可用时保留本次会话设置。 */ }

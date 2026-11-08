@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const module = await import('./analytics.js').catch(() => ({}));
+const original = await import('./analytics.js').catch(() => ({}));
+// Historical numerical regression contract now explicitly declares full coverage.
+const module = { ...original, analyze: (dataset, options) => original.analyze({ ...dataset, completeness: { declared: 'full' } }, options) };
 const fixtures = () => ({ name: '手算样本', source: 'upload', warnings: [], records: {
   users: [
     { user_id: 'a', registered_at: '2026-10-01T00:10:00+08:00', channel: '自然' },
@@ -180,7 +182,7 @@ test('range retention observes mature cohorts beyond the selected period and kee
   assert.equal(report.daily[0].dau, null);
   assert.equal(report.daily[0].revenue, null);
   assert.equal(report.daily.at(-1).dau, 0);
-  assert.throws(() => module.analyze(rangeFixture(), { now: '2026-10-10T00:00:00Z', range: { start: '2026-10-10', end: '2026-10-10' } }), /完整自然日/);
+  assert.throws(() => module.analyze(rangeFixture(), { now: '2026-10-10T00:00:00Z', range: { start: '2026-10-10', end: '2026-10-10' } }), /已结束[的]?自然日/);
 });
 
 test('range outside registration or payment coverage keeps channel counts and payment prose unknown', () => {
@@ -201,10 +203,68 @@ test('scoped channels use the same full registration identity mapping even when 
   const report = module.analyze(data, { now: '2026-10-13T00:00:00Z', range: { start: '2026-10-02', end: '2026-10-02' }, channels: ['自然'] });
   assert.equal(report.metrics.find(metric => metric.id === 'revenue').value, 10);
   assert.equal(report.metrics.find(metric => metric.id === 'dau').value, 1);
-  assert.deepEqual(report.channels, [{ name: '自然', users: null, revenue: 10, d1: null }]);
+  assert.deepEqual(report.channels, [{ name: '自然', users: null, revenue: 10, payers: 1, payRate: null, arppu: 10, d1: null }]);
   assert.match(report.methodology.join(' '), /标识映射/);
   assert.match(report.methodology.join(' '), /生命周期/);
   assert.match(report.quality.issues.join(' '), /早于.*注册时间/);
   assert.equal(JSON.stringify(report).includes('private-time-order'), false);
   assert.deepEqual(module.analyze(data, { now: '2026-10-04T00:00:00Z' }).channels, [], '默认分析仍保留原来只列已注册渠道的行为');
+});
+
+test('undeclared completeness keeps the collection boundary out of headline metrics', () => {
+  const data = { name: '边界样本', source: 'upload', warnings: [], completeness: { declared: 'unknown' }, records: { activity: [
+    { user_id: 'a', event_time: '2026-10-06T02:00:00Z' },
+    { user_id: 'b', event_time: '2026-10-07T02:00:00Z' },
+    { user_id: 'c', event_time: '2026-10-07T03:00:00Z' },
+    { user_id: 'd', event_time: '2026-10-07T04:00:00Z' },
+    { user_id: 'a', event_time: '2026-10-08T02:00:00Z' },
+    { user_id: 'b', event_time: '2026-10-08T03:00:00Z' },
+    { user_id: 'c', event_time: '2026-10-08T04:00:00Z' },
+    { user_id: 'a', event_time: '2026-10-09T02:00:00Z' },
+  ] } };
+  const report = original.analyze(data, { now: '2026-10-10T10:00:00Z' });
+  const metric = report.metrics.find(item => item.id === 'dau');
+  assert.equal(metric.value, 3);
+  assert.match(metric.note, /2026-10-08/);
+  assert.match(metric.note, /边界日 2026-10-09/);
+  assert.equal(report.daily.at(-1).date, '2026-10-09');
+  assert.equal(report.daily.at(-1).dau, 1);
+  assert.match(report.summary, /边界日 2026-10-09/);
+  assert.match(report.methodology.join(' '), /最后非边界活跃日/);
+});
+
+test('stale data is flagged in quality issues and summary', () => {
+  const data = { name: '过期样本', source: 'upload', warnings: [], completeness: { declared: 'full' }, records: { activity: [
+    { user_id: 'a', event_time: '2026-01-01T02:00:00Z' },
+    { user_id: 'b', event_time: '2026-01-02T02:00:00Z' },
+  ] } };
+  const report = original.analyze(data, { now: '2026-10-10T10:00:00Z' });
+  assert.match(report.quality.issues.join(' '), /已 \d+ 天/);
+  assert.match(report.quality.issues.join(' '), /可能不代表当前业务/);
+  assert.match(report.summary, /可能不代表当前业务/);
+});
+
+test('weekday averages, channel payer structure and payer concentration are deterministic', () => {
+  const records = {
+    users: Array.from({ length: 7 }, (_, index) => ({ user_id: `w${index}`, registered_at: `2026-10-0${index + 1}`, channel: index < 4 ? '自然' : '买量' })),
+    activity: Array.from({ length: 7 }, (_, index) => ({ user_id: `w${index}`, event_time: `2026-10-0${index + 1}T02:00:00Z` })),
+    payments: [
+      { order_id: 'wo1', user_id: 'w1', paid_at: '2026-10-02', amount: '6', currency: 'CNY', status: 'success' },
+      { order_id: 'wo2', user_id: 'w1', paid_at: '2026-10-03', amount: '4', currency: 'CNY', status: 'success' },
+    ],
+  };
+  const report = module.analyze({ name: '周内样本', source: 'upload', warnings: [], completeness: { declared: 'full' }, records }, { now: '2026-10-13T00:00:00Z' });
+  assert.equal(report.weekday.length, 7);
+  assert.deepEqual(report.weekday.map(day => day.label), ['周一', '周二', '周三', '周四', '周五', '周六', '周日']);
+  assert.equal(report.weekday.find(day => day.label === '周四').dau, 1);
+  assert.equal(report.weekday.find(day => day.label === '周四').revenue, null);
+  assert.equal(report.weekday.find(day => day.label === '周五').revenue, 6);
+  assert.equal(report.weekday.find(day => day.label === '周六').revenue, 4);
+  const natural = report.channels.find(channel => channel.name === '自然');
+  assert.equal(natural.payers, 1);
+  assert.equal(natural.revenue, 10);
+  assert.equal(natural.arppu, 10);
+  assert.equal(natural.payRate, 25);
+  assert.deepEqual(report.payerSummary, { payers: 1, repeatPayers: 1, repeatRate: 100, topPayerShare: 100, averageOrders: 2, averageRevenue: 10 });
+  assert.match(report.methodology.join(' '), /周内规律/);
 });

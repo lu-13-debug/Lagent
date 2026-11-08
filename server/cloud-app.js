@@ -1,3 +1,4 @@
+import { workEnabled } from './work/policy.js';
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -5,8 +6,9 @@ import { existsSync } from 'node:fs';
 import { createApp } from './app.js';
 import { shareSnapshot } from './report-sharing.js';
 import { DEFAULT_MODEL_HOSTS } from './gateway.js';
-import { TASK_CAPABILITIES } from './task-monitor.js';
+import { taskCapabilities } from './task-monitor.js';
 import { Accounts, PasswordHasher, AuthRateLimiter, authError, usernameValue, passwordValue, publicUser } from './accounts.js';
+import { MobileGateway, hasDeviceToken, registerMobilePairingRoutes } from './mobile-gateway.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const loopback = hostname => ['localhost', '127.0.0.1', '[::1]'].includes(hostname);
@@ -45,6 +47,8 @@ export function createCloudApp(options = {}) {
   const policy = modelPolicy(hosts, { ...options, production });
   const dataDir = path.resolve(options.dataDir || process.env.DATAAGENT_DATA_DIR || path.join(root, 'data', 'cloud'));
   const now = options.now || Date.now;
+  const enableWork = workEnabled(options);
+  const mobileGateway = enableWork ? new MobileGateway({ dataDir: path.join(dataDir, 'mobile-gateway'), now }) : null;
   const accounts = new Accounts(dataDir, { now, sessionTtlMs: options.sessionTtlMs });
   const hasher = new PasswordHasher({ maxConcurrent: options.maxKdfConcurrent || 2, maxQueue: options.maxKdfQueue ?? 16 });
   const limiter = new AuthRateLimiter(options.authRateLimit, now);
@@ -57,6 +61,7 @@ export function createCloudApp(options = {}) {
   const sendSession = (res, user, status = 200) => { const token = accounts.createSession(user.id); res.cookie('da_session', token, cookieOptions); return res.status(status).json({ user: publicUser(user) }); };
   const requireSession = req => { const session = accounts.session(cookieToken(req)); if (!session) throw authError('登录已失效，请重新登录', 401); return session; };
   const idle = workspace => workspace.refs === 0 && !workspace.app.locals.isBusy();
+  const releaseStream = (_req, res) => { res.locals.releaseCloudRequest?.(); res.locals.releaseWorkspaceRequest?.(); };
   function evict(workspace) { workspace.app.locals.close(); workspaces.delete(workspace.userId); }
   function cleanupWorkspaces() { accounts.prune(); accounts.pruneShares(); for (const workspace of workspaces.values()) if (idle(workspace) && now() - workspace.lastUsed >= idleMs) evict(workspace); }
   function workspaceFor(userId) {
@@ -67,18 +72,19 @@ export function createCloudApp(options = {}) {
       if (!candidates.length) throw authError('服务工作空间已满，请稍后再试', 503);
       evict(candidates[0]);
     }
-    const child = createApp({ dataDir: path.join(dataDir, 'users', userId), serveStatic: false, cloud: true, networkGuard: false, maxDatasets: 20, maxConcurrentTasks: 2, maxAsyncRequests: options.maxWorkspaceRequests || 8, fetchImpl: options.fetchImpl, modelTimeoutMs: options.modelTimeoutMs,
+    const child = createApp({ dataDir: path.join(dataDir, 'users', userId), userId, workEnabled:enableWork, credentialMasterKey: options.credentialMasterKey, analysisTool: options.analysisTool, pdfBuilder: options.pdfBuilder, serveStatic: false, cloud: true, networkGuard: false, maxDatasets: 20, maxConcurrentTasks: 2, maxAsyncRequests: options.maxWorkspaceRequests || 8, fetchImpl: options.fetchImpl, modelTimeoutMs: options.modelTimeoutMs,
       maxTaskEventConnections: options.maxTaskEventConnections, taskHeartbeatMs: options.taskHeartbeatMs,
       maxReportExplorations: options.maxReportExplorations, reportExploreWorkerFactory: options.reportExploreWorkerFactory, reportExploreTimeoutMs: options.reportExploreTimeoutMs,
       isSessionValid: req => Boolean(accounts.session(cookieToken(req))),
+      mobileGateway, mobileOwnerId: userId, onMobileEventConnect: releaseStream,
       getTaskEventOrigin: (_req, res) => res.locals.cloudRequestOrigin,
-      onTaskEventConnect: (_req, res) => { res.locals.releaseCloudRequest?.(); res.locals.releaseWorkspaceRequest?.(); },
-      getKey: (req, baseUrl) => accounts.getKey(req.cloudSession.hash, baseUrl), setKey: (req, key, baseUrl) => accounts.setKey(req.cloudSession.hash, key, baseUrl), assertModelSettings: policy.assert });
+      onTaskEventConnect: releaseStream,
+      getKey: (req, baseUrl) => req.cloudSession?.hash ? accounts.getKey(req.cloudSession.hash, baseUrl) : '', setKey: (req, key, baseUrl) => { if (!req.cloudSession?.hash) throw authError('移动端无模型凭据写权限', 403); accounts.setKey(req.cloudSession.hash, key, baseUrl); }, assertModelSettings: policy.assert });
     workspace = { userId, app: child, refs: 0, lastUsed: now() }; workspaces.set(userId, workspace); return workspace;
   }
   app.locals.cleanupWorkspaces = cleanupWorkspaces;
   const timer = setInterval(cleanupWorkspaces, Math.min(idleMs || 1, 60000)); timer.unref();
-  app.locals.close = () => { if (closed) return; closed = true; clearInterval(timer); for (const workspace of workspaces.values()) workspace.app.locals.close(); workspaces.clear(); accounts.close(); };
+  app.locals.close = () => { if (closed) return; closed = true; clearInterval(timer); for (const workspace of workspaces.values()) workspace.app.locals.close(); workspaces.clear(); mobileGateway?.close(); accounts.close(); };
 
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -102,8 +108,9 @@ export function createCloudApp(options = {}) {
     let released = false; const release = () => { if (!released) { released = true; inFlight--; } }; res.locals.releaseCloudRequest = release; res.once('finish', release); res.once('close', release); next();
   });
   app.use(express.json({ limit: '128kb' }));
+  if (enableWork) registerMobilePairingRoutes(app, mobileGateway, { desktopOwner: req => requireSession(req).user.id });
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
-  app.get('/api/runtime', (_req, res) => res.json({ mode: 'cloud', authRequired: true, serviceName: 'DataAgent', version: '1.1.0', modelHosts: policy.allowed, capabilities: { ...TASK_CAPABILITIES, reportSharing: true } }));
+  app.get('/api/runtime', (_req, res) => res.json({ mode: 'cloud', authRequired: true, serviceName: 'DataAgent', version: '1.1.0', modelHosts: policy.allowed, capabilities: { ...taskCapabilities(workEnabled(options)), reportSharing: true } }));
   app.get('/api/auth/session', (req, res) => { const session = accounts.session(cookieToken(req)); res.json({ user: session?.user || null }); });
   const rateLimit = req => { const name = typeof req.body?.username === 'string' ? req.body.username.toLowerCase().slice(0, 128) : ''; limiter.consume(req.ip, name); };
   app.post('/api/auth/register', async (req, res) => {
@@ -165,10 +172,23 @@ export function createCloudApp(options = {}) {
     const session = requireSession(req); if (!accounts.revokeShare(session.user.id, req.params.id)) throw authError('分享不存在', 404);
     res.json({ ok:true });
   });
+  const mobileWorkRoute = req => {
+    if (req.method === 'GET' && ['/api/mobile/bootstrap', '/api/mobile/policy', '/api/mobile/events', '/api/mobile/notifications'].includes(req.path)) return true;
+    if (req.method === 'GET' && /^\/api\/mobile\/tickets\/[^/]+$/.test(req.path)) return true;
+    return req.method === 'POST' && (req.path === '/api/mobile/command' || req.path === '/api/mcp' || req.path === '/api/mobile/notifications/read-all' || /^\/api\/mobile\/tickets\/[^/]+\/actions$/.test(req.path) || /^\/api\/mobile\/notifications\/[^/]+\/read$/.test(req.path));
+  };
   app.use((req, res, next) => {
     if (!req.path.toLowerCase().startsWith('/api/')) return next();
-    req.cloudSession = requireSession(req);
-    const workspace = workspaceFor(req.cloudSession.user.id);
+    if (req.path.startsWith('/api/mobile/') && !mobileWorkRoute(req)) return res.status(404).json({ error: '移动接口不存在' });
+    let userId;
+    if (hasDeviceToken(req)) {
+      if (!mobileWorkRoute(req)) return res.status(401).json({ error: '设备 token 仅可用于移动 Work API' });
+      const device = mobileGateway.authenticateRequest(req);
+      req.mobileAuthenticated = true; req.mobileDevice = device; userId = device.ownerId;
+    } else {
+      req.cloudSession = requireSession(req); userId = req.cloudSession.user.id;
+    }
+    const workspace = workspaceFor(userId);
     if (workspace.refs >= (options.maxWorkspaceRequests || 8)) throw authError('当前账号请求过多，请稍后再试', 429);
     workspace.refs++; workspace.lastUsed = now();
     let released = false; const release = () => { if (!released) { released = true; workspace.refs--; workspace.lastUsed = now(); } }; res.locals.releaseWorkspaceRequest = release; res.once('finish', release); res.once('close', release);

@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 const templates = await import('./analysis-templates.ts').catch(() => ({}));
-test('five templates declare required tables and never invent availability', () => {
-  assert.equal(templates.analysisTemplates?.length, 5);
+test('six templates declare required tables and never invent availability', () => {
+  assert.equal(templates.analysisTemplates?.length, 6);
   const payment = templates.analysisTemplates.find(template => template.id === 'payment');
   assert.deepEqual(templates.templateAvailability(payment, [{ id: 'a', tables: [{ type: 'users' }, { type: 'activity' }] }]).missing, ['payments']);
   const dataset = { id: 'b', source: 'upload', tables: ['users', 'activity', 'payments'].map(type => ({ type })) };

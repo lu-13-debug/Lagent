@@ -2,28 +2,29 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { appearanceKey, readAppearance, saveAppearance, resolveAppearance } from './appearance.ts';
 
-test('外观按来源和账号隔离，缺省跟随系统且正常视图', () => {
+test('外观按来源和账号隔离，缺省跟随系统且仅保留简洁视图', () => {
   const data = new Map(); const storage = { getItem: k => data.get(k) ?? null, setItem: (k,v) => data.set(k,v) };
-  assert.deepEqual(readAppearance(storage,'https://example.com','u1'), {theme:'system',view:'standard'});
+  assert.deepEqual(readAppearance(storage,'https://example.com','u1'), {theme:'system',view:'concise'});
   saveAppearance(storage,'https://example.com','u1',{theme:'dark',view:'concise'});
   assert.deepEqual(readAppearance(storage,'https://example.com','u1'),{theme:'dark',view:'concise'});
-  assert.deepEqual(readAppearance(storage,'https://example.com','u2'),{theme:'system',view:'standard'});
+  assert.deepEqual(readAppearance(storage,'https://example.com','u2'),{theme:'system',view:'concise'});
   assert.notEqual(appearanceKey('https://example.com','u1'),appearanceKey('https://else.example','u1'));
   assert.notEqual(appearanceKey('https://example.com','u1'),appearanceKey('https://example.com',undefined));
 });
 test('系统偏好、固定主题和异常配置的回退', () => {
   assert.deepEqual(resolveAppearance({theme:'system',view:'concise'},true), {theme:'system',resolvedTheme:'dark',view:'concise'});
-  assert.equal(resolveAppearance({theme:'system',view:'standard'},false).resolvedTheme,'light');
-  assert.equal(resolveAppearance({theme:'light',view:'standard'},true).resolvedTheme,'light');
-  assert.equal(resolveAppearance({theme:'dark',view:'standard'},false).resolvedTheme,'dark');
-  assert.deepEqual(resolveAppearance({theme:'bad',view:'bad'},true),{theme:'light',resolvedTheme:'light',view:'standard'});
+  assert.equal(resolveAppearance({theme:'system',view:'concise'},false).resolvedTheme,'light');
+  assert.equal(resolveAppearance({theme:'light',view:'concise'},true).resolvedTheme,'light');
+  assert.equal(resolveAppearance({theme:'dark',view:'concise'},false).resolvedTheme,'dark');
+  assert.deepEqual(resolveAppearance({theme:'bad',view:'bad'},true),{theme:'light',resolvedTheme:'light',view:'concise'});
+  assert.deepEqual(resolveAppearance({theme:'system',view:'standard'},false),{theme:'system',resolvedTheme:'light',view:'concise'});
   const blocked={getItem(){throw Error('blocked')},setItem(){throw Error('blocked')}};
-  assert.deepEqual(readAppearance(blocked,undefined,undefined),{theme:'system',view:'standard'});
+  assert.deepEqual(readAppearance(blocked,undefined,undefined),{theme:'system',view:'concise'});
   assert.doesNotThrow(()=>saveAppearance(blocked,undefined,undefined,{theme:'dark',view:'concise'}));
 });
 
-test('损坏的持久化配置回退浅色和正常视图', () => {
-  assert.deepEqual(readAppearance({getItem:()=>'{bad'}, 'origin', 'u'), {theme:'light',view:'standard'});
+test('损坏的持久化配置回退浅色和简洁视图', () => {
+  assert.deepEqual(readAppearance({getItem:()=>'{bad'}, 'origin', 'u'), {theme:'light',view:'concise'});
 });
 
 test('两套主题中的正文与次要文字在主要背景上可读', async () => {

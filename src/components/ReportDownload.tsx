@@ -3,13 +3,20 @@ import type { ReactNode } from 'react';
 import { api } from '../api';
 import { downloadText, Spinner } from './ui';
 
-export function ReportDownload({ id, name, children, className, label, onDone, onError }: { id: string; name: string; children: ReactNode; className?: string; label?: string; onDone?: () => void; onError?: (message: string) => void }) {
+export function ReportDownload({ id, name, children, className, label, onDone, onError, format = 'md' }: { id: string; name: string; children: ReactNode; className?: string; label?: string; onDone?: () => void; onError?: (message: string) => void; format?: 'md' | 'pdf' }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function download() {
     if (busy) return;
     setBusy(true); setError('');
-    try { const markdown = await api.report(id); downloadText(`${name.replace(/[<>:"/\\|?*]/g, '_')}.md`, markdown, 'text/markdown;charset=utf-8'); onDone?.(); }
+    try {
+      const filename = name.replace(/[<>:"/\\|?*]/g, '_');
+      if (format === 'pdf') {
+        const blob = await api.reportPdf(id); const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${filename}.pdf`; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } else { const markdown = await api.report(id); downloadText(`${filename}.md`, markdown, 'text/markdown;charset=utf-8'); }
+      onDone?.();
+    }
     catch (cause) { const message = (cause as Error).message; setError(message); onError?.(message); }
     finally { setBusy(false); }
   }

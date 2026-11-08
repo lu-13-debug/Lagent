@@ -3,6 +3,16 @@ import type { ReactNode } from 'react';
 import { Check, CheckCircle2, LoaderCircle, X } from 'lucide-react';
 import type { TaskStatus } from '../types';
 
+let scrollLocks = 0;
+let bodyOverflow = '';
+function lockScroll() {
+  if (scrollLocks++ === 0) { bodyOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden'; }
+}
+function unlockScroll() {
+  scrollLocks = Math.max(0, scrollLocks - 1);
+  if (scrollLocks === 0) document.body.style.overflow = bodyOverflow;
+}
+
 export function Logo({ small = false }: { small?: boolean }) {
   return <span className={`brand-mark ${small ? 'small' : ''}`} aria-hidden="true"><i /><i /><i /><i /></span>;
 }
@@ -11,8 +21,7 @@ export function Modal({ title, subtitle, children, close, wide = false, dismissi
   const canDismiss = useRef(dismissible); canDismiss.current = dismissible;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
-    const bodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    lockScroll();
     const panel = ref.current;
     const items = () => [...(panel?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]') || [])].filter(item => item.getClientRects().length > 0);
     items()[0]?.focus();
@@ -28,7 +37,7 @@ export function Modal({ title, subtitle, children, close, wide = false, dismissi
       }
     };
     document.addEventListener('keydown', handleKey);
-    return () => { document.body.style.overflow = bodyOverflow; document.removeEventListener('keydown', handleKey); previous?.focus(); };
+    return () => { unlockScroll(); document.removeEventListener('keydown', handleKey); previous?.focus(); };
   }, [close]);
   return <div className="modal-backdrop" onMouseDown={e => { if (dismissible && e.target === e.currentTarget) close(); }}>
     <div ref={ref} tabIndex={-1} className={`modal ${wide ? 'modal-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>

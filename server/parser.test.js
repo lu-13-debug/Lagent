@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { performance } from 'node:perf_hooks';
 const parser = await import('./datasets.js').catch(() => ({}));
 
 test('XLSX sheet inference maps Chinese columns and returns safe preview metadata', async () => {
@@ -27,9 +28,14 @@ test('parser rejects ambiguous tables, negative amounts, invalid time and confli
   await assert.rejects(parser.parseFiles(file(header + 'x,a,2026-10-01,1,CNY,paid\nx,a,2026-10-01,2,CNY,paid')), /冲突/);
 });
 
-test('parser accepts the documented 200000 row boundary without argument stack overflow', async () => {
+test('parser accepts the documented 200000 row boundary without argument stack overflow', async t => {
   const csv = 'user_id,event_time\n' + Array.from({ length: 200000 }, (_, i) => `u${i},2026-10-01`).join('\n');
+  const budget = Number(process.env.DATAAGENT_PARSE_BUDGET_MS || 20000);
+  const started = performance.now();
   const dataset = await parser.parseFiles([{ originalname: 'activity.csv', buffer: Buffer.from(csv) }]);
+  const elapsedMs = Math.round(performance.now() - started);
+  t.diagnostic(`200000 行解析耗时 ${elapsedMs}ms（阈值 ${budget}ms）`);
+  assert.ok(elapsedMs <= budget, `200000 行解析耗时 ${elapsedMs}ms，超过阈值 ${budget}ms（可用 DATAAGENT_PARSE_BUDGET_MS 调整）`);
   assert.equal(dataset.rowCount, 200000);
   assert.equal(dataset.inspection.rawRows, 200000);
   assert.equal(dataset.inspection.validRows, 200000);

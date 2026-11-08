@@ -5,6 +5,16 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 const module = await import('./app.js').catch(() => ({}));
 let nextPort = 23000 + Math.floor(Math.random() * 10000);
+test('Memory本地显式CRUD、非法输入与软删除恢复',async t=>{
+ const {api}=await setup(t);assert.equal((await api('/api/runtime')).capabilities.memory,true);
+ assert.equal((await api('/api/memory','POST',{scope:'bad',type:'preference',key:'语言',value:'中文'})).status,400);
+ const saved=await api('/api/memory','POST',{scope:'user',type:'preference',key:'语言',value:'中文',status:'confirmed'});assert.equal(saved.status,201);
+ const id=saved.memory.id;assert.equal((await api(`/api/memory/${id}`,'PATCH',{value:'简体中文'})).memory.version,2);
+ assert.equal((await api(`/api/memory/${id}`,'DELETE')).memory.enabled,false);
+ assert.equal((await api(`/api/memory/${id}`,'PATCH',{enabled:true})).memory.enabled,true);
+ assert.equal((await api('/api/memory?scope=project')).memories.length,0);
+ assert.equal((await api('/api/memory?ownerId=other')).memories.length,1);
+});
 
 async function setup(t, options = {}) {
   assert.equal(typeof module.createApp, 'function', '必须提供 createApp');
@@ -39,6 +49,18 @@ async function waitFor(api, id, status) {
 }
 const newTask = (datasetId, mode = 'automatic', extra = {}) => ({ title: '增长复盘', goal: '核对留存', mode, datasetId, domain: 'game', useAI: false, ...extra });
 
+test('模型用量接口校验范围且只输出用量数据', async t => {
+ const {api,app}=await setup(t);
+ const boot=await api('/api/bootstrap');
+ app.locals.store.put('model-call',{id:'usage-test',taskId:boot.tasks[0].id,stageId:'insights',stageName:'洞察',kind:'stage',provider:'测试',model:'mock',protocol:'chat-completions',recordedAt:new Date().toISOString(),inputTokens:10,outputTokens:5,totalTokens:15});
+ assert.equal((await api('/api/runtime')).capabilities.modelUsage,true);
+ const usage=await api('/api/model-usage?days=30');
+ assert.equal(usage.status,200);assert.equal(usage.totals.totalTokens,15);assert.equal(usage.byTask[0].taskId,boot.tasks[0].id);
+ assert.equal((await api('/api/model-usage?days=invalid')).status,400);
+ assert.equal((await api('/api/model-usage?days=7&days=30')).status,400);
+ assert.equal(JSON.stringify(usage).includes('goal'),false);
+});
+
 test('bootstrap has computed demo, 28 daily points and free initial wallet', async t => {
   const { api } = await setup(t);
   const b = await api('/api/bootstrap');
@@ -53,6 +75,34 @@ test('bootstrap has computed demo, 28 daily points and free initial wallet', asy
   assert.equal(JSON.stringify(b).includes('apiKey'), false);
 });
 
+test('legacy datasets and reports gain capability and a partial title when served', async t => {
+  const { api, app } = await setup(t);
+  const b = await api('/api/bootstrap');
+  const demo = app.locals.store.get('dataset', b.datasets[0].id);
+  delete demo.inspection.capability;
+  app.locals.store.put('dataset', demo);
+  const task = app.locals.store.get('task', b.tasks[0].id);
+  delete task.report.capability;
+  task.report.title = '演示数据 · 运营分析报告';
+  app.locals.store.put('task', task);
+
+  const form = new FormData();
+  form.append('files', new Blob(['user_id,registered_at,channel\nu1,2026-10-01,自然\n'], { type: 'text/csv' }), 'users.csv');
+  const uploaded = await api('/api/datasets/upload', 'POST', form);
+  assert.equal(uploaded.status, 201);
+  const usersOnly = app.locals.store.get('dataset', uploaded.dataset.id);
+  delete usersOnly.inspection.capability;
+  app.locals.store.put('dataset', usersOnly);
+  task.datasetId = usersOnly.id;
+  app.locals.store.put('task', task);
+
+  const after = await api('/api/bootstrap');
+  assert.equal(after.datasets.find(dataset => dataset.id === demo.id).inspection.capability.metrics.dau.status, 'computed');
+  const served = after.tasks.find(item => item.id === task.id);
+  assert.deepEqual(served.report.capability.missingTables.map(table => table.table), ['activity', 'payments']);
+  assert.match(served.report.title, /部分数据分析报告/);
+});
+
 test('automatic workflow settles exactly once and refuses AI without a key before freeze', async t => {
   const { api } = await setup(t);
   const b = await api('/api/bootstrap');
@@ -64,7 +114,7 @@ test('automatic workflow settles exactly once and refuses AI without a key befor
   const done = await waitFor(api, created.task.id, 'completed');
   assert.deepEqual(done.wallet, { balance: 480, frozen: 0, spent: 20 });
   assert.ok(done.task.steps.every(s => s.status === 'completed'));
-  assert.equal(done.task.events.filter(e => e.type === 'start').length, 8);
+  assert.equal(done.task.events.filter(e => e.type === 'start').length, done.task.steps.length);
   await api(`/api/tasks/${done.task.id}/approve`, 'POST', {});
   await api(`/api/tasks/${done.task.id}/cancel`, 'POST', {});
   assert.equal((await api('/api/wallet')).transactions.filter(x => x.type === 'settle').length, 1);
@@ -133,6 +183,32 @@ test('CSV chinese aliases upload, missing-table limitations and malformed files'
   assert.equal((await api('/api/datasets/..%2F..%2Fsecret')).status, 400);
 });
 
+test('timezone confirmation persists and refuses reinterpretation of unzoned timestamps', async t => {
+  const { api } = await setup(t);
+  const form = new FormData();
+  form.append('files', new Blob(['user_id,registered_at\nplayer,2026-10-01\n']), 'users.csv');
+  const uploaded = await api('/api/datasets/upload', 'POST', form);
+  assert.equal(uploaded.status, 201);
+  assert.equal(uploaded.dataset.timezone.assumed, true);
+  const confirmed = await api(`/api/datasets/${uploaded.dataset.id}/timezone`, 'PUT', { timezone: 'Asia/Shanghai' });
+  assert.equal(confirmed.status, 200);
+  assert.equal(confirmed.dataset.timezone.assumed, false);
+  assert.equal(confirmed.dataset.timezone.source, 'user');
+  assert.equal(confirmed.dataset.inspection.issues.some(issue => issue.code === 'timezone_unconfirmed'), false);
+  const changed = await api(`/api/datasets/${uploaded.dataset.id}/timezone`, 'PUT', { timezone: 'UTC' });
+  assert.equal(changed.status, 409);
+  assert.match(changed.error, /重新上传/);
+  assert.equal((await api(`/api/datasets/${uploaded.dataset.id}/timezone`, 'PUT', { timezone: 'Mars/Base' })).status, 400);
+
+  const zoned = new FormData();
+  zoned.append('files', new Blob(['user_id,event_time\nplayer,2026-10-01T09:00:00Z\n']), 'activity.csv');
+  const other = await api('/api/datasets/upload', 'POST', zoned);
+  assert.equal(other.dataset.timezone.assumed, true);
+  const switched = await api(`/api/datasets/${other.dataset.id}/timezone`, 'PUT', { timezone: 'UTC' });
+  assert.equal(switched.status, 200);
+  assert.equal(switched.dataset.timezone.offsetMinutes, 0);
+});
+
 test('model receives only aggregates; provider failure refunds with redacted error', async t => {
   const { api } = await setup(t, { fetchImpl: async (_url, init) => {
     assert.match(init.body, /metrics/);
@@ -191,7 +267,7 @@ test('successful model enhancement keeps deterministic metrics and reports real 
   const requests = [];
   const { api } = await setup(t, { fetchImpl: async (url, init) => {
     requests.push({ url, body: JSON.parse(init.body), authorization: init.headers.authorization });
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: '模型已根据聚合指标分析', findings: [{ title: '观察', detail: '需进一步验证', severity: 'neutral', evidence: '聚合指标' }], recommendations: ['补充渠道成本'] }) } }] }), { status: 200 });
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: '模型已根据聚合指标分析', findings: [{ title: '观察', detail: '需进一步验证', severity: 'neutral', evidence: '聚合指标', kind: 'fact', evidenceRefs: ['nonexistent:fact'] }], recommendations: ['补充渠道成本'] }) } }] }), { status: 200 });
   } });
   await api('/api/settings', 'PUT', { provider: 'test', baseUrl: 'https://example.test/v1', model: 'test-model', apiKey: 'memory-only-secret' });
   const tested = await api('/api/settings/test', 'POST', {});
@@ -202,6 +278,8 @@ test('successful model enhancement keeps deterministic metrics and reports real 
   const created = await api('/api/tasks', 'POST', newTask(b.datasets[0].id, 'automatic', { useAI: true }));
   const done = await waitFor(api, created.task.id, 'completed');
   assert.equal(done.task.report.source, 'ai');
+  assert.equal(done.task.report.findings[0].unverified, true);
+  assert.equal(done.task.report.findings[0].kind, 'inference');
   assert.deepEqual(done.task.report.metrics, b.tasks[0].report.metrics);
   assert.equal(requests[1].url, 'https://example.test/v1/chat/completions');
   assert.equal(requests[1].authorization, 'Bearer memory-only-secret');
@@ -221,7 +299,7 @@ test('task creation checks actual records before freezing even when inspection c
   const before = await api('/api/wallet');
   const result = await api('/api/tasks', 'POST', newTask(dataset.id));
   assert.equal(result.status, 400);
-  assert.match(result.error, /完整自然日/);
+  assert.match(result.error, /已结束[的]?自然日/);
   assert.equal(result.issues?.some(issue => issue.code === 'not_analyzable'), true);
   const after = await api('/api/wallet');
   assert.deepEqual(after, before, '拒绝创建时不能先冻结再释放');
@@ -323,4 +401,11 @@ test('AI task snapshots initial endpoint, model and key despite later settings c
     assert.equal(contents.includes(Buffer.from('snapshot-old-key')), false);
     assert.equal(contents.includes(Buffer.from('snapshot-new-key')), false);
   }
+});
+test('HTTP upload cannot override the production 20MB limit', async t => {
+ const {api}=await setup(t);const form=new FormData();
+ form.append('files',new Blob([Buffer.alloc(20*1024*1024+1,32)]),'activity.csv');
+ const result=await api('/api/datasets/upload','POST',form);
+ assert.equal(result.status,400);assert.match(result.error,/20MB/);assert.match(result.error,/拆分|必要列|日期范围/);
+ const state=await api('/api/bootstrap');assert.equal(state.wallet.balance,500);
 });

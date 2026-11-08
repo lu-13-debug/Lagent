@@ -7,6 +7,7 @@ export interface DesktopBridge {
   onNewAnalysis?: (callback: () => void) => unknown;
   setTrayState?: (state: 'login' | 'ready') => unknown;
   showWindow?: () => unknown;
+  pickFolder?: () => Promise<string | null>;
 }
 declare global { interface Window { dataagentDesktop?: DesktopBridge } }
 export function taskSummaries(tasks: Task[]): DesktopSummary[] {

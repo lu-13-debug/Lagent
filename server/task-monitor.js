@@ -1,10 +1,11 @@
 import { isModelErrorCode } from './task-errors.js';
-export const TASK_CAPABILITIES = Object.freeze({ taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true });
+export const TASK_CAPABILITIES = Object.freeze({ taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, modelHub: true, reportPdf: true, agentTrace: true, memory: true, modelUsage: true });
 const fields = ['id', 'title', 'mode', 'domain', 'datasetId', 'datasetName', 'status', 'currentStep', 'progress', 'createdAt', 'updatedAt', 'useAI', 'model', 'cost', 'sourceTaskId', 'sourceKind'];
+export const taskCapabilities = (superagent = false) => superagent ? { ...TASK_CAPABILITIES, superagent: true } : TASK_CAPABILITIES;
 export function taskSummary(task) {
   const summary = Object.fromEntries(fields.filter(field => task[field] !== undefined).map(field => [field, task[field]]));
-  summary.steps = (task.steps || []).slice(0, 8).map(({ id, name, status }) => ({ id, name, status }));
-  summary.skippedSteps = (task.skippedSteps || []).filter(id => ['retention', 'monetization', 'insights'].includes(id));
+  summary.steps = (task.steps || []).map(({ id, name, status }) => ({ id, name, status }));
+  summary.skippedSteps = task.skippedSteps || [];
   if (isModelErrorCode(task.errorCode)) summary.errorCode = task.errorCode;
   return summary;
 }

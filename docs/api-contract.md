@@ -2,6 +2,8 @@
 
 所有时间 ISO 字符串；JSON 错误 {error:string}。服务器端口 3001，开发 Vite 将 /api 代理到它。
 
+报告可选字段 `facts` 为仅含聚合信息的结构化事实列表；AI 发现可附带可选的 `kind`、`evidenceRefs` 和 `unverified`。旧报告没有这些字段时维持原有展示。引用只验证 ID 存在，不能证明模型论述在语义上正确；无有效引用的发现标为未经核实。`factContext.incomplete` 的行数按归一化后的记录统计，时区标记表示无时区输入采用项目时区，并不证明数据源实际时区。
+
 GET /api/bootstrap -> {project: Project, tasks: Task[], datasets: Dataset[], wallet: Wallet, walletVersion?:number, skills: Skill[], domains: Domain[], settings: Settings}
 POST /api/datasets/demo -> {dataset: Dataset}
 POST /api/datasets/upload multipart 文件字段 files（可重复）-> {dataset: Dataset}
@@ -116,6 +118,32 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 
 每次探索的计算时限默认 30 秒，服务端可通过 reportExploreTimeoutMs 下调，硬上限始终为 30000ms；本地与云端一致。时限包含 worker 创建及源数据复制启动耗时；到期终止 worker、清理定时器并释放账号并发槽，返回 503 和“报告探索计算超时，请缩小日期或渠道范围后重试”。服务不自动重试，不更改原任务、报告或账本；调用者可调整范围后明确发起新请求。取消、正常完成、worker 错误和服务关闭也会清除同一时限定时器。
 
+## 项目工作区（/api/work/projects、/api/work/chats）
+
+需 `DATAAGENT_WORK_ENABLED=1`；CLI 项目对话还需要 `DATAAGENT_ALLOW_EXTERNAL_EXECUTORS=1` 并在执行器策略中勾选对应执行器。所有写操作仍经工单审批，不新增绕过审批的入口。
+
+- `GET /api/work/projects` → `{projects:[ProjectWorkspace]}`；`POST /api/work/projects {path,name?}` → `201/200 {project,created}`。path 必须是存在的绝对目录，服务端取 realpath 后拒绝磁盘根目录与 `Windows`、`Program Files*`、`ProgramData`；同路径重复导入返回 `created:false` 与原记录。只保存记录，不复制、移动或删除本地文件。最多 100 个项目。
+- `GET /api/work/files?path=` → `{path,parent,roots,entries:[{name,path,isDir}],truncated}`，仅供浏览器端选择项目目录。仅本地模式启用（云端返回 404）；省略 path 返回可用盘符，否则只返回子文件夹，最多 500 项，不读取或返回任何文件内容。浏览器无法调用系统目录对话框，桌面客户端使用 `pickFolder()` 打开系统对话框。
+- `GET /api/work/projects/:id` → `{project}`；`DELETE /api/work/projects/:id` → `{id}`，同时删除该项目下的项目对话记录，不影响 Agent 端会话文件。
+- `GET /api/work/projects/:id/sessions?executor=claude-code|codex` → `{sessions:[{executorId,sessionId,title,updatedAt,imported}]}`。扫描 `~/.claude/projects/<路径编码目录>/*.jsonl` 与 `~/.codex/sessions/**/rollout-*.jsonl`，只保留记录中 `cwd` 与项目路径一致的会话，每个来源最多读取 200 个文件头（64KB），返回最多 60 条；不返回会话正文。
+- `POST /api/work/projects/:id/sessions {executorId,sessionId}` → `{chat,created}`。会话必须能在该项目的扫描结果中找到，否则 404；重复导入返回原对话。导入的对话 `source:'imported'`，后续消息用该 sessionId 续接。
+- `POST /api/work/projects/:id/chats {executorId:'claude-code'|'codex'|'window',title?,writable?,handle?,process?}` → `{chat,project}`。window 需要有效 `handle`；非法执行器 400。每个项目最多 50 个对话。
+- `DELETE /api/work/chats/:id` → `{id}`。
+- `POST /api/work/chats/:id/messages {text,clientRequestId?}` → `{ticket}`。text 去空白后须为 1–3000 字。创建 `awaiting_review` 工单，`ticket.projectChatId` 指向该对话，执行器固定为对话绑定的 Agent；批准后 CLI 以项目目录为 cwd、在写入模式运行，并在已有 sessionId 时使用 `--resume` / `exec resume`。窗口对话把指令发送到绑定窗口。
+- `GET /api/work/chats/:id/tickets` → `{tickets:[WorkTicket]}`，按创建时间升序，只含该对话的工单。
+- `POST /api/work/projects/:id/dispatch {text,executorIds:[...]}` → `201 {project,tickets}`。项目内多 Agent 并行分派：text 1–3000 字，executorIds 去重后 1–4 个，接受 `claude-code`、`codex`、`claude-acp`、`dsh-acp`、`codex-acp`（窗口 Agent 借用绑定窗口，不在分派范围内，传 `window` 返回 400）。已存在同执行器的项目对话则复用，否则自动创建；每个执行器各生成一张 `awaiting_review` 工单。ACP 执行器的 `session/new` 以项目目录为 cwd，且只在项目工单内接受 `fs/read_text_file` 与 `fs/write_text_file`（路径限制在项目目录内，越界报错；`terminal/*` 仍一律拒绝），`artifacts.acp.cwd` 记录本次运行的目录。
+- `GET /api/work/tickets/:id` 的 `detail` 在工单属于项目时额外返回 `project:{id,name,path,gitBranch}` 与 `projectChat:{id,title,executorId}`，非项目工单不出现这两个字段。
+- `POST /api/work/plans {goal,steps,projectChatId?}`、`POST /api/work/plans/suggest {goal,executors,projectChatId?}`：带 `projectChatId` 时只允许该对话绑定的执行器，规划器输入附带 `{name,path,gitBranch}`，其它执行器步骤返回 400；计划与步骤工单都记录 `projectChatId`。
+- `POST /api/work/plans {goal,steps:[{executorId,text,dependsOn?}],projectId?,autoRun?}`：带 `projectId` 时每一步可指定不同 Agent。项目里已有该 Agent 的对话则复用，没有则自动创建；窗口 Agent 必须先在项目中绑定窗口对话，否则该步 400；执行器须属于 `claude-code`、`codex` 及其 ACP 变体与 `window`。规划器输入附带 `{name,path,gitBranch,chats:[{executorId,title,window}]}`。计划记录 `projectId`，每步工单记录各自的 `projectChatId`，`GET /api/work/plans/:id` 可读取 `plan.projectId` 与 `steps[].projectChatId`。
+- `GET /api/work/projects/:id/brief` → `{brief:ProjectBrief}`；`PUT /api/work/projects/:id/brief {goal?,summary?,keyPoints?,decisions?,constraints?}` → `{brief}`。按 projectId 存储；数组项 trim 去空去重，正文与条目有长度上限。
+- `GET /api/work/projects/:id/brief.md` → `{project,brief,changes,markdown}`，markdown 为 `# 项目简报：<名称>` 的只读汇总，含目标、进展、任务要点、关键决定、约束与变更记录。
+- `GET /api/work/projects/:id/changes` → `{changes:[ProjectChange]}`；`POST /api/work/projects/:id/changes {title?,summary?,files?,executorId?,ticketId?}` → `201 {change}`。工单完成/失败时自动写入 `source:'auto'`，同一 ticketId 幂等对应同一条记录；项目工单创建时会用 `git status --porcelain` 拍一张执行前快照，完成后只把**本次新增**的改动文件写进 `files`（调用方显式传 `files` 时以传入值为准，不再异步覆盖）；非项目工单仍按旧的异步采集回填（最多 100 项），采集失败不影响工单。`DELETE /api/work/projects/:id/changes/:changeId` → `{id}`。
+- 删除项目级联删除其 project-chat、project-change 与 project-brief；MCP 工具 `work_list_projects`、`work_project_brief`（返回 brief.md 文本）、`work_update_project_brief`、`work_record_change` 供外部 Agent 读取档案与回写变更。
+
+ProjectWorkspace `{id,name,path,gitBranch,createdAt,updatedAt,chatCount,chats:[ProjectChat]}`；ProjectChat `{id,projectId,executorId,title,sessionId,writable,source:'manual'|'imported',window?:{handle,process,title},lastTicketId?,lastSummary?,createdAt,updatedAt}`；ProjectBrief `{projectId,goal,summary,keyPoints:string[],decisions:string[],constraints:string[],updatedAt}`；ProjectChange `{id,projectId,projectChatId,ticketId,executorId,title,summary,files:string[],sessionId,status,source:'auto'|'manual',createdAt,updatedAt?}`。CLI 完成且处于项目模式时才回写 `sessionId` 与该次 CLI 摘要；非项目对话的执行器输入禁止 `workspace`、`resume`、`write`，返回 400。CLI 执行器是一次性进程，不会打开 Claude Code / Codex 桌面端的会话界面。
+
+`GET /api/work/providers` 在找不到 CLI 但窗口桥检出运行中的 DeepSeek Harness 时，把 `dsh` 标记为 `{kind:'desktop',installed:true,status:'ready',command:'DeepSeek Harness'}`，消息提示改用「窗口 · DeepSeek Harness」；`dsh-acp` 仍为 `not_installed`，但消息说明桌面版可用窗口 Agent，无需安装适配器。桌面探测失败时静默降级为原有 PATH 探测，不影响其它 provider。
+
 ## 云端报告分享（capabilities.reportSharing）
 
 仅 cloud 支持。所有管理接口需要会话及既有同源校验，公开接口匿名；分享为创建时固定的只读快照，不提供下载接口。
@@ -128,3 +156,18 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 - 每报告最多 20 条、每账号最多 100 条分享记录；到期 30 天后定期清理记录及关联去重数据。撤销记录同样在到期 30 天后清理。公开 API 和分享页面响应 `Cache-Control: no-store`、`Referrer-Policy: no-referrer`；分享链接格式为 `/share#<token>`，片段不会发送给服务器；反向代理及应用禁止记录请求体和分享令牌。创建或访问分享不调用模型、不改变额度。
 
 分享快照补充字段：`period:{start,end}|null` 是严格匹配有效日期的报告期间；每个指标的 `coverage:{start,end}|null` 和 `method:string|null` 仅在已识别的确定性计算口径中提供，无法确认或无数据时为 null，应显示未知。留存指标没有可确认的覆盖日期。`dailyTruncated` 与 `retentionTruncated` 分别表示相应数组因 366 条上限被截断；完整指标并不局限于展示的图表片段。`sample:true|false|null` 依据该任务对应数据集 source 为 demo、upload 或缺失/未知得到，`sampleNotice` 是固定说明；不得将 null 解释为真实数据。以上信息均在创建快照时确定，已有分享快照保持不变。
+
+输入格式契约的唯一来源为 src/input-contract.json，server/datasets.js 导出 SUPPORTED_FORMATS 与 REQUIRED_COLUMNS。生产默认且固定最多 3 个文件；仅非生产环境设置 DATAAGENT_ENABLE_MULTI_SHARD=1 时服务端允许 20 文件实验，生产环境忽略该开关；总大小 20MB、行数 200000 仍然生效。同表分片须有一致的映射后列结构。新增可选 shardManifest、rowSources 与 inspection.unrecognizedColumns；重叠、日期缺口进入 warnings。Parquet 需先运行 node scripts/convert-parquet.mjs input.parquet output.csv，ORC/Avro/JSONL 不支持。转换只转换文件格式，不自动将任意业务字段映射成标准表。
+
+模型报告生成、恢复重跑与连接测试默认超时为 300000ms（5 分钟），local/cloud 共用此默认值；服务端 modelTimeoutMs 显式覆盖仍有效。取消操作仍立即中断模型请求。模型列表检测与报告探索计算时限不变。
+
+
+## 多模型中心与 PDF
+
+`GET /api/model-hub` 返回当前账号的 credentials、profiles、workflow、skills、vault；凭据仅含脱敏尾号，不含明文或密文。`POST/PUT/DELETE /api/model-credentials[/:id]` 管理凭据；`POST /api/model-credentials/:id/models` 检测目录。`POST/PUT/DELETE /api/model-profiles[/:id]` 管理引用凭据的模型配置；`POST /api/model-profiles/:id/test` 触发可能收费的连接测试。
+
+`PUT /api/workflow-config` 保存 `{version:1,defaultProfileId,stages}`，阶段项为 `{profileId,skillId,effort,maxTokens,timeoutMs}`；defaultProfileId=null关闭新工作流。`POST/PUT/DELETE /api/workflow-skills[/:id]` 管理账号私人文本Skill。服务端验证阶段、模型能力、工具权限、预算和Skill版本，客户端不能覆盖能力表。
+
+新AI任务在账号启用默认工作流后使用13阶段快照；旧任务仍可读取。任务返回 workflowSnapshot 与 artifacts，均不包含Key；每次模型请求重新验证凭据引用和版本。`settings.hasKey` 表示任一可用模型模式，`settings.sessionHasKey` 单独表示旧会话Key，`settings.workflowEnabled` 表示新工作流已配置。runtime.capabilities新增modelHub/reportPdf。
+
+`GET /api/tasks/:id/report.pdf` 仅能下载当前账号已完成的旧报告，或新工作流已核验报告；返回application/pdf附件。缓存按任务隔离，重试仅排版，不产生额外模型调用或钱包结算。匿名分享接口不提供此下载路径。

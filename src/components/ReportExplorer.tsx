@@ -1,8 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Activity, Download, FileText, Filter, RotateCcw, Trash2 } from 'lucide-react';
 import { useAuth } from '../auth-context';
-import { annotationStorageKey, annotationTypeLabels, brushIndices, isCalendarDate, linePaths, metricComparison, readAnnotationState, saveAnnotations, scopeLabel, trendRows, trendScrollLeft } from '../report-explorer';
-import type { AnnotationType, ReportAnnotation, TrendRow } from '../report-explorer';
+import { annotationStorageKey, annotationTypeLabels, brushIndices, isCalendarDate, linePaths, linePathsRange, metricComparison, readAnnotationState, saveAnnotations, scopeLabel, trendRows, trendScrollLeft, aggregateTrendRows, autoTrendGranularity } from '../report-explorer';
+import type { AnnotationType, ReportAnnotation, TrendGranularity, TrendRow } from '../report-explorer';
 import { exportFilename, exportTrendPng, reportCsv } from '../report-export';
 import type { ReportCsvKind } from '../report-export';
 import type { ReportExplorerState } from '../use-report-explorer';
@@ -61,10 +61,10 @@ function ScopeDetails({ result }: { result: Exploration }) {
   const { scope } = result;
   return <details className="rex-scope-details"><summary>样本与覆盖：筛选内 {number(scope.sample.selectedRows)} 行 · 期间注册 {number(scope.sample.registeredUsers)} 人 · 唯一付费 {number(scope.sample.payingUsers)} 人</summary>
     <p className="rex-help">源记录共 {number(scope.sample.sourceRows)} 行。筛选样本为归一化后的注册 {number(scope.sample.selectedRowsByTable.users)}、活跃 {number(scope.sample.selectedRowsByTable.activity)}、支付 {number(scope.sample.selectedRowsByTable.payments)} 行；期外注册归因与留存回访不混入样本。唯一付费人数由服务端去重，不以每日人数相加。</p>
-    <ul className="rex-coverage">{(['users', 'activity', 'payments'] as const).map(type => { const coverage = scope.coverage[type]; const label = { users: '注册表', activity: '活跃表', payments: '支付表' }[type]; const complete = coverage && coverage.start <= scope.start && coverage.end >= scope.end; return <li key={type}><strong>{label}：</strong>{coverage ? `${coverage.start} 至 ${coverage.end}${complete ? '，完整覆盖当前期' : '，未完整覆盖当前期；请补齐所选期源记录'}` : '缺少可用完整自然日覆盖；请补充对应源表后重新分析'}</li>; })}</ul>
+    <ul className="rex-coverage">{(['users', 'activity', 'payments'] as const).map(type => { const coverage = scope.coverage[type]; const label = { users: '注册表', activity: '活跃表', payments: '支付表' }[type]; const complete = coverage && coverage.start <= scope.start && coverage.end >= scope.end; return <li key={type}><strong>{label}：</strong>{coverage ? `${coverage.start} 至 ${coverage.end}${complete ? '，完整覆盖当前期' : '，未完整覆盖当前期；请补齐所选期源记录'}` : '缺少可用的已结束自然日覆盖；请补充对应源表后重新分析'}</li>; })}</ul>
     {scope.sample.selectedRows === 0 && <p className="rex-help">当前条件没有期内样本。请扩大日期范围或调整渠道；无覆盖与真实零具有不同含义。</p>}
     {scope.sample.registeredUsers == null && <p className="rex-help">注册覆盖不足，期间新增及渠道新增可能不可计算。请补齐注册表；此处的“—”不表示零。</p>}
-    {!!scope.skippedSteps.length && <p className="rex-help">沿用原任务跳过选择：{scope.skippedSteps.map(id => ({ retention: '留存', monetization: '商业化', insights: '洞察' }[id] || id)).join('、')}。探索不会恢复被跳过的指标。</p>}
+    {!!scope.skippedSteps.length && <p className="rex-help">沿用原任务跳过选择：{scope.skippedSteps.map(id => ({ retention: '留存', monetization: '商业化', channel: '渠道', seasonality: '周内规律', insights: '洞察' }[id] || id)).join('、')}。探索不会恢复被跳过的指标。</p>}
     <p className="rex-help">留存还需目标回访日成熟、具有活跃覆盖和注册样本；若不可计算，请补齐观察日数据。时区：{scope.timeZone} · 口径：{scope.statisticsVersion}。</p>
   </details>;
 }
@@ -81,11 +81,16 @@ export function ExplorerChart({ task, explorer }: ExplorerProps) {
   const noteBoundary = annotationStorageKey(runtime.mode, user?.id, window.location.origin, task.id);
   const [annotationState, setAnnotationState] = useState<{ key: string; list: ReportAnnotation[] }>({ key: noteBoundary, list: [] });
   const [kind, setKind] = useState<'activity' | 'revenue'>('activity'); const [view, setView] = useState<'chart' | 'table'>('chart');
+  const [granularity, setGranularity] = useState<'auto' | TrendGranularity>('auto');
   const [active, setActive] = useState(0); const [page, setPage] = useState(0); const [exporting, setExporting] = useState(false); const [exportError, setExportError] = useState('');
   const svg = useRef<SVGSVGElement>(null); const plot = useRef<HTMLDivElement>(null); const titleId = useId();
   const report = explorer.displayReport;
-  const rows = useMemo(() => report ? trendRows(report, explorer.result?.previous) : [], [report, explorer.result?.previous]);
-  useEffect(() => { const index = Math.max(0, rows.length - 1); setActive(index); setPage(0); setExportError(''); reveal(index); }, [report, rows.length]);
+  const dailyRows = useMemo(() => report ? trendRows(report, explorer.result?.previous) : [], [report, explorer.result?.previous]);
+  const resolvedGranularity: TrendGranularity = granularity === 'auto' ? autoTrendGranularity(dailyRows.map(row => row.date)) : granularity;
+  const rows = useMemo(() => aggregateTrendRows(dailyRows, resolvedGranularity), [dailyRows, resolvedGranularity]);
+  const bucketLabel = resolvedGranularity === 'day' ? '按日' : resolvedGranularity === 'week' ? '按周' : '按月';
+  const boundaryDates = useMemo(() => new Set(report?.dataCompleteness && report.dataCompleteness.declared !== 'full' ? report.dataCompleteness.affectedDates || [] : []), [report]);
+  useEffect(() => { const index = Math.max(0, rows.length - 1); setActive(index); setPage(0); setExportError(''); reveal(index); }, [report, rows.length, resolvedGranularity]);
   if (!report) return null;
   const primary: keyof TrendRow = kind === 'activity' ? 'dau' : 'revenue';
   const prior: keyof TrendRow = kind === 'activity' ? 'previousDau' : 'previousRevenue';
@@ -93,15 +98,21 @@ export function ExplorerChart({ task, explorer }: ExplorerProps) {
   const box = { left: 72, top: 116, width: 852, height: 226, max };
   const selected = rows[Math.max(0, Math.min(active, rows.length - 1))];
   const annotations = annotationState.key === noteBoundary ? annotationState.list : [];
-  const selectedNotes = annotations.filter(note => note.date === selected?.date);
+  const selectedNotes = annotations.filter(note => selected && (resolvedGranularity === 'day' ? note.date === selected.date : note.date >= selected.start && note.date <= selected.end));
   const activeX = box.left + (rows.length > 1 ? Math.min(active, rows.length - 1) * box.width / (rows.length - 1) : box.width / 2);
   const range = explorer.appliedScope || { ...explorer.originalRange, channels: [] };
   const channelText = range.channels.join('、');
   const shortChannels = [...channelText].slice(0, 38).join('') + ([...channelText].length > 38 ? '…' : '');
   const previousRange = explorer.result?.comparison.previousRange;
-  const valueLabel = kind === 'activity' ? '活跃玩家' : `支付收入（${report.currency}）`;
-  const tooltip = selected ? `${selected.date}：${valueLabel} ${number(kind === 'activity' ? selected.dau : selected.revenue, kind === 'revenue' ? 2 : 0)}${kind === 'activity' ? `，新增 ${number(selected.newUsers)} 人` : ''}${selected.previousDate ? `；上期实际日期 ${selected.previousDate}：${valueLabel} ${number(kind === 'activity' ? selected.previousDau : selected.previousRevenue, kind === 'revenue' ? 2 : 0)}` : ''}。— 表示无数据、覆盖外或原任务跳过。${selectedNotes.length ? ` 日期批注（仅背景，不证明因果）：${selectedNotes.map(note => `${annotationTypeLabels[note.type]}：${note.text}`).join('；')}` : ''}` : '当前范围没有每日数据。';
-  const pageCount = Math.max(1, Math.ceil(rows.length / 31)), currentPage = Math.min(page, pageCount - 1);
+  const entity = report.labels?.entity || '玩家';
+  const revenueName = report.labels?.revenueName || '支付收入';
+  const valueLabel = kind === 'activity' ? `${entity}活跃` : `${revenueName}（${report.currency}）`;
+  const selectedPeriod = selected ? (resolvedGranularity === 'day' ? selected.date : `${selected.start} 至 ${selected.end}`) : '';
+  const selectedValue = selected ? (kind === 'activity' ? selected.dau : selected.revenue) : null;
+  const selectedDigest = resolvedGranularity === 'day' ? valueLabel : kind === 'activity' ? '周期内日均活跃' : '周期内收入合计';
+  const previousPeriod = selected?.previousStart ? `${selected.previousStart} 至 ${selected.previousEnd}` : selected?.previousDate;
+  const tooltip = selected ? `${selectedPeriod}：${selectedDigest} ${number(selectedValue, kind === 'revenue' || resolvedGranularity !== 'day' ? 2 : 0)}${kind === 'activity' ? `，${resolvedGranularity === 'day' ? '新增' : '新增合计'} ${number(selected.newUsers)} 人` : ''}${selected.previousDate ? `；上期 ${previousPeriod}：${kind === 'activity' ? '日均活跃' : valueLabel} ${number(kind === 'activity' ? selected.previousDau : selected.previousRevenue, kind === 'revenue' || resolvedGranularity !== 'day' ? 2 : 0)}` : ''}。— 表示无数据、覆盖外或原任务跳过。${selected && [...boundaryDates].some(date => date >= selected.start && date <= selected.end) ? '该周期含采集边界日，完整性未验证，不能解释为真实下降或零活跃。' : ''}${selectedNotes.length ? ` 日期批注（仅背景，不证明因果）：${selectedNotes.map(note => `${annotationTypeLabels[note.type]}：${note.text}`).join('；')}` : ''}` : '当前范围没有每日数据。';
+  const pageCount = Math.max(1, Math.ceil(dailyRows.length / 31)), currentPage = Math.min(page, pageCount - 1);
   function reveal(index: number) {
     if (plot.current && svg.current) plot.current.scrollLeft = trendScrollLeft(plot.current.clientWidth, svg.current.getBoundingClientRect().width, index, rows.length, plot.current.scrollLeft);
   }
@@ -113,7 +124,7 @@ export function ExplorerChart({ task, explorer }: ExplorerProps) {
   async function png() {
     if (!svg.current || exporting) return;
     setExporting(true); setExportError('');
-    try { await exportTrendPng(svg.current, exportFilename(task.title, range.start, range.end, 'trend', 'png')); }
+    try { await exportTrendPng(svg.current, exportFilename(task.title, range.start, range.end, `trend-${resolvedGranularity}`, 'png')); }
     catch (cause) { setExportError(cause instanceof Error ? cause.message : '趋势 PNG 导出失败，请使用每日 CSV 或打印 / PDF。'); }
     finally { setExporting(false); }
   }
@@ -123,34 +134,36 @@ export function ExplorerChart({ task, explorer }: ExplorerProps) {
     ...(previousRange ? [{ key: prior, color: '#a8802f', width: 2.5, dash: '8 5' }, ...(kind === 'activity' ? [{ key: 'previousNewUsers' as const, color: '#3f6f9e', width: 1.7, dash: '3 4' }] : [])] : []),
   ];
   return <section className="card rex-chart" aria-label="当前报告趋势与导出">
-    <div className="rex-heading"><h3><Activity size={16} />{kind === 'activity' ? '玩家活跃趋势' : '支付收入趋势'}</h3><span className="rex-tag">{rows.length} 个自然日</span>
-      <div className="rex-chart-controls no-print"><div className="segmented small" aria-label="趋势指标"><button type="button" aria-pressed={kind === 'activity'} className={kind === 'activity' ? 'selected' : ''} onClick={() => setKind('activity')}>活跃</button><button type="button" aria-pressed={kind === 'revenue'} className={kind === 'revenue' ? 'selected' : ''} onClick={() => setKind('revenue')}>收入</button></div><div className="segmented small" aria-label="趋势展示方式"><button type="button" aria-pressed={view === 'chart'} className={view === 'chart' ? 'selected' : ''} onClick={() => setView('chart')}>图表</button><button type="button" aria-pressed={view === 'table'} className={view === 'table' ? 'selected' : ''} onClick={() => setView('table')}>表格</button></div></div>
+    <div className="rex-heading"><h3><Activity size={16} />{kind === 'activity' ? `${entity}活跃趋势` : `${revenueName}趋势`}</h3><span className="rex-tag">{dailyRows.length} 个自然日 · {bucketLabel}</span>
+      <div className="rex-chart-controls no-print"><div className="segmented small" aria-label="趋势指标"><button type="button" aria-pressed={kind === 'activity'} className={kind === 'activity' ? 'selected' : ''} onClick={() => setKind('activity')}>活跃</button><button type="button" aria-pressed={kind === 'revenue'} className={kind === 'revenue' ? 'selected' : ''} onClick={() => setKind('revenue')}>收入</button></div><div className="segmented small" aria-label="趋势时间粒度"><button type="button" aria-pressed={granularity === 'auto'} className={granularity === 'auto' ? 'selected' : ''} onClick={() => setGranularity('auto')}>自动</button><button type="button" aria-pressed={granularity === 'day'} className={granularity === 'day' ? 'selected' : ''} onClick={() => setGranularity('day')}>日</button><button type="button" aria-pressed={granularity === 'week'} className={granularity === 'week' ? 'selected' : ''} onClick={() => setGranularity('week')}>周</button><button type="button" aria-pressed={granularity === 'month'} className={granularity === 'month' ? 'selected' : ''} onClick={() => setGranularity('month')}>月</button></div><div className="segmented small" aria-label="趋势展示方式"><button type="button" aria-pressed={view === 'chart'} className={view === 'chart' ? 'selected' : ''} onClick={() => setView('chart')}>图表</button><button type="button" aria-pressed={view === 'table'} className={view === 'table' ? 'selected' : ''} onClick={() => setView('table')}>表格</button></div></div>
     </div>
     <p className="rex-current-range"><strong>当前视图：</strong>{appliedLabel(explorer)}</p>
+    {resolvedGranularity !== 'day' && <p className="rex-help">图表{bucketLabel}汇总：活跃取周期内日均，新增、收入与付费人数取合计；表格仍保留逐日原值。自动粒度按当前区间长度选择（超过 120 天按周，超过 730 天按月）。</p>}
     {(explorer.loading || explorer.dirty) && <p className="rex-help rex-pending-note">{explorer.loading ? '正在重算' : '有尚未应用的草稿'}；本图、表格与导出仍对应以上已应用范围。</p>}
     {previousRange && <p className="rex-help">虚线为上期 {previousRange.start} 至 {previousRange.end} 的真实原值，按相对日序对齐；两期等长且同渠道，实际日期见提示及表格。缺失值不跨线连接，差值须通过逐指标可比检查。</p>}
-    <p id={`${titleId}-scroll-help`} className="rex-help rex-scroll-help no-print">图内可横向滚动查看完整日期；也可切换表格。聚焦图表后，用左右方向键逐日浏览，选中日期会自动滚动到可见位置。</p>
-    <div ref={plot} className={`rex-plot-wrapper ${view === 'table' ? 'rex-plot-hidden' : ''}`} inert={view === 'table'} aria-hidden={view === 'table'} tabIndex={view === 'chart' ? 0 : -1} role="group" aria-describedby={`${titleId}-scroll-help`} aria-label="趋势图。使用 ArrowLeft、ArrowRight（左右方向键）逐日浏览，Home 到首日，End 到末日。" onKeyDown={event => {
+    <p id={`${titleId}-scroll-help`} className="rex-help rex-scroll-help no-print">图内可横向滚动查看完整日期；也可切换表格。聚焦图表后，用左右方向键逐个时间点浏览，选中点会自动滚动到可见位置。</p>
+    <div ref={plot} className={`rex-plot-wrapper ${view === 'table' ? 'rex-plot-hidden' : ''}`} inert={view === 'table'} aria-hidden={view === 'table'} tabIndex={view === 'chart' ? 0 : -1} role="group" aria-describedby={`${titleId}-scroll-help`} aria-label="趋势图。使用 ArrowLeft、ArrowRight（左右方向键）逐个时间点浏览，Home 到首个时间点，End 到最后一个时间点。" onKeyDown={event => {
       if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? Math.max(0, rows.length - 1) : Math.max(0, Math.min(rows.length - 1, active + (event.key === 'ArrowLeft' ? -1 : 1))); setActive(next); reveal(next); }
     }}>
       <svg ref={svg} viewBox="0 0 960 400" className="rex-trend-svg" role="img" aria-labelledby={titleId} fontFamily="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" onPointerMove={event => { const rect = event.currentTarget.getBoundingClientRect(); if (rect.width > 0) setActive(Math.max(0, Math.min(rows.length - 1, Math.round(((event.clientX - rect.left) * 960 / rect.width - box.left) / box.width * Math.max(1, rows.length - 1))))); }}>
-        <title id={titleId}>{`${task.title}；${valueLabel}；${scopeLabel(range)}。可切换表格读取完整数值。`}</title>
+        <title id={titleId}>{`${task.title}；${valueLabel}；${bucketLabel}；${scopeLabel(range)}。可切换表格读取完整数值。`}</title>
         <rect width="960" height="400" fill="#ffffff" />
-        <text x="18" y="26" fill="#233d30" fontSize="18" fontWeight="600">{[...task.title].slice(0, 42).join('')} · {kind === 'activity' ? '玩家活跃趋势' : '支付收入趋势'}</text>
-        <text x="18" y="49" fill="#4c5b52" fontSize="12">{range.start} 至 {range.end} · {range.channels.length ? `渠道：${shortChannels}` : '全部渠道'} · 上海自然日</text>
-        <text x="18" y="70" fill="#4c5b52" fontSize="12">{kind === 'activity' ? '粗实线：活跃人数；细实线：新增人数' : `实线：当前收入，单位 ${report.currency}`}{previousRange ? `；虚线：上期 ${previousRange.start} 至 ${previousRange.end}` : ''}</text>
-        <text x="18" y="91" fill="#59685f" fontSize="11">{explorer.result ? '确定性派生；原件不变。' : '原始报告。'}缺失值保留空缺；时间重合不证明因果。</text>
+        <text x="18" y="26" fill="#233d30" fontSize="18" fontWeight="600">{[...task.title].slice(0, 42).join('')} · {kind === 'activity' ? `${entity}活跃趋势` : `${revenueName}趋势`}{resolvedGranularity === 'day' ? '' : ` · ${bucketLabel}`}</text>
+        <text x="18" y="49" fill="#4c5b52" fontSize="12">{range.start} 至 {range.end} · {range.channels.length ? `渠道：${shortChannels}` : '全部渠道'} · {report.timezone ? `统计时区 ${report.timezone.name}${report.timezone.assumed ? '（未确认）' : ''}` : '统计时区未记录'}</text>
+        <text x="18" y="70" fill="#4c5b52" fontSize="12">{kind === 'activity' ? resolvedGranularity === 'day' ? '粗实线：活跃人数；细实线：新增人数' : '粗实线：周期内日均活跃；细实线：周期内新增合计' : `实线：当前收入，单位 ${report.currency}`}{previousRange ? `；虚线：上期 ${previousRange.start} 至 ${previousRange.end}` : ''}</text>
+        <text x="18" y="91" fill="#59685f" fontSize="11">{explorer.result ? '确定性派生；原件不变。' : '原始报告。'}{resolvedGranularity === 'day' ? '' : `${bucketLabel}汇总；活跃取日均，新增与收入取合计。`}{boundaryDates.size ? '金色点线：采集边界日，完整性未验证。' : ''}缺失值保留空缺；时间重合不证明因果。</text>
         {[0, 0.5, 1].map(ratio => { const tick = max * (1 - ratio); return <g key={ratio}><line x1={box.left} x2={box.left + box.width} y1={box.top + box.height * ratio} y2={box.top + box.height * ratio} stroke="#e2e7e4" strokeDasharray="3 4" /><text x={box.left - 12} y={box.top + box.height * ratio + 4} textAnchor="end" fill="#59685f" fontSize="12">{tick >= 100000000 ? `${number(tick / 100000000, 1)}亿` : tick >= 10000 ? `${number(tick / 10000, 1)}万` : number(tick, kind === 'revenue' ? 2 : 0)}</text></g>; })}
+        {[...new Set([...boundaryDates].map(date => rows.findIndex(row => resolvedGranularity === 'day' ? row.date === date : date >= row.start && date <= row.end)).filter(index => index >= 0))].map(index => { const x = box.left + (rows.length > 1 ? index * box.width / (rows.length - 1) : box.width / 2); const anchorEnd = index > rows.length - 8; return <g key={`boundary-${index}`}><title>{`${rows[index].label} 含采集边界日，完整性未验证；不能据此判断下降或零活跃`}</title><line x1={x} x2={x} y1={box.top} y2={box.top + box.height} stroke="#b8862d" strokeWidth="1.5" strokeDasharray="5 4" /><text x={x + (anchorEnd ? -6 : 6)} y={box.top - 6} textAnchor={anchorEnd ? 'end' : 'start'} fontSize="11" fill="#73591f">边界日</text></g>; })}
         {series.map(line => <g key={line.key}>{linePaths(rows, line.key, box).map((path, index) => <path key={index} d={path} fill="none" stroke={line.color} strokeWidth={line.width} strokeDasharray={line.dash} strokeLinecap="round" strokeLinejoin="round" />)}{rows.map((row, index) => { const value = row[line.key]; if (typeof value !== 'number' || (rows.length > 50 && typeof rows[index - 1]?.[line.key] === 'number' && typeof rows[index + 1]?.[line.key] === 'number')) return null; return <circle key={index} cx={box.left + (rows.length > 1 ? index * box.width / (rows.length - 1) : box.width / 2)} cy={box.top + box.height - value * box.height / max} r={line.dash ? 2 : 2.5} fill={line.dash ? '#ffffff' : line.color} stroke={line.color} strokeWidth="1.4" />; })}</g>)}
         {selected && <line className="rex-active-guide" x1={activeX} x2={activeX} y1={box.top} y2={box.top + box.height} stroke="#cdd6d0" strokeDasharray="2 4" />}
-        {[...new Set(annotations.map(note => note.date))].map(date => { const index = rows.findIndex(row => row.date === date); if (index < 0) return null; const x = box.left + (rows.length > 1 ? index * box.width / (rows.length - 1) : box.width / 2); return <g key={date} role="button" tabIndex={0} aria-label={`查看 ${date} 的日期批注`} onClick={() => { setActive(index); reveal(index); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setActive(index); reveal(index); } }}><title>{`${date} 有日期批注，仅为背景，不证明因果`}</title><line x1={x} x2={x} y1="109" y2={box.top + box.height} stroke="#a68640" strokeWidth="1" strokeDasharray="1 5" /><rect x={x - 9} y="99" width="18" height="17" rx="3" fill="#fff7df" stroke="#a68640" /><text x={x} y="111" textAnchor="middle" fontSize="11" fill="#73591f">注</text></g>; })}
-        <text x={box.left} y="368" fill="#59685f" fontSize="12">{rows[0]?.date || '无日期'}</text><text x={box.left + box.width} y="368" textAnchor="end" fill="#59685f" fontSize="12">{rows.at(-1)?.date}</text>
+        {[...new Set(annotations.map(note => note.date))].map(date => { const index = rows.findIndex(row => resolvedGranularity === 'day' ? row.date === date : date >= row.start && date <= row.end); if (index < 0) return null; const x = box.left + (rows.length > 1 ? index * box.width / (rows.length - 1) : box.width / 2); return <g key={date} role="button" tabIndex={0} aria-label={`查看 ${date} 的日期批注`} onClick={() => { setActive(index); reveal(index); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setActive(index); reveal(index); } }}><title>{`${date} 有日期批注，仅为背景，不证明因果`}</title><line x1={x} x2={x} y1="109" y2={box.top + box.height} stroke="#a68640" strokeWidth="1" strokeDasharray="1 5" /><rect x={x - 9} y="99" width="18" height="17" rx="3" fill="#fff7df" stroke="#a68640" /><text x={x} y="111" textAnchor="middle" fontSize="11" fill="#73591f">注</text></g>; })}
+        <text x={box.left} y="368" fill="#59685f" fontSize="12">{rows[0]?.start || '无日期'}</text><text x={box.left + box.width} y="368" textAnchor="end" fill="#59685f" fontSize="12">{rows.at(-1)?.end}</text>
         <text x="18" y="391" fill="#59685f" fontSize="11">当前期间实际日期；— 为无数据，非零。收入不跨币种合计。DATAAGENT</text>
       </svg>
     </div>
     <div className="rex-day-tooltip" role="status" aria-live="polite" aria-atomic="true">{tooltip}</div>
-    {view === 'table' && <div className="rex-daily-screen"><DailyTable rows={rows.slice(currentPage * 31, (currentPage + 1) * 31)} currency={report.currency} previous={!!previousRange} /><div className="rex-pagination no-print"><span>{rows.length} 日 · 第 {currentPage + 1} / {pageCount} 页</span><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>上一页日期</button><button type="button" disabled={currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>下一页日期</button></div></div>}
-    <div className="rex-print-only"><DailyTable rows={rows} currency={report.currency} previous={!!previousRange} /></div>
+    {view === 'table' && <div className="rex-daily-screen"><DailyTable rows={dailyRows.slice(currentPage * 31, (currentPage + 1) * 31)} currency={report.currency} previous={!!previousRange} boundaryDates={boundaryDates} /><div className="rex-pagination no-print"><span>{dailyRows.length} 日 · 第 {currentPage + 1} / {pageCount} 页</span><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>上一页日期</button><button type="button" disabled={currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>下一页日期</button></div></div>}
+    <div className="rex-print-only"><DailyTable rows={dailyRows} currency={report.currency} previous={!!previousRange} boundaryDates={boundaryDates} /></div>
     {explorer.enabled && <OverviewBrush task={task} explorer={explorer} />}
     <div className="rex-export-actions no-print" aria-label="当前视图导出"><span><Download size={14} />导出已应用视图</span><button type="button" onClick={() => csv('metrics')}>指标 CSV</button><button type="button" onClick={() => csv('channels')}>渠道 CSV</button><button type="button" onClick={() => csv('retention')}>留存 CSV</button><button type="button" onClick={() => csv('daily')}>每日 CSV</button><button type="button" disabled={exporting || !rows.length} aria-busy={exporting} onClick={() => void png()}>{exporting ? '生成 PNG…' : '趋势 PNG'}</button><button type="button" onClick={() => window.print()}><FileText size={13} />打印 / PDF</button></div>
     {exportError && <p className="rex-error" role="alert">{exportError}</p>}
@@ -159,17 +172,28 @@ export function ExplorerChart({ task, explorer }: ExplorerProps) {
   </section>;
 }
 
-function DailyTable({ rows, currency, previous }: { rows: TrendRow[]; currency: string; previous: boolean }) {
-  return <div className="rex-table-scroll"><table className="data-table rex-daily-table"><caption>已应用范围每日数据 · — 表示无数据、覆盖不足或原任务跳过</caption><thead><tr><th>当前日期</th><th>活跃</th><th>新增</th><th>收入（{currency}）</th><th>付费人数</th>{previous && <><th>上期实际日期</th><th>上期活跃</th><th>上期新增</th><th>上期收入（{currency}）</th><th>上期付费人数</th></>}</tr></thead><tbody>{rows.map(row => <tr key={row.date}><th scope="row">{row.date}</th><td>{number(row.dau)}</td><td>{number(row.newUsers)}</td><td>{number(row.revenue, 2)}</td><td>{number(row.payers)}</td>{previous && <><td>{row.previousDate || '—'}</td><td>{number(row.previousDau)}</td><td>{number(row.previousNewUsers)}</td><td>{number(row.previousRevenue, 2)}</td><td>{number(row.previousPayers)}</td></>}</tr>)}</tbody></table>{!rows.length && <p className="rex-help">所选范围暂无每日数据，请检查源数据覆盖。</p>}</div>;
+function DailyTable({ rows, currency, previous, boundaryDates }: { rows: TrendRow[]; currency: string; previous: boolean; boundaryDates?: Set<string> }) {
+  return <div className="rex-table-scroll"><table className="data-table rex-daily-table"><caption>已应用范围每日数据 · — 表示无数据、覆盖不足或原任务跳过</caption><thead><tr><th>当前日期</th><th>活跃</th><th>新增</th><th>收入（{currency}）</th><th>付费人数</th>{previous && <><th>上期实际日期</th><th>上期活跃</th><th>上期新增</th><th>上期收入（{currency}）</th><th>上期付费人数</th></>}</tr></thead><tbody>{rows.map(row => <tr key={row.date}><th scope="row">{row.date}{boundaryDates?.has(row.date) && <em className="boundary-tag">边界日</em>}</th><td>{number(row.dau)}</td><td>{number(row.newUsers)}</td><td>{number(row.revenue, 2)}</td><td>{number(row.payers)}</td>{previous && <><td>{row.previousDate || '—'}</td><td>{number(row.previousDau)}</td><td>{number(row.previousNewUsers)}</td><td>{number(row.previousRevenue, 2)}</td><td>{number(row.previousPayers)}</td></>}</tr>)}</tbody></table>{!rows.length && <p className="rex-help">所选范围暂无每日数据，请检查源数据覆盖。</p>}</div>;
 }
 function OverviewBrush({ task, explorer }: ExplorerProps) {
   const daily = task.report?.daily || [];
-  const indices = brushIndices(explorer.dates, explorer.draft), max = Math.max(1, ...daily.map(day => day.dau || 0));
-  const rows = trendRows({ daily }), box = { left: 0, top: 4, width: 900, height: 34, max };
-  return <div className="rex-brush no-print"><div className="rex-brush-heading"><strong>原报告全期间概览</strong><small>{explorer.originalRange.start} 至 {explorer.originalRange.end}</small></div>
-    <svg viewBox="0 0 900 44" role="img" aria-label="原报告完整期间活跃概览，仅用于定位筛选范围"><rect width="900" height="44" fill="#f2f6f0" /><rect x={indices.startIndex / Math.max(1, explorer.dates.length - 1) * 900} width={Math.max(4, (indices.endIndex - indices.startIndex) / Math.max(1, explorer.dates.length - 1) * 900)} height="44" fill="#dce9dc" />{linePaths(rows, 'dau', box).map((path, index) => <path key={index} d={path} fill="none" stroke="#557761" strokeWidth="1.5" />)}</svg>
+  const indices = brushIndices(explorer.dates, explorer.draft);
+  const granularity = autoTrendGranularity(explorer.dates);
+  const granularityLabel = granularity === 'day' ? '按日' : granularity === 'week' ? '按周' : '按月';
+  const rows = aggregateTrendRows(trendRows({ daily }), granularity);
+  const max = Math.max(1, ...rows.map(row => row.dau || 0));
+  const box = { left: 0, top: 4, width: 900, height: 34, max };
+  const startDate = explorer.dates[indices.startIndex], endDate = explorer.dates[indices.endIndex];
+  const from = Math.max(0, rows.findIndex(row => row.end >= startDate));
+  let to = Math.max(0, rows.length - 1);
+  while (to > 0 && rows[to].start > endDate) to--;
+  return <div className="rex-brush no-print"><div className="rex-brush-heading"><strong>原报告全期间概览</strong><small>{explorer.originalRange.start} 至 {explorer.originalRange.end} · {granularityLabel}汇总</small></div>
+    <svg viewBox="0 0 900 44" role="img" aria-label={`原报告完整期间活跃概览，${granularityLabel}汇总，仅用于定位筛选范围`}><rect width="900" height="44" fill="#f2f6f0" /><rect x={indices.startIndex / Math.max(1, explorer.dates.length - 1) * 900} width={Math.max(4, (indices.endIndex - indices.startIndex) / Math.max(1, explorer.dates.length - 1) * 900)} height="44" fill="#dce9dc" />
+      {linePaths(rows, 'dau', box).map((path, index) => <path key={`all-${index}`} className="rex-brush-line" d={path} fill="none" stroke="#9aa8a0" strokeWidth="1.2" />)}
+      {linePathsRange(rows, 'dau', box, from, to).map((path, index) => <path key={`active-${index}`} className="rex-brush-line active" d={path} fill="none" stroke="#1f7a52" strokeWidth="1.8" />)}
+    </svg>
     <div className="rex-brush-handles"><label>范围起点：{explorer.dates[indices.startIndex] || '—'}<input type="range" aria-label="范围起点（原报告概览）" aria-valuetext={explorer.dates[indices.startIndex]} min="0" max={Math.max(0, explorer.dates.length - 1)} step="1" value={indices.startIndex} disabled={!explorer.dates.length} onChange={event => explorer.setRangeFromBrush(Number(event.target.value), indices.endIndex)} /></label><label>范围终点：{explorer.dates[indices.endIndex] || '—'}<input type="range" aria-label="范围终点（原报告概览）" aria-valuetext={explorer.dates[indices.endIndex]} min="0" max={Math.max(0, explorer.dates.length - 1)} step="1" value={indices.endIndex} disabled={!explorer.dates.length} onChange={event => explorer.setRangeFromBrush(indices.startIndex, Number(event.target.value))} /></label></div>
-    <p className="rex-help">拖动范围端点后自动精确重算，连续拖动会合并请求。概览始终来自原报告；上方数据在新结果到达前保持原已应用范围。日期输入可选择概览之外的完整自然日，覆盖限制以服务端返回为准。</p>
+    <p className="rex-help">拖动范围端点后自动精确重算，连续拖动会合并请求。概览始终来自原报告并按区间自动汇总，高亮线段为当前已应用或草稿范围；上方数据在新结果到达前保持原已应用范围。日期输入可选择概览之外的已结束自然日，覆盖限制以服务端返回为准。</p>
   </div>;
 }
 

@@ -31,7 +31,7 @@ export function validateExploreInput(input: ExploreInput, cutoff: string) {
   if (!isCalendarDate(input.start) || !isCalendarDate(input.end)) return '请输入有效的开始和结束日期。';
   if (input.start > input.end) return '开始日期不能晚于结束日期。';
   if ((Date.parse(input.end) - Date.parse(input.start)) / DAY + 1 > 3660) return '单次最多探索 3660 个自然日，请缩小范围。';
-  if (!cutoff || input.end > cutoff) return `仅可探索原报告生成时已结束的完整自然日${cutoff ? `（截至 ${cutoff}）` : ''}。`;
+  if (!cutoff || input.end > cutoff) return `仅可探索原报告生成时已结束的自然日${cutoff ? `（截至 ${cutoff}）` : ''}。`;
   if ((input.channels || []).length > 50) return '最多同时选择 50 个渠道。';
   return '';
 }
@@ -152,4 +152,65 @@ export function linePaths(rows: TrendRow[], key: keyof TrendRow, box: PlotBox) {
     path += `${path ? ' L' : 'M'}${x.toFixed(2)},${y.toFixed(2)}`;
   });
   if (path) paths.push(path); return paths;
+}
+export function linePathsRange(rows: TrendRow[], key: keyof TrendRow, box: PlotBox, from: number, to: number) {
+  const paths: string[] = []; let path = '';
+  const start = Math.max(0, Math.min(from, to)), end = Math.min(rows.length - 1, Math.max(from, to));
+  for (let index = start; index <= end; index++) {
+    const value = rows[index][key];
+    if (typeof value !== 'number' || !Number.isFinite(value)) { if (path) paths.push(path); path = ''; continue; }
+    const x = box.left + (rows.length > 1 ? index * box.width / (rows.length - 1) : box.width / 2);
+    const y = box.top + box.height - Math.max(0, value) * box.height / (box.max || 1);
+    path += `${path ? ' L' : 'M'}${x.toFixed(2)},${y.toFixed(2)}`;
+  }
+  if (path) paths.push(path); return paths;
+}
+
+export type TrendGranularity = 'day' | 'week' | 'month';
+export interface TrendBucket extends TrendRow { start: string; end: string; days: number; label: string; previousStart?: string; previousEnd?: string }
+
+const roundMetric = (value: number, digits: number) => Math.round((value + Number.EPSILON) * 10 ** digits) / 10 ** digits;
+const numeric = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+type TrendValueKey = 'dau' | 'newUsers' | 'revenue' | 'payers' | 'previousDau' | 'previousNewUsers' | 'previousRevenue' | 'previousPayers';
+
+export function autoTrendGranularity(dates: string[]): TrendGranularity {
+  if (dates.length > 730) return 'month';
+  if (dates.length > 120) return 'week';
+  return 'day';
+}
+
+function trendBucketStart(date: string, granularity: Exclude<TrendGranularity, 'day'>) {
+  if (granularity === 'month') return `${date.slice(0, 7)}-01`;
+  const day = new Date(`${date}T00:00:00Z`);
+  day.setUTCDate(day.getUTCDate() - (day.getUTCDay() + 6) % 7);
+  return day.toISOString().slice(0, 10);
+}
+
+export function aggregateTrendRows(rows: TrendRow[], granularity: TrendGranularity): TrendBucket[] {
+  if (granularity === 'day') return rows.map(row => ({ ...row, start: row.date, end: row.date, days: 1, label: row.date }));
+  const groups = new Map<string, TrendRow[]>();
+  for (const row of rows) {
+    const key = trendBucketStart(row.date, granularity);
+    const group = groups.get(key);
+    if (group) group.push(row); else groups.set(key, [row]);
+  }
+  return [...groups.values()].map(items => {
+    const average = (key: TrendValueKey) => {
+      const values = items.map(item => item[key]).filter(numeric);
+      return values.length ? roundMetric(values.reduce((sum, value) => sum + value, 0) / values.length, 1) : null;
+    };
+    const total = (key: TrendValueKey) => {
+      const values = items.map(item => item[key]).filter(numeric);
+      return values.length ? roundMetric(values.reduce((sum, value) => sum + value, 0), 2) : null;
+    };
+    const start = items[0].date, end = items.at(-1)?.date || start;
+    const previousDates = items.map(item => item.previousDate).filter((date): date is string => Boolean(date));
+    return {
+      date: start, start, end, days: items.length,
+      label: granularity === 'month' ? start.slice(0, 7) : `${start} 至 ${end}`,
+      dau: average('dau'), newUsers: total('newUsers'), revenue: total('revenue'), payers: total('payers'),
+      previousDate: previousDates.at(-1), previousStart: previousDates[0], previousEnd: previousDates.at(-1),
+      previousDau: average('previousDau'), previousNewUsers: total('previousNewUsers'), previousRevenue: total('previousRevenue'), previousPayers: total('previousPayers'),
+    };
+  });
 }

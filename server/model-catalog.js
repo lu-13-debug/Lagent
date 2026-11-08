@@ -23,13 +23,14 @@ export async function listModels({ settings, key, signal, fetchImpl = fetch, tim
   key = validateKey(key);
   if (!key) throw new Error('请先填写 API Key，再检测模型');
   const baseUrl = normalizeBaseUrl(settings.baseUrl);
-  const claude = new URL(baseUrl).hostname === 'api.anthropic.com';
-  const headers = { authorization: `Bearer ${key}`, ...(claude ? { 'anthropic-version': '2026-10-21' } : {}) };
+  const claude = settings.protocol ? settings.protocol === 'anthropic' : new URL(baseUrl).hostname === 'api.anthropic.com';
+  const headers = { authorization: `Bearer ${key}`, ...(claude ? { 'x-api-key': key, 'anthropic-version': '2026-10-21' } : {}) };
+  if (baseUrl === 'https://opencode.ai/inference/go/openai/v1') headers['user-agent'] = 'DataAgent/1.1.0';
   const combined = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
   const models = new Map(); const cursors = new Set(); let cursor = ''; let partial = false;
   try {
     for (let page = 0; page < 10; page++) {
-      const url = new URL(`${baseUrl}/models`);
+      const url = new URL(baseUrl === 'https://opencode.ai/inference/go/openai/v1' ? 'https://opencode.ai/inference/go/v1/models' : `${baseUrl}/models`);
       if (claude) { url.searchParams.set('limit', '100'); if (cursor) url.searchParams.set('after_id', cursor); }
       const response = await fetchImpl(url.toString(), { method: 'GET', headers, redirect: 'error', signal: combined });
       if (!response.ok) {

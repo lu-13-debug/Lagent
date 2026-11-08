@@ -1,5 +1,8 @@
 import type { Dataset } from './types';
 
+// 与 server/datasets.js 的 DATASET_LIMITS 保持一致；粘贴路径需在生成文件前单独提示。
+const PASTE_LIMITS = { maxBytes: 20 * 1024 * 1024, maxRows: 200000 };
+
 export const tableLabels: Record<string, string> = { users: '玩家注册表', activity: '活跃事件表', payments: '支付订单表' };
 const metricLabels: Record<string, string> = { dau: '日活跃玩家', new_users: '新增玩家', d1_retention: '次日留存率', d7_retention: '7日留存率', channels: '渠道表现', revenue: '成功支付收入', arppu: 'ARPPU', payers: '付费人数', pay_rate: '活跃付费率', arpdau: 'ARPDAU' };
 export const metricLabel = (id: string) => metricLabels[id] || id;
@@ -37,11 +40,12 @@ export function searchPreview(rows: Record<string, unknown>[], column: string, q
   return needle ? rows.filter(row => (column ? [row[column]] : Object.values(row)).some(value => String(value ?? '').toLocaleLowerCase().includes(needle))) : rows;
 }
 export function pasteToCsv(input: string) {
-  if (new TextEncoder().encode(input).length > 20 * 1024 * 1024) throw new Error('粘贴内容不能超过 20MB。');
+  const bytes = new TextEncoder().encode(input).length;
+  if (bytes > PASTE_LIMITS.maxBytes) throw new Error(`粘贴内容不能超过 20MB（当前 ${(bytes / 1048576).toFixed(1)}MB）；请按时间范围拆分、只导出必要列或缩小日期范围后重试。`);
   const text = input.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
   const rows: string[][] = []; let row: string[] = []; let value = ''; let quoted = false; let closed = false;
   const cell = () => { row.push(value); value = ''; closed = false; };
-  const line = () => { cell(); rows.push(row); row = []; if (rows.length > 200001) throw new Error('最多支持 200000 行数据。'); };
+  const line = () => { cell(); rows.push(row); row = []; if (rows.length > PASTE_LIMITS.maxRows + 1) throw new Error(`粘贴内容解析后最多支持 ${PASTE_LIMITS.maxRows} 行，本次已超过该上限；请按时间范围拆分、只导出必要列或缩小日期范围后重试。`); };
   for (let index = 0; index < text.length; index++) {
     const character = text[index];
     if (quoted) {
