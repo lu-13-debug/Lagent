@@ -167,6 +167,26 @@ export function projectService(db, { environment = process.env, home = os.homedi
     db.delete('project-chat', chat.id);
     return { id: chat.id };
   }
+  function renameChat(id, input = {}) {
+    const chat = getChat(id);
+    const title = typeof input?.title === 'string' ? input.title.replace(/\s+/g, ' ').trim() : '';
+    if (!title) throw workError('会话标题不能为空', 400);
+    if (title.length > 200) throw workError('会话标题最长 200 字', 400);
+    const next = { ...chat, title, autoTitle: false, updatedAt: now() };
+    db.put('project-chat', next);
+    return next;
+  }
+  // 占位标题的会话在收到第一条消息后自动改名为消息摘要，避免侧栏出现多条同名「datagent · Claude Code」。
+  function adoptTitle(id, text) {
+    const chat = db.get('project-chat', id);
+    if (!chat || !chat.autoTitle) return chat;
+    const flat = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!flat) return chat;
+    const title = flat.length > 42 ? `${flat.slice(0, 42)}…` : flat;
+    const next = { ...chat, title, autoTitle: false, updatedAt: now() };
+    db.put('project-chat', next);
+    return next;
+  }
   function deleteProject(id) {
     const project = getProject(id);
     for (const chat of listChats(project.id)) db.delete('project-chat', chat.id);
@@ -178,6 +198,15 @@ export function projectService(db, { environment = process.env, home = os.homedi
   function updateProject(id, patch) {
     const project = getProject(id);
     const next = { ...project, ...patch, id: project.id, path: project.path, updatedAt: now() };
+    db.put('project', next);
+    return next;
+  }
+  function renameProject(id, input = {}) {
+    const project = getProject(id);
+    const name = typeof input?.name === 'string' ? input.name.replace(/\s+/g, ' ').trim() : '';
+    if (!name) throw workError('工作文件夹名称不能为空', 400);
+    if (name.length > 80) throw workError('工作文件夹名称最长 80 字', 400);
+    const next = { ...project, name, updatedAt: now() };
     db.put('project', next);
     return next;
   }
@@ -261,6 +290,8 @@ export function projectService(db, { environment = process.env, home = os.homedi
       projectId: project.id,
       executorId,
       title: typeof input.title === 'string' && input.title.trim() ? cleanTitle(input.title) : `${project.name} · ${executorId === 'window' ? '窗口 Agent' : executorId === 'codex' ? 'Codex' : 'Claude Code'}`,
+      // 没有显式标题时先放一个占位标题，等第一条消息到了再用消息内容替换。
+      autoTitle: !(typeof input.title === 'string' && input.title.trim()),
       sessionId: '',
       writable: input.writable !== false,
       source: 'manual',
@@ -371,11 +402,30 @@ export function projectService(db, { environment = process.env, home = os.homedi
 
   function projectSummary(project) {
     const chats = listChats(project.id);
-    return {
-      ...project,
-      chatCount: chats.length,
-      chats: chats.slice(0, PROJECT_LIMITS.maxChatsPerProject)
-    };
+    // 侧栏要用「最近一次工单状态 / 是否有未读结果」，这里一次性把工单聚合成会话字段，避免前端再拉一轮。
+    const byChat = new Map();
+    for (const ticket of db.list('ticket')) {
+      if (!ticket || typeof ticket.projectChatId !== 'string' || !ticket.projectChatId) continue;
+      const rows = byChat.get(ticket.projectChatId);
+      if (rows) rows.push(ticket);
+      else byChat.set(ticket.projectChatId, [ticket]);
+    }
+    let lastActivity = String(project.updatedAt || '');
+    const enriched = chats.slice(0, PROJECT_LIMITS.maxChatsPerProject).map(chat => {
+      const rows = byChat.get(chat.id) || [];
+      const last = rows.reduce((acc, row) => (!acc || String(row.updatedAt) > String(acc.updatedAt) ? row : acc), null);
+      const pending = rows.filter(row => row.status === 'awaiting_review').length;
+      const stamp = String(chat.updatedAt || chat.createdAt || '');
+      if (stamp > lastActivity) lastActivity = stamp;
+      return {
+        ...chat,
+        ticketCount: rows.length,
+        pendingCount: pending,
+        lastTicketStatus: last ? last.status : '',
+        lastTicketAt: last ? String(last.updatedAt || last.createdAt || '') : ''
+      };
+    });
+    return { ...project, chatCount: chats.length, lastActivity, chats: enriched };
   }
 
   // 只列文件夹，供浏览器端选择项目目录；不读取或返回任何文件内容。
@@ -569,10 +619,13 @@ export function projectService(db, { environment = process.env, home = os.homedi
     importProject,
     deleteProject,
     updateProject,
+    renameProject,
     listChats,
     getChat,
     createChat,
     deleteChat,
+    renameChat,
+    adoptTitle,
     touchChat,
     scanSessions,
     importSession,

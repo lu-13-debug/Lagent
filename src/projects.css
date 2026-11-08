@@ -341,3 +341,46 @@
   background: var(--sa-accent);
   color: var(--sa-on-accent);
 }
+
+/* 会话头部：明确写出文件落在哪个目录 */
+.pj-thread-head > div > span {
+  display: block;
+}
+
+.pj-thread-head .pj-write-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin-top: 3px;
+  padding: 2px 7px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pj-thread-head .pj-write-path svg {
+  flex: none;
+  color: var(--sa-text-3);
+}
+
+
+/* 输入框下方提示条：说明文字 + 链接 + 快捷键提示并排，避免中文与英文黏在一起。 */
+.pj-note-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.6;
+}
+
+.pj-note-bar .pj-link {
+  margin: 0;
+}
+
+.pj-note-bar .sa-keyhint {
+  margin-left: auto;
+}

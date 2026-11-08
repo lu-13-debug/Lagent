@@ -10,6 +10,9 @@ type Props = {
   onOpenTicket: (id: string) => void;
   allowedExecutors?: string[];
   focusProjectId?: string | null;
+  focusChatId?: string | null;
+  requestImport?: number;
+  onState?: (state: { projects: WorkProject[]; projectId: string | null; chatId: string | null }) => void;
   onFocusProject?: (id: string | null) => void;
 };
 
@@ -40,7 +43,7 @@ const STATUS_LABELS: Record<string, string> = {
   recorded: '已记录'
 };
 
-export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, onFocusProject }: Props) {
+export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject }: Props) {
   const [projects, setProjects] = useState<WorkProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
@@ -105,12 +108,18 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     finally { if (!quiet) setLoading(false); }
   };
   useEffect(() => { void loadProjects(); }, []);
-  // 从工单详情「打开项目」进入时，切到指定项目并清除一次性焦点。
+  // 侧栏「添加本地文件夹」：打开导入表单，并把焦点放进路径输入框。
   useEffect(() => {
-    if (!focusProjectId) return;
-    if (projects.some(item => item.id === focusProjectId)) setActiveProjectId(focusProjectId);
-    onFocusProject?.(null);
-  }, [focusProjectId, projects, onFocusProject]);
+    if (!requestImport) return;
+    setEditorOpen(true);
+    setPathDraft('');
+    setNameDraft('');
+    setBrowserOpen(false);
+  }, [requestImport]);
+  // 把项目 / 会话的选择同步给外壳侧栏，侧栏据此高亮。
+  useEffect(() => {
+    onState?.({ projects, projectId: activeProjectId, chatId: activeChatId });
+  }, [projects, activeProjectId, activeChatId, onState]);
   useEffect(() => {
     if (!activeProjectId) { setActiveChatId(null); return; }
     const item = projects.find(entry => entry.id === activeProjectId);
@@ -119,6 +128,23 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     setSessionsOpen(false); setSessions(null);
     setTab('chat'); setBrief(null); setChanges([]); setChangeTitle(''); setChangeSummary('');
   }, [activeProjectId, projects]);
+  // 从侧栏或工单详情进入时，切到指定项目 / 指定会话，并清除一次性焦点。
+  // 必须排在「切换项目时校正当前会话」之后，否则会被它矫正回第一条会话。
+  useEffect(() => {
+    if (!focusProjectId && !focusChatId) return;
+    // 项目列表还没回来时先等等，否则会把一次性焦点白白消费掉。
+    if (!projects.length) return;
+    const targetProject = focusProjectId
+      ? projects.find(item => item.id === focusProjectId) || null
+      : focusChatId
+        ? projects.find(item => item.chats.some(entry => entry.id === focusChatId)) || null
+        : null;
+    if (targetProject) {
+      setActiveProjectId(targetProject.id);
+      if (focusChatId && targetProject.chats.some(entry => entry.id === focusChatId)) setActiveChatId(focusChatId);
+    }
+    onFocusProject?.(null);
+  }, [focusProjectId, focusChatId, projects, onFocusProject]);
   useEffect(() => {
     let cancelled = false;
     if (!chat) { setTickets([]); return () => { cancelled = true; }; }
@@ -417,7 +443,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       </div>
       <div className="pj-head-actions">
         <button type="button" className="pj-btn" onClick={() => void loadProjects()} disabled={loading}><RefreshCw size={14} className={loading ? 'pj-spin' : ''} />刷新</button>
-        <button type="button" className="pj-btn pj-primary" onClick={() => void pickFolder()} disabled={busy === 'import'}><Plus size={15} />导入文件夹</button>
+        <button type="button" className="pj-btn" onClick={() => void pickFolder()} disabled={busy === 'import'}><Plus size={15} />导入文件夹</button>
       </div>
     </header>
 
@@ -547,7 +573,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
             <div className="pj-thread">
               {!chat ? <div className="pj-empty-block pj-placeholder"><p>选择一个项目对话。</p></div> : <>
                 <div className="pj-thread-head">
-                  <div><strong>{chat.title}</strong><span>{EXECUTOR_LABELS[chat.executorId] || chat.executorId} · {chat.sessionId ? '已绑定会话' : '首次消息将创建会话'}</span></div>
+                  <div><strong>{chat.title}</strong><span>{EXECUTOR_LABELS[chat.executorId] || chat.executorId} · {chat.sessionId ? '已绑定会话' : '首次消息将创建会话'}</span><span className="pj-write-path" title={project.path}><FolderGit2 size={12} />写入 {project.path}</span></div>
                   <span className={`pj-source ${chat.writable ? 'write' : ''}`}>{chat.writable ? '可修改项目' : '只读'}</span>
                 </div>
                 <div className="pj-messages">
@@ -558,7 +584,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
                   </button>) : <p className="pj-empty">还没有消息。在下方描述任务，确认后才会发送给 Agent。</p>}
                 </div>
                 <div className="pj-composer">
-                  <textarea value={chatDraft} onChange={event => setChatDraft(event.target.value)} rows={3} maxLength={3000} placeholder={chat.executorId === 'window' ? '描述要发送到该窗口 Agent 会话的指令…' : '描述要在该项目中完成的任务，例如：修复首页布局在窄屏下的溢出'} />
+                  <textarea value={chatDraft} onChange={event => setChatDraft(event.target.value)} rows={3} maxLength={3000} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} placeholder={chat.executorId === 'window' ? '描述要发送到该窗口 Agent 会话的指令…' : '描述要在该项目中完成的任务，例如：修复首页布局在窄屏下的溢出'} />
                   {dispatchOpen && <div className="pj-dispatch">
                     <span className="pj-dispatch-label">并行分派给</span>
                     {dispatchExecutors.map(id => <button type="button" key={id} className={`pj-chip ${dispatchTargets.includes(id) ? 'on' : ''}`} aria-pressed={dispatchTargets.includes(id)} onClick={() => toggleDispatchTarget(id)}>{dispatchTargets.includes(id) ? <Check size={12} /> : <Plus size={12} />}{EXECUTOR_LABELS[id] || id}</button>)}
@@ -573,7 +599,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
                     <button type="button" className="pj-btn" disabled={!chatDraft.trim() || planBusy === 'suggest'} onClick={() => void startPlan()}><Sparkles size={14} />{planBusy === 'suggest' ? '拆解中…' : '拆成计划'}</button>
                     <button type="button" className="pj-btn pj-primary" disabled={!chatDraft.trim() || busy === 'send'} onClick={() => void send()}><Send size={14} />{busy === 'send' ? '提交中…' : '发送（需审批）'}</button>
                   </div>
-                  <p className="pj-note">消息会创建待确认工单；批准后 CLI 会在项目目录内修改文件，窗口 Agent 会把指令发到已绑定的窗口。<button type="button" className="pj-link" onClick={openManualPlan}>手动编排计划</button></p>
+                  <p className="pj-note pj-note-bar">消息会创建待确认工单；批准后 CLI 会在项目目录内修改文件，窗口 Agent 会把指令发到已绑定的窗口。<button type="button" className="pj-link" onClick={openManualPlan}>手动编排计划</button><span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
                 </div>
               </>}
             </div>

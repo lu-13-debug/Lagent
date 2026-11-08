@@ -770,6 +770,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     getProject(id){return projects.getProject(id);},
     importProject(input){return projects.importProject(input);},
     deleteProject(id){return projects.deleteProject(id);},
+    renameProject(id,input){return projects.renameProject(id,input);},
     listDirectory(input){return projects.listDirectory(input);},
     projectBrief(id){return projects.getBrief(id);},
     saveProjectBrief(id,input){return projects.saveBrief(id,input);},
@@ -791,13 +792,16 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       return {chat,project:projects.getProject(projectId)};
     },
     deleteProjectChat(id){return projects.deleteChat(id);},
+    renameProjectChat(id,input){return projects.renameChat(id,input);},
     scanProjectSessions(projectId,executorId){return projects.scanSessions(projectId,executorId);},
     importProjectSession(projectId,input){return projects.importSession(projectId,input);},
     projectChatMessage(chatId,input){
       const chat=projects.getChat(chatId);
       const text=typeof input?.text==='string'?input.text.trim():'';
       if(!text||text.length>3000)throw workError('消息须为 1–3000 字',400);
-      return api.command({text,executorId:chat.executorId,projectChatId:chat.id,clientRequestId:input?.clientRequestId});
+      const ticket=api.command({text,executorId:chat.executorId,projectChatId:chat.id,clientRequestId:input?.clientRequestId});
+      try{projects.adoptTitle(chat.id,text);}catch{/* 改名失败不影响已提交的工单。 */}
+      return ticket;
     },
     projectDispatch(projectId,input){
       const text=typeof input?.text==='string'?input.text.trim():'';

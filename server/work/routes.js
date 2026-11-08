@@ -16,11 +16,13 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/projects',(req,res)=>{const result=engine.importProject(req.body);res.status(result.created?201:200).json(result);});
   app.get('/api/work/projects/:id',(req,res)=>res.json({project:engine.getProject(req.params.id)}));
   app.delete('/api/work/projects/:id',(req,res)=>res.json(engine.deleteProject(req.params.id)));
+  app.patch('/api/work/projects/:id',(req,res)=>res.json({project:engine.renameProject(req.params.id,req.body)}));
   app.get('/api/work/projects/:id/sessions',(req,res)=>res.json({sessions:engine.scanProjectSessions(req.params.id,req.query?.executor)}));
   app.post('/api/work/projects/:id/sessions',(req,res)=>res.status(201).json(engine.importProjectSession(req.params.id,req.body)));
   app.post('/api/work/projects/:id/chats',(req,res)=>res.status(201).json(engine.createProjectChat(req.params.id,req.body)));
   app.post('/api/work/projects/:id/dispatch',(req,res)=>res.status(201).json(engine.projectDispatch(req.params.id,req.body)));
   app.delete('/api/work/chats/:id',(req,res)=>res.json(engine.deleteProjectChat(req.params.id)));
+  app.patch('/api/work/chats/:id',(req,res)=>res.json({chat:engine.renameProjectChat(req.params.id,req.body)}));
   app.post('/api/work/chats/:id/messages',(req,res)=>res.status(201).json({ticket:engine.projectChatMessage(req.params.id,req.body)}));
   app.get('/api/work/chats/:id/tickets',(req,res)=>res.json({tickets:engine.projectChatTickets(req.params.id)}));
   app.get('/api/work/projects/:id/brief',(req,res)=>res.json({brief:engine.projectBrief(req.params.id)}));

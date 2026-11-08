@@ -29,11 +29,14 @@ export interface WorkProjectChat {
   id: string; projectId: string; executorId: 'claude-code' | 'codex' | 'window' | string; title: string;
   sessionId: string; writable: boolean; source: 'manual' | 'imported' | string;
   lastTicketId?: string; lastSummary?: string; window?: { handle: number; process: string; title: string };
+  // 占位标题标记：第一条消息到达后由后端改成消息摘要。
+  autoTitle?: boolean;
+  ticketCount?: number; pendingCount?: number; lastTicketStatus?: string; lastTicketAt?: string;
   createdAt: string; updatedAt: string;
 }
 export interface WorkProject {
   id: string; name: string; path: string; gitBranch: string; entryCount: number;
-  chatCount: number; chats: WorkProjectChat[]; createdAt: string; updatedAt: string;
+  chatCount: number; chats: WorkProjectChat[]; lastActivity?: string; createdAt: string; updatedAt: string;
 }
 export interface WorkProjectSession {
   executorId: 'claude-code' | 'codex' | string; sessionId: string; title: string; updatedAt: string; bytes: number; imported: boolean;
