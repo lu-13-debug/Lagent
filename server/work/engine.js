@@ -810,14 +810,32 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const wanted=[...new Set(requested.map(item=>String(item??'').trim()).filter(Boolean))];
       if(!wanted.length)throw workError('请选择要分派的执行器',400);
       if(wanted.length>4)throw workError('一次最多分派给 4 个 Agent',400);
-      const unsupported=wanted.filter(id=>!PROJECT_CHAT_EXECUTORS.includes(id)||id==='window');
+      const unsupported=wanted.filter(id=>!PROJECT_CHAT_EXECUTORS.includes(id));
       if(unsupported.length)throw workError(`这些执行器暂不支持项目分派：${unsupported.join('、')}`,400);
+      // 窗口 Agent 不像 CLI 那样在项目目录里跑，它把同一段任务发进你指定的外部窗口；
+      // 因此与其它 Agent 一起分派时必须明确目标是哪个窗口。
+      let windowTarget=null;
+      if(wanted.includes('window')){
+        const handle=Number(input?.window?.handle);
+        if(!Number.isSafeInteger(handle)||handle<=0)throw workError('使用窗口 Agent 分派时，请先选择要接管的窗口',400);
+        windowTarget={
+          handle,
+          ...(typeof input.window.process==='string'&&input.window.process.trim()?{process:input.window.process.trim()}:{}),
+          ...(typeof input.window.title==='string'&&input.window.title.trim()?{windowTitle:input.window.title.trim()}:{})
+        };
+      }
       const chats=projects.listChats(projectId);
       const stamp=Date.now().toString(36);
       const tickets=[];
       for(const executorId of wanted){
-        const existing=chats.find(item=>item.executorId===executorId&&item.source!=='imported')||chats.find(item=>item.executorId===executorId);
-        const chat=existing||api.createProjectChat(projectId,{executorId}).chat;
+        let chat;
+        if(executorId==='window'){
+          chat=chats.find(item=>item.executorId==='window'&&item.window?.handle===windowTarget.handle)
+            ||api.createProjectChat(projectId,{executorId,...windowTarget}).chat;
+        }else{
+          const existing=chats.find(item=>item.executorId===executorId&&item.source!=='imported')||chats.find(item=>item.executorId===executorId);
+          chat=existing||api.createProjectChat(projectId,{executorId}).chat;
+        }
         tickets.push(api.projectChatMessage(chat.id,{text,clientRequestId:`dispatch-${stamp}-${executorId}`}));
       }
       return {project:projects.getProject(projectId),tickets};

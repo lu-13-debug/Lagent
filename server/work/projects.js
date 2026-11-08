@@ -301,10 +301,11 @@ export function projectService(db, { environment = process.env, home = os.homedi
     if (executorId === 'window') {
       const handle = Number(input.handle);
       if (!Number.isSafeInteger(handle) || handle <= 0) throw workError('窗口项目对话需要有效的窗口句柄', 400);
+      // 窗口标题只用于定位窗口，不复用为会话标题，否则每个窗口会话都会叫成窗口名。
       chat.window = {
         handle,
         process: typeof input.process === 'string' ? input.process.trim().slice(0, 80) : '',
-        title: typeof input.title === 'string' ? input.title.trim().slice(0, 200) : ''
+        title: typeof input.windowTitle === 'string' ? input.windowTitle.trim().slice(0, 200) : ''
       };
     }
     db.put('project-chat', chat);

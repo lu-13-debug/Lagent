@@ -236,27 +236,31 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     const execs = [...new Set(newExecutors)].filter(id => allowedExecutors.includes(id));
     if (!execs.length) { notify('请至少选择一个 Agent。', true); return; }
     if (execs.length > 4) { notify('一次最多选择 4 个 Agent。', true); return; }
-    if (execs.includes('window') && execs.length > 1) { notify('窗口 Agent 只能单独使用，请取消其他选择。', true); return; }
-    if (execs.includes('window') && !windowId) { notify('请选择要接管的窗口。', true); return; }
+    const target = windows.find(item => item.id === windowId);
+    if (execs.includes('window') && !target) { notify('请选择要接管的窗口。', true); return; }
     setBusy('new-chat');
     try {
       const task = newTask.trim();
       if (execs.length > 1) {
         // 多 Agent：同一任务并行分派，每个 Agent 一条待确认工单，各自在自己的会话里执行。
+        // 窗口 Agent 不在项目目录里跑，它把同一段任务发进你选定的那个窗口。
         if (!task) { notify('多 Agent 协同需要写下要一起完成的任务。', true); return; }
-        const result = await api.workProjectDispatch(project.id, task, execs);
+        const result = await api.workProjectDispatch(project.id, task, execs, execs.includes('window') && target
+          ? { handle: target.handle, process: target.process, title: target.title }
+          : undefined);
         await loadProjects(true);
         setNewChatOpen(false);
         const chatId = result.tickets.map(ticket => ticket.projectChatId).filter(Boolean)[0];
         if (chatId) setActiveChatId(chatId);
-        notify(`已把任务分派给 ${execs.length} 个 Agent，确认后各自在项目目录内执行。`);
+        notify(execs.includes('window')
+          ? `已把任务分派给 ${execs.length} 个 Agent：项目内 Agent 会在项目目录执行，窗口 Agent 会发送到「${target?.title || '所选窗口'}」。`
+          : `已把任务分派给 ${execs.length} 个 Agent，确认后各自在项目目录内执行。`);
         return;
       }
-      const target = windows.find(item => item.id === windowId);
       const result = await api.workCreateProjectChat(project.id, {
         executorId: execs[0],
         ...(newTitle.trim() ? { title: newTitle.trim() } : {}),
-        ...(execs[0] === 'window' && target ? { handle: target.handle, process: target.process, title: target.title } : {})
+        ...(execs[0] === 'window' && target ? { handle: target.handle, process: target.process, windowTitle: target.title } : {})
       });
       let ticketId = '';
       if (task) {
@@ -536,7 +540,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
                   return <button type="button" key={id} className={`pj-chip ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => toggleNewExecutor(id)}>{on && <Check size={11} />}{EXECUTOR_LABELS[id] || id}</button>;
                 })}
               </div>
-              <small>可选多个 Agent；多选时会用同一条任务并行分派，每个 Agent 各有一条待确认工单。</small>
+              <small>{newExecutors.includes('window') ? '窗口 Agent 会把同一条任务发送到你选定的那个窗口，其余 Agent 在项目目录里执行；每个 Agent 各有一条待确认工单。' : '可选多个 Agent；多选时会用同一条任务并行分派，每个 Agent 各有一条待确认工单。'}</small>
             </div>
             {newExecutors.includes('window') && <label>目标窗口<select value={windowId} onChange={event => setWindowId(event.target.value)}><option value="">选择窗口…</option>{windows.map(item => <option key={item.id} value={item.id}>{item.process} · {item.title}</option>)}</select></label>}
             <label>对话标题（可选）<input value={newTitle} onChange={event => setNewTitle(event.target.value)} placeholder="例如 修复登录页" /></label>

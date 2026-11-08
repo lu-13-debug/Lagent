@@ -10,6 +10,7 @@ import { createWorkEngine } from './work/engine.js';
 import { createExecutorRegistry } from './work/executors/index.js';
 import { claudeCodeExecutor } from './work/executors/claude-code.js';
 import { codexExecutor } from './work/executors/codex.js';
+import { windowExecutor } from './work/executors/window.js';
 
 async function waitFor(predicate, message = '等待条件超时', timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs;
@@ -298,7 +299,7 @@ test('P1 项目对话消息经审批后在工作目录续接会话并回写 sess
   assert.equal(dispatched.tickets[0].projectChatId, chat.id);
   assert.equal(dispatched.project.chats.length, 1);
   assert.throws(() => engine.projectDispatch(imported.project.id, { text: '空目标', executorIds: [] }), { status: 400 });
-  assert.throws(() => engine.projectDispatch(imported.project.id, { text: '窗口分派', executorIds: ['window'] }), { status: 400 });
+  assert.throws(() => engine.projectDispatch(imported.project.id, { text: '窗口分派', executorIds: ['window'] }), { status: 400, message: /请先选择要接管的窗口/ });
 
   assert.throws(() => engine.command({
     text: '普通任务试图指定目录',
@@ -439,4 +440,54 @@ test('P1 项目计划把步骤分派给不同 Agent 并各自建立项目对话'
   assert.deepEqual(new Set(suggestion.steps.map(step => step.executorId)), new Set(['claude-code', 'codex']));
   assert.deepEqual(new Set(plannerInput.executors), new Set(['claude-code', 'codex']));
   assert.deepEqual(plannerInput.project.chats.map(item => item.executorId).sort(), ['claude-code', 'codex']);
+});
+
+test('P1 窗口 Agent 可与项目内 Agent 并行分派，窗口会话绑定所选句柄', t => {
+  const root = mkdtempSync(join(tmpdir(), 'dataagent-projects-'));
+  const store = new Store(root);
+  const projectDir = makeProject(root);
+  const home = makeHome(root);
+  const bridge = {
+    listWindows: async () => [{ id: '42', handle: 42, pid: 7, process: 'Codex', title: 'Codex 窗口' }],
+    readWindow: async () => ({ text: '' }),
+    sendToWindow: async (handle, text, options) => ({ ok: true, process: 'Codex', submitted: options.submit })
+  };
+  const claude = claudeCodeExecutor({
+    store,
+    cwd: root,
+    binary: process.execPath,
+    spawnImpl: () => fakeCliChild(jsonl([{ type: 'result', subtype: 'success', is_error: false, session_id: 'cli-window', result: '完成' }]))
+  });
+  const window = windowExecutor({ store, bridge, waitMs: 1, pollMs: 1, maxWaitMs: 1 });
+  const engine = createWorkEngine(store, createExecutorRegistry([claude, window]), () => {}, {
+    policy: { allowedExecutors: ['claude-code', 'window'] },
+    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    home,
+    windowBridge: bridge
+  });
+  t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const imported = engine.importProject({ path: projectDir });
+  const result = engine.projectDispatch(imported.project.id, {
+    text: '一起做两件事',
+    executorIds: ['claude-code', 'window'],
+    window: { handle: 42, process: 'Codex', title: 'Codex 窗口' }
+  });
+  assert.equal(result.tickets.length, 2);
+  assert.deepEqual(new Set(result.tickets.map(ticket => ticket.executor)), new Set(['claude-code', 'window']));
+  const chats = engine.getProject(imported.project.id).chats;
+  assert.equal(chats.length, 2);
+  const windowChat = chats.find(chat => chat.executorId === 'window');
+  assert.equal(windowChat.window.handle, 42);
+  assert.equal(windowChat.window.process, 'Codex');
+  // 窗口标题只用于定位窗口，不覆盖会话标题；会话标题会按首条消息自动生成。
+  assert.equal(windowChat.window.title, 'Codex 窗口');
+  assert.equal(windowChat.title, '一起做两件事');
+  assert.equal(windowChat.autoTitle, false);
+
+  // 同一句柄再次分派时复用已有会话，不会重复建会话。
+  const again = engine.projectDispatch(imported.project.id, { text: '再发一次', executorIds: ['window'], window: { handle: 42 } });
+  assert.equal(again.tickets[0].projectChatId, windowChat.id);
+  assert.equal(engine.getProject(imported.project.id).chats.filter(chat => chat.executorId === 'window').length, 1);
+  assert.throws(() => engine.projectDispatch(imported.project.id, { text: '缺句柄', executorIds: ['claude-code', 'window'] }), { status: 400, message: /请先选择要接管的窗口/ });
 });
