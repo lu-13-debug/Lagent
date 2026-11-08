@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FolderGit2, GitBranch, Globe, Inbox, Menu, Plus, RefreshCw, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Users, Wrench, X } from 'lucide-react';
+import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FolderGit2, GitBranch, Globe, Inbox, Menu, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Users, Wrench, X } from 'lucide-react';
 import { api } from '../api';
 import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
@@ -106,6 +106,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     if (known.includes(raw as ShellView)) return raw as ShellView;
     return params.get('project') ? 'projects' : 'command';
   });
+  const [convQuery, setConvQuery] = useState('');
   useEffect(() => {
     const url = new URL(window.location.href);
     if (view === 'command') url.searchParams.delete('view');
@@ -554,18 +555,23 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const composerTitle = selectedAgents.length > 1 ? `交叉验证 · ${selectedAgents.length} 个 Agent` : '发送指令';
   const isLanding = !activeTicket && !activeGroup;
   const conversationGroups = useMemo(() => {
+    const keyword = convQuery.trim().toLowerCase();
+    const matched = keyword
+      ? conversationTickets.filter(item => `${item.title} ${item.ticket?.executor || ''} ${executorNames[item.ticket?.executor || ''] || ''} ${statusNames[item.ticket?.status || ''] || ''}`.toLowerCase().includes(keyword))
+      : conversationTickets;
     const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
     const startOfYesterday = new Date(startOfToday); startOfYesterday.setDate(startOfYesterday.getDate() - 1);
     const buckets: { label: string; items: typeof conversationTickets }[] = [
-      { label: '今天', items: [] }, { label: '昨天', items: [] }, { label: '更早', items: [] },
+      { label: keyword ? '搜索结果' : '今天', items: [] }, { label: '昨天', items: [] }, { label: '更早', items: [] },
     ];
-    for (const item of conversationTickets) {
+    for (const item of matched) {
+      if (keyword) { buckets[0].items.push(item); continue; }
       const created = Date.parse(item.createdAt);
       const index = created >= startOfToday.getTime() ? 0 : created >= startOfYesterday.getTime() ? 1 : 2;
       buckets[index].items.push(item);
     }
     return buckets.filter(bucket => bucket.items.length > 0);
-  }, [conversationTickets]);
+  }, [conversationTickets, convQuery]);
   const starters = [
     { icon: GitBranch, title: '检查 GitHub 仓库', desc: 'CI 状态、失败的流水线与 PR', prompt: '检查 GitHub 仓库状态' },
     { icon: Globe, title: '浏览网页并总结', desc: '读取页面正文，提炼要点', prompt: '浏览网页并总结' },
@@ -769,6 +775,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       <nav className="sa-nav" aria-label="功能导航">{navItems.map(item => <button key={item.id} className={`sa-nav-item ${view === item.id ? 'active' : ''}`} aria-current={view === item.id ? 'page' : undefined} onClick={() => { setView(item.id); setNavOpen(false); }}><item.icon size={16} /><span>{item.label}</span>{item.id === 'inbox' && attention.length > 0 && <em>{attention.length}</em>}</button>)}</nav>
       <section className="sa-conv-section">
         <div className="sa-side-title"><span>对话</span><span>{conversationTickets.length}</span></div>
+        <label className="sa-conv-search"><Search size={13} /><input type="search" value={convQuery} onChange={event => setConvQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setConvQuery(''); } }} placeholder="搜索对话" aria-label="搜索对话" /></label>
         <div className="sa-conversations">
           {conversationGroups.length ? conversationGroups.map(group => <div key={group.label}>
             <p className="sa-conv-group">{group.label}</p>
@@ -783,7 +790,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
                 </span>
               </button>;
             })}
-          </div>) : <p className="sa-conv-empty">还没有对话。在上方描述目标即可开始。</p>}
+          </div>) : <p className="sa-conv-empty">{convQuery.trim() ? `没有匹配「${convQuery.trim()}」的对话。` : '还没有对话。在上方描述目标即可开始。'}</p>}
         </div>
       </section>
       <div className="sa-sidebar-foot"><div className="sa-user"><span className="sa-avatar">{user?.displayName?.slice(0, 1).toUpperCase() || 'D'}</span><span><strong>{user?.displayName || '个人工作区'}</strong><small>{runtime.mode === 'cloud' ? '云端账号' : '本地运行'}</small></span><Sparkles size={14} /></div></div>

@@ -440,6 +440,45 @@ html[data-theme="dark"] .sa-newchat kbd {
   letter-spacing: 0;
 }
 
+.sa-conv-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  margin: 0 6px 6px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface);
+  color: var(--sa-text-3);
+  transition: border-color var(--sa-fast) var(--sa-ease), color var(--sa-fast) var(--sa-ease);
+}
+
+.sa-conv-search:focus-within {
+  color: var(--sa-text-2);
+}
+
+.sa-conv-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--sa-text);
+  font: inherit;
+  font-size: var(--sa-fs-xs);
+  outline: none;
+}
+
+.sa-conv-search input::placeholder {
+  color: var(--sa-text-3);
+}
+
+.sa-conv-search input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
 .sa-conversations {
   flex: 1;
   min-height: 0;
