@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, Check, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users } from 'lucide-react';
+import { AppWindow, Bot, Check, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users } from 'lucide-react';
 import { api } from '../api';
 import { Modal } from './ui';
 import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectSession, WorkTicket } from '../superagent';
@@ -602,7 +602,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
                 {project.chats.map(item => <li key={item.id} className={item.id === activeChatId ? 'active' : ''}>
                   <button type="button" className="pj-chat" onClick={() => setActiveChatId(item.id)}>
                     <span className="pj-chat-title"><Bot size={12} />{item.title}</span>
-                    <span className="pj-chat-meta">{EXECUTOR_LABELS[item.executorId] || item.executorId} · {item.source === 'imported' ? '已导入会话' : item.writable ? '可修改项目' : '只读'}</span>
+                    <span className="pj-chat-meta">{EXECUTOR_LABELS[item.executorId] || item.executorId} · {item.source === 'imported' ? '已导入会话' : item.executorId === 'window' ? '发送到窗口' : item.writable ? '可修改项目' : '只读'}</span>
                     {item.lastSummary && <span className="pj-chat-summary">{item.lastSummary}</span>}
                   </button>
                   <button type="button" className="pj-icon" aria-label="删除对话" disabled={busy === `delete-chat-${item.id}`} onClick={() => void removeChat(item)}><Trash2 size={13} /></button>
@@ -613,8 +613,10 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
             <div className="pj-thread">
               {!chat ? <div className="pj-empty-block pj-placeholder"><p>选择一个项目对话。</p></div> : <>
                 <div className="pj-thread-head">
-                  <div><strong>{chat.title}</strong><span>{EXECUTOR_LABELS[chat.executorId] || chat.executorId} · {chat.sessionId ? '已绑定会话' : '首次消息将创建会话'}</span><span className="pj-write-path" title={project.path}><FolderGit2 size={12} />写入 {project.path}</span></div>
-                  <span className={`pj-source ${chat.writable ? 'write' : ''}`}>{chat.writable ? '可修改项目' : '只读'}</span>
+                  <div><strong>{chat.title}</strong><span>{EXECUTOR_LABELS[chat.executorId] || chat.executorId} · {chat.sessionId ? '已绑定会话' : '首次消息将创建会话'}</span>{chat.executorId === 'window'
+                    ? <span className="pj-write-path" title={chat.window?.title || ''}><AppWindow size={12} />发送到 {chat.window?.process || '窗口'}{chat.window?.title ? ` · ${chat.window.title}` : ''}</span>
+                    : <span className="pj-write-path" title={project.path}><FolderGit2 size={12} />写入 {project.path}</span>}</div>
+                  <span className={`pj-source ${chat.executorId !== 'window' && chat.writable ? 'write' : ''}`}>{chat.executorId === 'window' ? '不写文件' : chat.writable ? '可修改项目' : '只读'}</span>
                 </div>
                 <div className="pj-messages">
                   {tickets.length ? tickets.map(ticket => <button type="button" className="pj-message" key={ticket.id} onClick={() => onOpenTicket(ticket.id)}>
