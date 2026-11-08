@@ -53,29 +53,105 @@ function Clean-Text([string]$value, [int]$max) {
 
 function Invoke-List {
   $rows = New-Object System.Collections.Generic.List[object]
+  # 用 EnumWindows 枚举「所有」可见顶层窗口：Get-Process 的 MainWindowHandle 每个进程只给一个，
+  # 同一个应用开多个窗口（例如多个 DSH 会话窗口）时只会看到其中一个。
+  $script:ListRows = $rows
+  $script:ProcessNames = @{}
+  $script:AllowedNames = $allowed
   try {
-    foreach ($candidate in @(Get-Process -ErrorAction SilentlyContinue)) {
-      Assert-Budget
-      try {
-        $windowHandle = $candidate.MainWindowHandle.ToInt64()
-        if ($windowHandle -le 0) { continue }
-        $title = [string]$candidate.MainWindowTitle
-        if ([string]::IsNullOrWhiteSpace($title)) { continue }
-        if ($title.StartsWith('Default IME')) { continue }
-        $name = Clean-Text ([string]$candidate.ProcessName) 80
-        if ([string]::IsNullOrEmpty($name)) { continue }
-        if ($allowed -notcontains $name.ToLowerInvariant()) { continue }
-        $rows.Add([pscustomobject]@{
-          pid = [int]$candidate.Id
-          process = $name
-          title = Clean-Text $title 200
-          handle = $windowHandle
-        })
-        if ($rows.Count -ge 100) { break }
-      } catch { }
+    foreach ($item in @(Get-Process -ErrorAction SilentlyContinue)) {
+      try { $script:ProcessNames[[int]$item.Id] = [string]$item.ProcessName } catch { }
     }
   } catch { }
-  $sorted = @($rows | Sort-Object process, pid | Select-Object -First 100)
+
+  $enumerated = $false
+  try {
+    if (-not ('DataAgent.WindowList' -as [type])) {
+      Add-Type -TypeDefinition @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+namespace DataAgent {
+  public class WindowList {
+    public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hWnd, StringBuilder text, int max);
+    [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int processId);
+    [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint command);
+  }
+}
+"@
+    }
+    $callback = [DataAgent.WindowList+EnumProc]{
+      param($hwnd, $lparam)
+      try {
+        if ([DataAgent.WindowList]::IsWindowVisible($hwnd)) {
+          # GW_OWNER = 4：只有无主的顶层窗口才算独立窗口，弹层/工具窗不列。
+          if ([DataAgent.WindowList]::GetWindow($hwnd, 4) -eq [IntPtr]::Zero) {
+            $buffer = New-Object System.Text.StringBuilder 512
+            [void][DataAgent.WindowList]::GetWindowTextW($hwnd, $buffer, 512)
+            $title = $buffer.ToString()
+            if (-not [string]::IsNullOrWhiteSpace($title) -and -not $title.StartsWith('Default IME') -and $title -ne 'MSCTFIME UI') {
+              $processId = 0
+              [void][DataAgent.WindowList]::GetWindowThreadProcessId($hwnd, [ref]$processId)
+              $name = [string]$script:ProcessNames[[int]$processId]
+              if ($name -and ($script:AllowedNames -contains $name.ToLowerInvariant())) {
+                $clean = [regex]::Replace($title, '[\x00-\x1f\x7f-\x9f]', ' ')
+                $clean = [regex]::Replace($clean, '\s+', ' ').Trim()
+                if ($clean.Length -gt 200) { $clean = $clean.Substring(0, 200) }
+                $script:ListRows.Add([pscustomobject]@{
+                  pid = [int]$processId
+                  process = $name
+                  title = $clean
+                  handle = $hwnd.ToInt64()
+                })
+              }
+            }
+          }
+        }
+      } catch { }
+      return $true
+    }
+    [void][DataAgent.WindowList]::EnumWindows($callback, [IntPtr]::Zero)
+    $enumerated = $true
+  } catch { $enumerated = $false }
+
+  if (-not $enumerated) {
+    # 兜底：EnumWindows 不可用时退回每进程主窗口。
+    try {
+      foreach ($candidate in @(Get-Process -ErrorAction SilentlyContinue)) {
+        Assert-Budget
+        try {
+          $windowHandle = $candidate.MainWindowHandle.ToInt64()
+          if ($windowHandle -le 0) { continue }
+          $title = [string]$candidate.MainWindowTitle
+          if ([string]::IsNullOrWhiteSpace($title)) { continue }
+          if ($title.StartsWith('Default IME')) { continue }
+          $name = Clean-Text ([string]$candidate.ProcessName) 80
+          if ([string]::IsNullOrEmpty($name)) { continue }
+          if ($allowed -notcontains $name.ToLowerInvariant()) { continue }
+          $rows.Add([pscustomobject]@{
+            pid = [int]$candidate.Id
+            process = $name
+            title = Clean-Text $title 200
+            handle = $windowHandle
+          })
+          if ($rows.Count -ge 100) { break }
+        } catch { }
+      }
+    } catch { }
+  }
+
+  Assert-Budget
+  $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+  $unique = New-Object System.Collections.Generic.List[object]
+  foreach ($row in $rows) {
+    if ($unique.Count -ge 100) { break }
+    if (-not $seen.Add([string]$row.handle)) { continue }
+    $unique.Add($row)
+  }
+  $sorted = @($unique | Sort-Object process, pid, title)
   Write-Json ([object[]]$sorted)
 }
 
