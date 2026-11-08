@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
@@ -118,4 +118,46 @@ test('ACP 工单未显式提供 executorInput 时用指令文本作为 prompt', 
   const control = store.get('work-control', ticket.id);
   assert.deepEqual(control.executorInput, { prompt: '只回复 OK' });
   assert.equal(ticket.executor, 'claude-acp');
+});
+
+test('策略关闭 acpWrites 后项目分派给 ACP 只读', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'acp-policy-'));
+  const projectDir = mkdtempSync(join(tmpdir(), 'acp-policy-project-'));
+  mkdirSync(join(projectDir, '.git'), { recursive: true });
+  writeFileSync(join(projectDir, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  const store = new Store(dir);
+  const started = [];
+  const acp = {
+    id: 'claude-acp',
+    name: 'Claude ACP',
+    kind: 'cli',
+    available: true,
+    requiresDataset: false,
+    capabilities: ['acp', 'agent', 'chat'],
+    validateInput(input) {
+      const prompt = typeof input?.prompt === 'string' ? input.prompt.trim() : '';
+      if (!prompt) throw Object.assign(new Error('ACP prompt 必须是非空字符串'), { status: 400 });
+      return { prompt, ...(typeof input.workspace === 'string' && input.workspace ? { workspace: input.workspace, write: input.write === true } : {}) };
+    },
+    defaultInput(text) { return this.validateInput({ prompt: text }); },
+    start(ticket, assignment, input) {
+      started.push(input);
+      store.put('task', { id: assignment.id, status: 'completed' });
+      return { id: assignment.id, status: 'completed' };
+    },
+    get: id => id && store.get('task', id),
+    stop() {}
+  };
+  const engine = createWorkEngine(store, createExecutorRegistry([acp]), () => {}, { env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
+  t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); rmSync(projectDir, { recursive: true, force: true }); });
+  engine.updatePolicy({ allowedExecutors: ['claude-acp'], limits: { browserHosts: [], githubRepos: [], acpWrites: false } });
+  const { project } = engine.importProject({ path: projectDir });
+  const result = engine.projectDispatch(project.id, { text: '梳理项目结构', executorIds: ['claude-acp'] });
+  assert.equal(result.tickets.length, 1);
+  const control = store.get('work-control', result.tickets[0].id);
+  assert.equal(control.executorInput.workspace, project.path);
+  assert.equal(control.executorInput.write, false);
+  engine.updatePolicy({ allowedExecutors: ['claude-acp'], limits: { browserHosts: [], githubRepos: [], acpWrites: true } });
+  const second = engine.projectDispatch(project.id, { text: '再梳理一次', executorIds: ['claude-acp'] });
+  assert.equal(store.get('work-control', second.tickets[0].id).executorInput.write, true);
 });

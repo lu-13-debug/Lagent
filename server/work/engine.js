@@ -156,11 +156,15 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const maxTurns = Number.isInteger(requestedTurns) && requestedTurns >= 1 && requestedTurns <= 20 ? requestedTurns : 12;
     const resuming = typeof chat.sessionId === 'string' && chat.sessionId;
     const context = resuming ? '' : projectBriefContext(project);
+    // ACP 的文件读写走客户端回调，性能上等价于给 Agent 项目目录写权限，
+    // 所以额外受 policy.limits.acpWrites 约束（CLI 执行器本来就有写权限）。
+    const isAcp = Array.isArray(executor.capabilities) && executor.capabilities.includes('acp');
+    const write = chat.writable !== false && (!isAcp || policy.limits?.acpWrites !== false);
     return {
       prompt: context ? `${context}\n${text}` : text,
       maxTurns,
       workspace: project.path,
-      write: chat.writable !== false,
+      write,
       ...(resuming ? { resume: chat.sessionId } : {})
     };
   };

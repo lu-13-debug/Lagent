@@ -2308,6 +2308,29 @@ html[data-theme="dark"] .sa-newchat kbd {
   accent-color: var(--sa-accent);
 }
 
+.sa-policy-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: var(--sa-fs-xs);
+  color: var(--sa-text-2);
+  cursor: pointer;
+}
+
+.sa-policy-toggle input {
+  margin: 1px 0 0;
+  accent-color: var(--sa-accent);
+}
+
+.sa-policy-toggle em {
+  display: block;
+  margin-top: 2px;
+  font-style: normal;
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
 .sa-policy-budgets {
   display: grid;
   gap: 10px;

@@ -15,7 +15,7 @@ export interface WorkPolicy {
   mode: 'personal'; acceptMode: 'explicit' | 'observe' | 'auto';
   allowedExecutors?: string[]; requireApproval?: boolean;
   budgets?: { maxConcurrent: number; maxCallsPerTicket: number; maxRuntimeMs: number; maxTokensPerTicket: number };
-  limits?: { browserHosts: string[]; githubRepos: string[] };
+  limits?: { browserHosts: string[]; githubRepos: string[]; acpWrites?: boolean };
 }
 export interface WorkInboxItem { ticketId: string; title: string; question: string; options: WorkAttentionOption[]; createdAt: string }
 export interface WorkPlanStep { index: number; ticketId: string; executorId: string; title: string; status?: string; dependsOn?: number[]; projectChatId?: string | null }

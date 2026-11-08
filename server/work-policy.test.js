@@ -50,3 +50,14 @@ test('Work policy 校验白名单字段并写脱敏审计', t => {
   assert.doesNotMatch(JSON.stringify(audits), /secret-goal|secret-prompt|token/);
   assert.ok(store.get('work-policy', 'default'));
 });
+
+test('Work policy 的 acpWrites 默认开启、可关闭且只接受布尔值', t => {
+  const { engine } = fixture(t);
+  assert.equal(engine.policy().limits.acpWrites, true);
+  const off = engine.updatePolicy({ limits: { acpWrites: false } });
+  assert.equal(off.limits.acpWrites, false);
+  assert.equal(engine.policy().limits.acpWrites, false);
+  assert.throws(() => engine.updatePolicy({ limits: { acpWrites: 'no' } }), { status: 400 });
+  const on = engine.updatePolicy({ limits: { acpWrites: true, browserHosts: [], githubRepos: [] } });
+  assert.equal(on.limits.acpWrites, true);
+});

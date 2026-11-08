@@ -9,7 +9,7 @@ const defaults = Object.freeze({
   allowedExecutors: Object.freeze(['analysis', 'terminal']),
   requireApproval: true,
   budgets: Object.freeze({ maxConcurrent: 2, maxCallsPerTicket: 12, maxRuntimeMs: 3600000, maxTokensPerTicket: 200000 }),
-  limits: Object.freeze({ browserHosts: Object.freeze([]), githubRepos: Object.freeze([]) })
+  limits: Object.freeze({ browserHosts: Object.freeze([]), githubRepos: Object.freeze([]), acpWrites: true })
 });
 
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -69,9 +69,11 @@ export function normalizePolicy(input = {}, base = defaults) {
   const budgets = input.budgets === undefined ? clone(base.budgets) : object(input.budgets, 'budgets');
   if (input.budgets !== undefined) onlyKeys(budgets, ['maxConcurrent', 'maxCallsPerTicket', 'maxRuntimeMs', 'maxTokensPerTicket'], 'budgets');
   const limits = input.limits === undefined ? clone(base.limits) : object(input.limits, 'limits');
-  if (input.limits !== undefined) onlyKeys(limits, ['browserHosts', 'githubRepos'], 'limits');
+  if (input.limits !== undefined) onlyKeys(limits, ['browserHosts', 'githubRepos', 'acpWrites'], 'limits');
+  if (limits.acpWrites !== undefined && typeof limits.acpWrites !== 'boolean') fail('acpWrites 必须是布尔值');
   const browserHosts = limits.browserHosts === undefined ? clone(base.limits.browserHosts) : normalizedList(limits.browserHosts, 'browserHosts', 50, browserHost);
   const githubRepos = limits.githubRepos === undefined ? clone(base.limits.githubRepos) : normalizedList(limits.githubRepos, 'githubRepos', 100, githubRepo);
+  const acpWrites = limits.acpWrites === undefined ? (base.limits?.acpWrites !== false) : limits.acpWrites === true;
   return {
     mode: 'personal',
     acceptMode: 'explicit',
@@ -85,7 +87,8 @@ export function normalizePolicy(input = {}, base = defaults) {
     },
     limits: {
       browserHosts,
-      githubRepos
+      githubRepos,
+      acpWrites
     }
   };
 }
