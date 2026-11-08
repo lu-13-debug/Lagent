@@ -1,0 +1,329 @@
+.op-charts {
+  margin: 18px 0;
+  min-width: 0;
+}
+
+.op-charts-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.op-charts-heading h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: var(--text-lg);
+  color: var(--ink);
+}
+
+.op-charts-heading p {
+  margin: 4px 0 0;
+  color: var(--faint);
+  font-size: var(--text-sm);
+}
+
+.op-charts-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.op-customize {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.op-customize:hover,
+.op-customize.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.op-customize.active { background: var(--surface-2); }
+
+.op-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px 18px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.op-settings fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.op-settings legend {
+  margin-bottom: 7px;
+  padding: 0;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.op-settings .segmented { flex-wrap: wrap; }
+
+.op-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.op-checks label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.op-checks input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+}
+
+.op-settings-foot {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.op-reset {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-1);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.op-reset:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.op-chart-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+.op-chart-card {
+  margin: 0;
+  padding: 14px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+
+.op-chart-card > figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.op-chart-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ink);
+}
+
+.op-chart-title strong {
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.op-chart-title em {
+  font-style: normal;
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+
+.op-chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 26px;
+  margin-bottom: 4px;
+}
+
+.op-chart-scroll {
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.op-chart-scroll svg {
+  display: block;
+  width: 100%;
+  min-width: 520px;
+  height: auto;
+}
+
+.op-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.op-legend i {
+  display: inline-block;
+  width: 12px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--chart-1);
+}
+
+.op-legend i.d7 { background: var(--chart-3); }
+.op-legend i.bar { width: 9px; height: 9px; background: var(--chart-2); }
+.op-legend i.rate { background: var(--chart-3); }
+
+.op-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.op-empty,
+.op-help {
+  margin: 8px 0;
+  padding: 18px 14px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--faint);
+  font-size: var(--text-sm);
+}
+
+.op-help {
+  padding: 8px 12px;
+}
+
+.op-export {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.op-export button {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-1);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.op-export button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.op-export small {
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
+.op-summary {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 900px) {
+  .op-chart-scroll svg { min-width: 460px; }
+}
+
+@media print {
+  .op-chart-card { break-inside: avoid; page-break-inside: avoid; }
+  .op-export,
+  .op-customize,
+  .op-settings { display: none; }
+  .op-chart-scroll { overflow: visible; }
+  .op-chart-scroll svg { min-width: 0; }
+}
+/* Shared chart viewer controls; no global theme changes. */
+.op-controls {display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;border:0;padding:0;margin:8px 0;min-width:0;}
+.op-controls legend {font-size:12px;color:var(--text-2);margin-bottom:8px;}
+.op-controls label {display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:12px;max-width:100%;}
+.op-controls input:not([type=checkbox]),.op-controls select {max-width:100%;min-width:0;background:var(--surface-1);color:var(--text-1);border:1px solid var(--line-strong);border-radius:5px;min-height:32px;padding:5px 8px;font:inherit;}
+.op-controls p {width:100%;font-size:12px;color:var(--text-2);line-height:1.6;}
+.op-card-tools {display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px;}
+.op-card-actions {display:flex;gap:8px;}
+.op-card-actions button,.op-order button {min-height:32px;border:1px solid var(--line);border-radius:5px;padding:5px 9px;background:var(--surface-1);color:var(--text-1);cursor:pointer;}
+.op-order {list-style:none;padding:0;margin:0;display:grid;gap:8px;}
+.op-order li {display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.op-order label {flex:1;display:flex;align-items:center;gap:6px;}
+.op-order button:disabled {opacity:.45;cursor:default;}
+.op-chart-scroll svg {min-width:520px;}
+.op-chart-dialog .modal {max-width:1200px;min-width:0;}
+.op-chart-dialog .modal-body {min-width:0;}
+.op-chart-dialog .op-chart-scroll {overflow-x:auto;}
+.op-charts :is(button,input,select):focus-visible {outline:2px solid var(--text-1);outline-offset:3px;}
+@media(max-width:600px){.op-chart-card{padding:10px;}.op-settings{grid-template-columns:minmax(0,1fr);padding:12px;}.op-chart-scroll svg{min-width:520px;}.op-controls input:not([type=checkbox]){width:100%;}.op-card-tools{display:block;}.op-card-actions{justify-content:flex-end;}}
+@media print {.op-card-tools,.op-controls,.op-chart-dialog,.op-export,.op-settings,.op-customize {display:none!important;}.op-chart-scroll svg{min-width:0;}.op-chart-scroll{overflow:visible;}}
+
+/* White-paper series colors are explicit and override screen inline colors. */
+@media print {
+  .op-chart-scroll svg[data-palette="default"] [data-series="primary"][fill]:not([fill="none"]):not([fill="#ffffff"]) { fill: #1f7a52 !important; }
+  .op-chart-scroll svg[data-palette="default"] [data-series="primary"][stroke], .op-chart-scroll svg[data-palette="default"] [data-series="primary"][style*="stroke"] { stroke: #1f7a52 !important; }
+  .op-chart-scroll svg[data-palette="default"] [data-series="secondary"][fill]:not([fill="none"]):not([fill="#ffffff"]) { fill: #3f6f9e !important; }
+  .op-chart-scroll svg[data-palette="default"] [data-series="secondary"][stroke], .op-chart-scroll svg[data-palette="default"] [data-series="secondary"][style*="stroke"] { stroke: #3f6f9e !important; }
+  .op-chart-scroll svg[data-palette="default"] [data-series="tertiary"][fill]:not([fill="none"]):not([fill="#ffffff"]) { fill: #967020 !important; }
+  .op-chart-scroll svg[data-palette="default"] [data-series="tertiary"][stroke], .op-chart-scroll svg[data-palette="default"] [data-series="tertiary"][style*="stroke"] { stroke: #967020 !important; }
+  .op-chart-scroll svg[data-palette="warm"] [data-series="primary"][fill]:not([fill="none"]):not([fill="#ffffff"]) { fill: #ad4935 !important; }
+  .op-chart-scroll svg[data-palette="warm"] [data-series="primary"][stroke], .op-chart-scroll svg[data-palette="warm"] [data-series="primary"][style*="stroke"] { stroke: #ad4935 !important; }
+  .op-chart-scroll svg[data-palette="warm"] [data-series="secondary"][fill]:not([fill="none"]):not([fill="#ffffff"]) { fill: #8c5a30 !important; }
+  .op-chart-scroll svg[data-palette="warm"] [data-series="secondary"][stroke], .op-chart-scroll svg[data-palette="warm"] [data-series="secondary"][style*="stroke"] { stroke: #8c5a30 !important; }
+  .op-chart-scroll svg[data-palette="warm"] [data-series="tertiary"][fill]:not([fill="none"]):not([fill="#ffffff"]) { fill: #99526b !important; }
+  .op-chart-scroll svg[data-palette="warm"] [data-series="tertiary"][stroke], .op-chart-scroll svg[data-palette="warm"] [data-series="tertiary"][style*="stroke"] { stroke: #99526b !important; }
+  .op-chart-scroll svg[data-palette="cool"] [data-series="primary"][fill]:not([fill="none"]):not([fill="#ffffff"]) { fill: #246c91 !important; }
+  .op-chart-scroll svg[data-palette="cool"] [data-series="primary"][stroke], .op-chart-scroll svg[data-palette="cool"] [data-series="primary"][style*="stroke"] { stroke: #246c91 !important; }
+  .op-chart-scroll svg[data-palette="cool"] [data-series="secondary"][fill]:not([fill="none"]):not([fill="#ffffff"]) { fill: #5265a8 !important; }
+  .op-chart-scroll svg[data-palette="cool"] [data-series="secondary"][stroke], .op-chart-scroll svg[data-palette="cool"] [data-series="secondary"][style*="stroke"] { stroke: #5265a8 !important; }
+  .op-chart-scroll svg[data-palette="cool"] [data-series="tertiary"][fill]:not([fill="none"]):not([fill="#ffffff"]) { fill: #287b7a !important; }
+  .op-chart-scroll svg[data-palette="cool"] [data-series="tertiary"][stroke], .op-chart-scroll svg[data-palette="cool"] [data-series="tertiary"][style*="stroke"] { stroke: #287b7a !important; }
+}

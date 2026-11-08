@@ -1,0 +1,207 @@
+/* 记忆面板：与 SuperAgent 工作台的卡片 / 字段体系保持一致 */
+.sa-memory {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sa-memory-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sa-memory-intro h2 {
+  font-size: var(--sa-fs-lg);
+  font-weight: 620;
+  letter-spacing: -.015em;
+  color: var(--sa-text);
+}
+
+.sa-memory-intro p {
+  max-width: 68ch;
+  margin-top: 4px;
+  font-size: var(--sa-fs-sm);
+  line-height: 1.65;
+  color: var(--sa-text-2);
+}
+
+.sa-memory-filters {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 190px));
+}
+
+.sa-memory-form {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 14px 16px 15px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface);
+}
+
+.sa-memory-form-head h3 {
+  font-size: var(--sa-fs-base);
+  font-weight: 620;
+  color: var(--sa-text);
+}
+
+.sa-memory-form-head p {
+  margin-top: 2px;
+  font-size: var(--sa-fs-xs);
+  line-height: 1.6;
+  color: var(--sa-text-3);
+}
+
+.sa-memory-form .sa-field input,
+.sa-memory-form .sa-field textarea {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface);
+  color: var(--sa-text);
+  font-family: inherit;
+  font-size: var(--sa-fs-sm);
+}
+
+.sa-memory-form .sa-field textarea {
+  height: auto;
+  min-height: 74px;
+  padding: 8px 10px;
+  line-height: 1.65;
+  resize: vertical;
+}
+
+.sa-memory-form .sa-field input:focus,
+.sa-memory-form .sa-field textarea:focus {
+  outline: none;
+  border-color: var(--sa-accent);
+  box-shadow: var(--sa-ring);
+}
+
+.sa-memory-form-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.sa-memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sa-empty-card.sa-empty-card-stack {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 18px var(--sa-4);
+}
+
+.sa-memory-item {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 13px 15px 11px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface);
+  transition: border-color var(--sa-fast);
+}
+
+.sa-memory-item:hover {
+  border-color: var(--sa-line-strong);
+}
+
+.sa-memory-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sa-memory-item-head h3 {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-sm);
+  font-weight: 600;
+  color: var(--sa-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-memory-badges {
+  display: flex;
+  flex: none;
+  gap: 5px;
+}
+
+.sa-tag {
+  padding: 1px 7px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-2);
+  font-size: var(--sa-fs-2xs);
+  font-weight: 500;
+  color: var(--sa-text-2);
+}
+
+.sa-tag-off {
+  background: var(--sa-danger-soft);
+  color: var(--sa-danger);
+}
+
+.sa-memory-item > p {
+  font-size: var(--sa-fs-sm);
+  line-height: 1.7;
+  color: var(--sa-text);
+  overflow-wrap: anywhere;
+}
+
+.sa-memory-item-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--sa-line);
+}
+
+.sa-memory-item-foot small {
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-memory-item-actions {
+  display: flex;
+  flex: none;
+  gap: 12px;
+}
+
+.sa-memory-item-actions .sa-link {
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-link-danger {
+  color: var(--sa-danger);
+}
+
+@media (max-width: 620px) {
+  .sa-memory-filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sa-memory-item-foot {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+}

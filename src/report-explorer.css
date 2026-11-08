@@ -71,8 +71,8 @@
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 9px 10px;
-  background: #fff;
-  color: var(--muted);
+  background: var(--surface-1);
+  color: var(--ink);
   font: inherit;
   font-size: var(--text-base);
 }
@@ -175,7 +175,7 @@
   padding: 5px 9px;
   border: 1px solid var(--line);
   border-radius: 5px;
-  background: #fff;
+  background: var(--surface-1);
   max-width: 100%;
   color: var(--accent);
 }
@@ -327,7 +327,7 @@
   width: 100%;
   height: auto;
   min-width: 960px;
-  background: #fff;
+  background: var(--surface-1);
   border-radius: 5px;
 }
 
@@ -383,7 +383,7 @@
 .rex-export-actions button {
   border: 1px solid var(--line-strong);
   border-radius: 5px;
-  background: #fff;
+  background: var(--surface-1);
   color: var(--accent);
   padding: 6px 9px;
   font-size: var(--text-base);
@@ -818,4 +818,15 @@
   .rex-annotations:not([open]) > .rex-annotation-list {
     display: block;
   }
+}
+
+.boundary-tag {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--text-xs);
+  font-style: normal;
+  font-weight: 500;
 }

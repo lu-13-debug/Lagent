@@ -45,6 +45,64 @@
   width: 100%;
   text-overflow: ellipsis;
 }
+.model-combobox>input {
+  width: 100%;
+  text-overflow: ellipsis;
+}
+.model-options {
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 6px 0 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+.model-options li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.model-options li>span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-options li>small {
+  flex-shrink: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+.model-options li[aria-selected="true"]>span {
+  font-weight: 550;
+}
+.model-options li.is-active {
+  background: var(--surface-3);
+}
+.model-options li.model-options-empty,
+.model-options li.model-options-note {
+  cursor: default;
+  display: block;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.model-options li.model-options-note {
+  color: var(--faint);
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  margin-top: 4px;
+}
 @media(max-width:600px) {
   .model-catalog-status,.model-picker-footer .text-button,.model-picker-heading .text-button {
     font-size: var(--text-xs);

@@ -1,0 +1,92 @@
+.report-toc {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 4px 0 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  min-width: 0;
+  position: sticky;
+  top: var(--toc-top, 62px);
+  z-index: 6;
+}
+
+.report-toc-label {
+  flex: none;
+  padding: 4px 0;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  letter-spacing: .08em;
+}
+
+.report-toc ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.report-toc button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.report-toc button > span {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.report-toc button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.report-toc button:hover > span {
+  color: var(--accent);
+}
+
+.report-toc button.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.report-toc button.is-active > span {
+  color: var(--accent);
+}
+
+.report-toc :is(button):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.full-report :is(section, div, figure)[tabindex="-1"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+@media (max-width: 600px) {
+  .report-toc { position: static; flex-direction: column; gap: 8px; padding: 10px; }
+  .report-toc ol { gap: 5px; }
+  .report-toc button { padding: 5px 9px; }
+}
+
+@media print {
+  .report-toc { display: none !important; }
+}

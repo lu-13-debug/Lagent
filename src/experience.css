@@ -46,6 +46,10 @@
 .sample-report-banner strong { color: var(--ink); font-size: var(--text-base); line-height: var(--leading-body); }
 .sample-report-banner .button { white-space: normal; height: auto; min-height: 36px; padding: 8px 12px; }
 .readonly-label { font-size: var(--text-xs); color: var(--muted); padding-top: 8px; }
+.timezone-note { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: -8px 0 18px; padding: 7px 10px; font-size: var(--text-sm); color: var(--warning); background: var(--warning-soft); border: 1px solid var(--border); border-radius: 7px; }
+.timezone-note.confirmed { color: var(--muted); background: transparent; }
+.timezone-note .text-button { font-size: var(--text-sm); }
+.upload-timezone { max-width: 280px; margin: 10px 0 4px; }
 .sample-data-entry { flex-wrap: wrap; justify-content: space-between; padding: 20px; margin: 22px 0; }
 .sample-data-entry > div:first-child { flex: 1 1 260px; }
 .sample-data-entry h2 { font-size: var(--text-lg); }
