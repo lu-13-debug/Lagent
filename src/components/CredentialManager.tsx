@@ -9,10 +9,11 @@ import { suggestedModels } from '../model-providers';
 const protocolNames: Record<ModelProtocol, string> = { 'chat-completions': 'Chat Completions', anthropic: 'Anthropic Messages', responses: 'OpenAI Responses' };
 const emptyCredential: CredentialInput = { name: '', provider: '自定义兼容接口', baseUrl: 'https://api.openai.com/v1', protocol: 'chat-completions', apiKey: '' };
 
-export function CredentialManager({ credentials, profiles, writable, vaultReason, onSave, onDelete, onDetect }: {
+export function CredentialManager({ credentials, profiles, writable, vaultReason, onSave, onDelete, onUseForProfile, onDetect }: {
   credentials: ModelCredential[]; profiles: HubModelProfile[]; writable: boolean; vaultReason?: string | null;
   onSave: (input: CredentialInput, id?: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onUseForProfile?: (id: string) => void;
   onDetect: (id: string) => Promise<HubModelCatalog>;
 }) {
   const [editor, setEditor] = useState(false);
@@ -63,7 +64,7 @@ export function CredentialManager({ credentials, profiles, writable, vaultReason
   }
 
   return <section className="hub-section" aria-label="凭据库">
-    <div className="hub-section-heading"><div><h3>凭据库</h3><p>同一供应商可保存多组凭据，供不同模型配置使用。</p></div><button type="button" className="button secondary" disabled={!writable || !!busy} onClick={() => edit()}><Plus size={15} />新增凭据</button></div>
+    <div className="hub-section-heading"><div><h3>凭据库</h3><p>同一供应商可保存多组凭据，供不同模型配置使用。{credentials.length > 0 && `已保存 ${credentials.length} 条凭据 · ${new Set(credentials.map(item => item.provider)).size} 个供应商，每条独立加密。`}</p></div><button type="button" className="button secondary" disabled={!writable || !!busy} onClick={() => edit()}><Plus size={15} />新增凭据</button></div>
     {!writable && <p className="hub-notice" role="status">{vaultReason || '服务端未启用加密凭据库，请联系管理员配置部署主密钥。'} 可继续使用下方旧会话设置。</p>}
     {editor && <form className="hub-editor" onSubmit={event => { event.preventDefault(); void save(); }}>
       <div className="hub-editor-heading"><h4>{saved ? '编辑凭据' : '新增凭据'}</h4><button type="button" className="hub-icon-button" disabled={!!busy} aria-label="取消编辑凭据" onClick={() => { setEditor(false); setDraft({ ...emptyCredential }); setSaved(undefined); }}><X size={17} /></button></div>
@@ -78,7 +79,7 @@ export function CredentialManager({ credentials, profiles, writable, vaultReason
     {!credentials.length && !editor && <p className="hub-empty">尚无保存的凭据。添加后即可为不同分析阶段分配模型。</p>}
     <div className="hub-card-list">{credentials.map(item => {
       const count = profiles.filter(profile => profile.credentialId === item.id).length;
-      return <article className="hub-card" key={item.id}><div className="hub-card-heading"><div><h4><KeyRound size={15} />{item.name}</h4><p>{item.provider} · {protocolNames[item.protocol]}</p></div><span className="hub-badge">{item.hasKey ? `已保存 ${item.keyHint || ''}` : '未配置 Key'}</span></div><p className="hub-endpoint">{item.baseUrl}</p><div className="hub-card-footer"><small>用于 {count} 个模型配置 · 版本 {item.version}</small><div className="hub-actions"><button type="button" className="text-button" disabled={!!busy || !item.hasKey || !writable} onClick={() => void detect(item.id)}>{busy === item.id ? <Spinner size={13} /> : <RefreshCw size={13} />}检测模型</button><button type="button" className="text-button" disabled={!!busy || !writable} onClick={() => edit(item)}>编辑</button><button type="button" className="text-button danger-text" disabled={!!busy || !writable} onClick={() => setDeleting(item.id)}>删除</button></div></div>
+      return <article className="hub-card" key={item.id}><div className="hub-card-heading"><div><h4><KeyRound size={15} />{item.name}</h4><p>{item.provider} · {protocolNames[item.protocol]}</p></div><span className="hub-badge">{item.hasKey ? `已保存 · ${item.keyHint || '密钥已加密'}` : '未配置 Key'}</span></div><p className="hub-endpoint">{item.baseUrl}</p><div className="hub-card-footer"><small>用于 {count} 个模型配置 · 版本 {item.version}</small><div className="hub-actions">{onUseForProfile && <button type="button" className="text-button" disabled={!!busy || !item.hasKey || !writable} onClick={() => onUseForProfile(item.id)}><Plus size={13} />用它新建模型</button>}<button type="button" className="text-button" disabled={!!busy || !item.hasKey || !writable} onClick={() => void detect(item.id)}>{busy === item.id ? <Spinner size={13} /> : <RefreshCw size={13} />}检测模型</button><button type="button" className="text-button" disabled={!!busy || !writable} onClick={() => edit(item)}>编辑</button><button type="button" className="text-button danger-text" disabled={!!busy || !writable} onClick={() => setDeleting(item.id)}>删除</button></div></div>
         {deleting === item.id && <div className="hub-delete-confirm"><p>确认删除「{item.name}」？{count ? '请先删除或更换引用此凭据的模型配置。' : '此凭据将无法继续用于模型请求。'}</p><div className="hub-actions"><button type="button" className="button secondary" disabled={!!busy || count > 0} onClick={() => void remove(item.id)}>确认删除</button><button type="button" className="text-button" disabled={!!busy} onClick={() => setDeleting('')}>取消</button></div></div>}
         {catalog?.id === item.id && <div className="hub-catalog" role="status"><p>{catalog.result.models.length ? `检测到 ${catalog.result.models.length} 个模型${catalog.result.partial ? '（部分列表，可手动填写其他模型 ID）' : ''}。请在「模型配置」中选择或填写。` : '供应商没有返回模型列表，下面是目录里的常见型号，权限仍以供应商控制台为准。'}</p><div>{(catalog.result.models.length ? catalog.result.models.map(model => model.id) : suggestedModels(item.baseUrl)).map(model => <code key={model}>{model}</code>)}</div></div>}
       </article>;

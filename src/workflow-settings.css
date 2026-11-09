@@ -1,4 +1,4 @@
-.model-hub { padding: 0 0 24px; margin: 0 0 24px; border-bottom: 1px solid var(--border); color: var(--ink); }
+.model-hub { padding: 0 0 72px; margin: 0 0 24px; border-bottom: 1px solid var(--border); color: var(--ink); }
 .hub-title { margin-bottom: 18px; }
 .hub-title h3, .hub-section-heading h3 { font-size: var(--text-lg); font-weight: 600; line-height: 1.5; margin: 0; }
 .hub-title p, .hub-section-heading p { margin-top: 6px; font-size: var(--text-base); color: var(--muted); line-height: 1.7; }
@@ -6,6 +6,8 @@
 .hub-nav button { min-height: 40px; border: 1px solid transparent; border-radius: 7px; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); padding: 7px 8px; font-size: var(--text-sm); }
 .hub-nav button:hover { color: var(--ink); background: var(--surface-3, var(--accent-soft)); }
 .hub-nav button[aria-pressed="true"] { color: var(--ink); border-color: var(--border); background: var(--paper); font-weight: 600; }
+.hub-nav-count { min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; font-size: var(--text-xs); font-weight: 600; font-variant-numeric: tabular-nums; background: var(--surface-3, var(--accent-soft)); color: var(--muted); }
+.hub-nav button[aria-pressed="true"] .hub-nav-count { background: var(--accent-soft); color: var(--accent-ink, var(--ink)); }
 .hub-section { display: grid; gap: 16px; min-width: 0; }
 .hub-section-heading, .hub-editor-heading, .hub-card-heading, .hub-card-footer, .hub-save-bar { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; min-width: 0; }
 .hub-section-heading > div, .hub-card-heading > div { min-width: 0; }
