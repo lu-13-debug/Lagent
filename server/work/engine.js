@@ -44,6 +44,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   const outboxEnabled = options.outboxEnabled === true;
   const windowBridge = options.windowBridge || null;
   const projects = projectService(db, { environment: env, home: options.home });
+  const workspace = typeof options.workspace === 'string' && options.workspace ? options.workspace : null;
   const planSuggestionTimes = [];
   let drainingOutbox = false;
   let outboxTimer = null;
@@ -916,6 +917,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const tickets=db.list('ticket').map(publicTicket);
       return {
         capabilities:{work:true},
+        // 未绑定工作文件夹的对话，Agent 就在这个目录里读写。
+        workspace,
         tickets,
         attention:tickets.filter(t=>t.attention).map(t=>({ticketId:t.id,title:t.title,...t.attention})),
         datasets:store.list('dataset').slice(0,50).map(datasetMetadata),

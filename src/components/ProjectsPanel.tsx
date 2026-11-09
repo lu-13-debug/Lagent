@@ -27,11 +27,15 @@ const EXECUTOR_LABELS: Record<string, string> = {
   qwen: 'Qwen Code',
   'cursor-agent': 'Cursor Agent',
   dsh: 'DSH CLI',
+  codebuddy: 'CodeBuddy',
+  qoder: 'Qoder',
+  iflow: 'iFlow',
+  kimi: 'Kimi CLI',
   window: '窗口 Agent'
 };
 
 // 分派优先级：先 CLI（能改文件、能续接会话），再 ACP，最后其它本机 Agent。
-const DISPATCH_ORDER = ['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh'];
+const DISPATCH_ORDER = ['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi'];
 
 const STATUS_LABELS: Record<string, string> = {
   queued: '排队中',

@@ -26,7 +26,18 @@ const PROVIDERS = Object.freeze([
   { id: 'cursor-agent', name: 'Cursor Agent', executorId: 'cursor-agent', commands: ['cursor-agent'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
   { id: 'qwen', name: 'Qwen Code', executorId: 'qwen', commands: ['qwen'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
   { id: 'aider', name: 'Aider', executorId: null, commands: ['aider'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
-  { id: 'amp', name: 'Amp', executorId: null, commands: ['amp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' }
+  { id: 'amp', name: 'Amp', executorId: null, commands: ['amp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  // 国产编码 Agent：前四个提供调用适配器（沿用 -p 问答约定），其余先做识别 + 窗口匹配。
+  { id: 'codebuddy', name: 'CodeBuddy Code（腾讯）', executorId: 'codebuddy', commands: ['codebuddy', 'codebuddy-code'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'qoder', name: 'Qoder CLI（阿里）', executorId: 'qoder', commands: ['qoder', 'qodercli'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'iflow', name: 'iFlow CLI（心流）', executorId: 'iflow', commands: ['iflow'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'kimi', name: 'Kimi CLI（月之暗面）', executorId: 'kimi', commands: ['kimi'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'trae-agent', name: 'Trae Agent（字节）', executorId: null, commands: ['trae-agent', 'trae'], versionArgs: ['--version'], authArgs: [], authKind: 'generic', desktopMatches: /trae/i },
+  { id: 'comate', name: '文心快码 Comate（百度）', executorId: null, commands: ['comate', 'comate-cli'], versionArgs: ['--version'], authArgs: [], authKind: 'generic', desktopMatches: /comate|文心/i },
+  { id: 'lingma', name: '通义灵码（阿里）', executorId: null, commands: ['lingma', 'lingma-cli'], versionArgs: ['--version'], authArgs: [], authKind: 'generic', desktopMatches: /lingma|通义/i },
+  { id: 'codegeex', name: 'CodeGeeX（智谱）', executorId: null, commands: ['codegeex'], versionArgs: ['--version'], authArgs: [], authKind: 'generic', desktopMatches: /codegeex/i },
+  // WorkBuddy 目前以桌面客户端为主：有 CLI 就认命令，没有就按运行中的窗口识别。
+  { id: 'workbuddy', name: 'WorkBuddy', executorId: null, commands: ['workbuddy', 'work-buddy'], versionArgs: ['--version'], authArgs: [], authKind: 'generic', desktopMatches: /work\s*buddy/i }
 ]);
 
 const pathValue = env => env.PATH ?? env.Path ?? env.path ?? '';
@@ -194,7 +205,7 @@ const DESKTOP_MATCHES = Object.freeze({
 });
 
 function desktopFor(def, desktops) {
-  const pattern = DESKTOP_MATCHES[def.id];
+  const pattern = def.desktopMatches || DESKTOP_MATCHES[def.id];
   if (!pattern || !Array.isArray(desktops)) return null;
   return desktops.find(row => row && pattern.test(`${row.process || ''} ${row.title || ''}`)) || null;
 }

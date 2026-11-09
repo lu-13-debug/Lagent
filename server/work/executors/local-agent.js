@@ -4,6 +4,30 @@ import { resolveLocalCommand } from '../providers.js';
 
 const MAX_SUMMARY = 6000;
 const MAX_ERROR = 4000;
+const promptPlaceholder = '{prompt}';
+
+function customArgs(id) {
+  const key = `DATAAGENT_CLI_ARGS_${id.toUpperCase().replace(/-/g, '_')}`;
+  const raw = process.env[key];
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.every(item => typeof item === 'string') ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 各家 CLI 至少都要一个「只读问答」参数，写入时再追加它们自己的自动批准开关。
+ * 允许用 DATAAGENT_CLI_ARGS_<ID>（JSON 数组，`{prompt}` 代表提示词）覆盖默认模板：
+ * 这些国产 CLI 的参数并未完全统一，改参数不该等发版。
+ */
+function argTemplate(id, input, readArgs, writeArgs) {
+  const custom = customArgs(id);
+  const template = custom || (input.write === true ? [...readArgs, ...writeArgs] : readArgs);
+  return template.map(item => item.replaceAll(promptPlaceholder, input.prompt));
+}
 
 /**
  * 本机 Agent 适配器：把「探测到的命令行 Agent」变成可派活的执行器。
@@ -71,6 +95,48 @@ export const LOCAL_AGENT_PROFILES = Object.freeze({
     capabilities: ['cli', 'dsh', 'text-output', 'headless'],
     buildArgs(input) {
       return ['--profile', 'headless', input.prompt];
+    }
+  },
+  // 国产 Agent：这批 CLI 多数沿用 Claude Code 的非交互约定（-p 后跟提示词、stdout 出结论），
+  // 所以按同一套参数接入；各家若改过参数，可用 DATAAGENT_CLI_ARGS_<ID> 覆盖（见 argTemplate）。
+  codebuddy: {
+    id: 'codebuddy',
+    name: 'CodeBuddy Code（腾讯）',
+    commands: ['codebuddy', 'codebuddy-code'],
+    capability: '-p',
+    capabilities: ['cli', 'codebuddy', 'text-output', 'read-only', 'project-write'],
+    buildArgs(input) {
+      return argTemplate('codebuddy', input, ['-p', promptPlaceholder], ['--dangerously-skip-permissions']);
+    }
+  },
+  qoder: {
+    id: 'qoder',
+    name: 'Qoder CLI（阿里）',
+    commands: ['qoder', 'qodercli'],
+    capability: '-p',
+    capabilities: ['cli', 'qoder', 'text-output', 'read-only', 'project-write'],
+    buildArgs(input) {
+      return argTemplate('qoder', input, ['-p', promptPlaceholder], ['--dangerously-skip-permissions']);
+    }
+  },
+  iflow: {
+    id: 'iflow',
+    name: 'iFlow CLI（心流）',
+    commands: ['iflow'],
+    capability: '-p',
+    capabilities: ['cli', 'iflow', 'text-output', 'read-only', 'project-write'],
+    buildArgs(input) {
+      return argTemplate('iflow', input, ['-p', promptPlaceholder], ['--dangerously-skip-permissions']);
+    }
+  },
+  kimi: {
+    id: 'kimi',
+    name: 'Kimi CLI（月之暗面）',
+    commands: ['kimi'],
+    capability: '--print',
+    capabilities: ['cli', 'kimi', 'text-output', 'read-only', 'project-write'],
+    buildArgs(input) {
+      return argTemplate('kimi', input, ['--print', promptPlaceholder], ['--yes']);
     }
   }
 });

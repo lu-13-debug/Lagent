@@ -12,7 +12,11 @@ export const EXTERNAL_EXECUTORS = Object.freeze([
   'gemini',
   'qwen',
   'cursor-agent',
-  'dsh'
+  'dsh',
+  'codebuddy',
+  'qoder',
+  'iflow',
+  'kimi'
 ]);
 export const WORK_POLICY_ID = 'default';
 

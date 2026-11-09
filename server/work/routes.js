@@ -3,13 +3,13 @@ import { workEvents } from './effects.js';
 import { registerMobileWorkRoutes } from '../mobile-gateway.js';
 import { registerMcpRoutes } from './mcp.js';
 
-export function registerWork(app,store,executor,{isSessionValid,onConnect,mobileGateway,mobileOwnerId,onMobileEventConnect,planner,windowBridge,providerRegistry,allowFilesystemBrowser=false}={}) {
+export function registerWork(app,store,executor,{isSessionValid,onConnect,mobileGateway,mobileOwnerId,onMobileEventConnect,planner,windowBridge,providerRegistry,workspace,allowFilesystemBrowser=false}={}) {
   const events=workEvents();
   const publish=event=>{
     events.publish(event);
     if(mobileGateway)mobileGateway.publish(mobileOwnerId,event);
   };
-  const engine=createWorkEngine(store,executor,publish,{planner,windowBridge});
+  const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace});
   app.get('/api/work/bootstrap',(_req,res)=>res.json(engine.bootstrap()));
   app.get('/api/work/projects',(_req,res)=>res.json({projects:engine.listProjects()}));
   if(allowFilesystemBrowser)app.get('/api/work/files',(req,res)=>res.json(engine.listDirectory({path:req.query?.path})));

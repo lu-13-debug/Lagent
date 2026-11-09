@@ -139,6 +139,19 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 - 超时与输出上限与 codex/claude 一致（默认 900000ms / 8MB，可用 `DATAAGENT_CLI_TIMEOUT_MS` 覆盖）。
 - 这些 id 同时加入 `policy.allowedExecutors` 白名单与项目工作区执行器清单；Agent 页的开关写的就是 `allowedExecutors`。
 
+国内 Agent 沿用同一套约定（`-p` 问答 + 写入自动批准），命令名与开关可覆盖：
+
+| id | 名称 | 只读 | 写入 |
+| --- | --- | --- | --- |
+| `codebuddy` | CodeBuddy Code（腾讯） | `-p <prompt>` | 追加 `--dangerously-skip-permissions` |
+| `qoder` | Qoder CLI（阿里） | `-p <prompt>` | 追加 `--dangerously-skip-permissions` |
+| `iflow` | iFlow CLI（心流） | `-p <prompt>` | 追加 `--dangerously-skip-permissions` |
+| `kimi` | Kimi CLI（月之暗面） | `--print <prompt>` | 追加 `--yes` |
+
+- 参数模板可用 `DATAAGENT_CLI_ARGS_<ID>` 覆盖，值是 JSON 字符串数组，`{prompt}` 占位符会被替换（例如 `DATAAGENT_CLI_ARGS_KIMI=["-p","{prompt}"]`）；用户级环境变量覆盖失败时请检查是否为合法 JSON 数组。
+- Trae Agent、文心快码 Comate、通义灵码、CodeGeeX、WorkBuddy 目前只做识别（`executorId: null`）：本机装了 CLI 会显示版本与路径，没装则按运行中的桌面窗口匹配，提示用「窗口 · <进程名>」发送指令。要变成可调度执行器，需要在 `server/work/executors/local-agent.js` 补一档参数模板，并加入 `EXTERNAL_EXECUTORS` 与 `PROJECT_CHAT_EXECUTORS`。
+- `GET /api/work/bootstrap` 额外返回 `workspace`：未绑定工作文件夹的对话，Agent 就在这个目录里读写（本地模式默认是仓库根目录）。项目对话始终以项目路径为 cwd。
+
 - `GET /api/work/projects` → `{projects:[ProjectWorkspace]}`；`POST /api/work/projects {path,name?}` → `201/200 {project,created}`。path 必须是存在的绝对目录，服务端取 realpath 后拒绝磁盘根目录与 `Windows`、`Program Files*`、`ProgramData`；同路径重复导入返回 `created:false` 与原记录。只保存记录，不复制、移动或删除本地文件。最多 100 个项目。
 - `POST /api/work/command {text,executorId,executorInput}` 的浏览器执行器受 `policy.limits.browserHosts` 约束：列表为空时不限制；非空时目标主机必须等于其中一项或以 `.<项>` 结尾，否则 403「浏览器只允许访问 …」。
 - `github` 执行器不再要求 `GITHUB_TOKEN`：无 token 时匿名读取公开仓库，新增 `search` 动作（`GET https://api.github.com/search/repositories?q=&sort=stars&order=desc&per_page=`，返回 `{action:'search',query,total,count,items:[{fullName,stars,language,description,url,updatedAt}]}`，`limit` 1–20，默认 5）。计划/指挥里只给一句话时，默认动作是 `search`，中文句子会先被压成英文关键词再检索。

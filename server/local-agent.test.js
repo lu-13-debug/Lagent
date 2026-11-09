@@ -45,8 +45,8 @@ function fakeChild({ chunks = [], stderr = '', code = 0 } = {}) {
   return child;
 }
 
-test('L1 五个本机 Agent 档位按写入开关拼参数', () => {
-  assert.deepEqual(LOCAL_AGENT_IDS, ['opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh']);
+test('L1 九个本机 Agent 档位按写入开关拼参数', () => {
+  assert.deepEqual(LOCAL_AGENT_IDS, ['opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi']);
 
   assert.deepEqual(
     LOCAL_AGENT_PROFILES.opencode.buildArgs({ prompt: '读一下 README' }, 'C:\\proj'),

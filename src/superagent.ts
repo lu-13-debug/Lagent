@@ -70,6 +70,8 @@ export interface WorkBootstrap {
   policy: WorkPolicy;
   plans?: WorkPlanSummary[];
   projects?: WorkProject[];
+  /** 未绑定工作文件夹时，Agent 读写文件所在的目录。 */
+  workspace?: string | null;
 }
 export interface WorkAssignment { id: string; ticketId: string; executor: string; status: string; startedAt?: string; endedAt?: string; sessionId?: string; error?: string }
 export type WorkReportKind = 'progress' | 'waiting' | 'ready' | 'blocked' | 'failed' | 'dropped';

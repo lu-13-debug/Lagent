@@ -33,9 +33,9 @@ const reportKindNames: Record<string, string> = { ready: '已就绪', failed: '�
 const proposalNames: Record<string, string> = { proposed: '待决策', needsApproval: '需确认', accepted: '已接受', rejected: '已拒绝' };
 const quickCommands = ['检查 GitHub 仓库状态', '浏览网页并总结', '运行终端命令'];
 const executorIds = ['terminal', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'browser', 'github', 'window'];
-const executorNames: Record<string, string> = { analysis: '数据分析', terminal: '受控终端', codex: 'Codex CLI', 'claude-code': 'Claude Code', 'claude-acp': 'Claude ACP', 'codex-acp': 'Codex ACP', 'dsh-acp': 'DSH ACP', opencode: 'OpenCode', gemini: 'Gemini CLI', qwen: 'Qwen Code', 'cursor-agent': 'Cursor Agent', dsh: 'DSH CLI', browser: '浏览器', github: 'GitHub', window: '窗口 Agent' };
+const executorNames: Record<string, string> = { analysis: '数据分析', terminal: '受控终端', codex: 'Codex CLI', 'claude-code': 'Claude Code', 'claude-acp': 'Claude ACP', 'codex-acp': 'Codex ACP', 'dsh-acp': 'DSH ACP', opencode: 'OpenCode', gemini: 'Gemini CLI', qwen: 'Qwen Code', 'cursor-agent': 'Cursor Agent', dsh: 'DSH CLI', codebuddy: 'CodeBuddy', qoder: 'Qoder', iflow: 'iFlow', kimi: 'Kimi CLI', browser: '浏览器', github: 'GitHub', window: '窗口 Agent' };
 // 可在对话/项目里直接派活的执行器（不含終端、浏览器、GitHub 这类内置工具）。
-const conversationExecutorIds = ['analysis', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh'];
+const conversationExecutorIds = ['analysis', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi'];
 // 项目工作文件夹里能建会话的执行器：数据分析是内置工具，需要在数据集上跑，不能进项目。
 const projectExecutorIds = ['window', ...conversationExecutorIds.filter(id => id !== 'analysis')];
 const terminalStatuses = ['completed', 'failed', 'blocked', 'cancelled'];
@@ -1098,7 +1098,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             <option value="">不使用（在软件内执行）</option>
             {sortedFolders.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
-          <span className="sa-scope-hint">{newFolder ? 'Agent 会在这个目录里读写文件，工单仍需你确认' : '选择一个文件夹，Agent 才能改项目里的文件'}</span>
+          <span className="sa-scope-hint">{newFolder ? 'Agent 会在这个目录里读写文件，工单仍需你确认' : work?.workspace ? `不选则在 ${work.workspace} 里读写文件` : '选择一个文件夹，Agent 才能改项目里的文件'}</span>
         </div>}
         {dispatchToggle && <div className="sa-composer-modes">{dispatchToggle}<span className="sa-inline-note">已选 {selectedAgents.length} 个 Agent，{dispatchMode === 'split' ? '任务会先拆成子任务' : '各自独立作答'}</span></div>}
         <textarea id="sa-command" value={command} maxLength={3000} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} rows={2} placeholder={selectedAgents.length > 1 ? (dispatchMode === 'split' ? '描述目标，例如：重构鉴权模块，一个 Agent 改代码、一个写测试、一个更新文档' : '描述要对比的问题，例如：审查这段鉴权逻辑是否有漏洞？') : '描述目标，例如：检查 DataAgent 仓库的 CI，修复失败项并开 PR'} />
