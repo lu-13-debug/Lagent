@@ -19,6 +19,8 @@ export function validateEffort(settings) {
   return effort;
 }
 const counter = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+// 推理型模型普遍拒绝自定义采样参数；按型号名兜底，避免第三方兼容接口各自报错。
+const REASONING_MODEL = /(reason|thinking|^o[1-4]\b|gpt-5|r1\b|qwq)/i;
 export function providerUsage(raw, protocol) {
   if (!raw || typeof raw !== 'object') return null;
   const result = {
@@ -44,7 +46,7 @@ export function modelRequest(baseUrl, model, messages, key, maxTokens, connectio
   };
   return {
     protocol: 'chat-completions', endpoint: `${baseUrl}/chat/completions`, headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: { model, messages, ...(['api.deepseek.com', 'api.openai.com'].includes(hostname) || baseUrl === 'https://opencode.ai/inference/go/openai/v1' ? {} : { temperature: 0.2 }),
+    body: { model, messages, ...(['api.deepseek.com', 'api.openai.com'].includes(hostname) || baseUrl === 'https://opencode.ai/inference/go/openai/v1' || REASONING_MODEL.test(model) ? {} : { temperature: 0.2 }),
       ...(effort === 'default' ? {} : { reasoning_effort: effort }),
       ...(connectionTest && hostname === 'api.deepseek.com' && ['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash'].includes(model) ? { thinking: { type: 'disabled' } } : {}),
       ...(hostname === 'api.openai.com' ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }),

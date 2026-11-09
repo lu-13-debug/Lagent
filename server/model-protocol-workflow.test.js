@@ -24,6 +24,16 @@ test('Chat和Anthropic发送各自effort字段，不把默认档发为原生字�
   await chat({ settings: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.5', protocol: 'chat-completions', effort: 'default' }, key: 'fake-key', messages, fetchImpl });
   assert.equal(captured[2].reasoning_effort, undefined);
 });
+test('第三方兼容接口里的推理模型同样省略采样参数', async () => {
+  const captured = [];
+  const fetchImpl = async (_url, init) => { captured.push(JSON.parse(init.body)); return Response.json({ choices: [{ message: { content: 'OK' } }] }); };
+  for (const model of ['deepseek-ai/DeepSeek-R1', 'Qwen/Qwen3-235B-A22B-Thinking-2507', 'gpt-5-codex', 'o3-mini']) {
+    await chat({ settings: { baseUrl: 'https://api.siliconflow.cn/v1', model, protocol: 'chat-completions' }, key: 'fake-key', messages, fetchImpl });
+  }
+  await chat({ settings: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'glm-4.6', protocol: 'chat-completions' }, key: 'fake-key', messages, fetchImpl });
+  assert.deepEqual(captured.slice(0, 4).map(body => body.temperature), [undefined, undefined, undefined, undefined]);
+  assert.equal(captured[4].temperature, 0.2, '普通对话模型仍应带采样温度');
+});
 test('未知型号、代理主机与不支持档位在发请求前拒绝，能力表必须精确匹配', async () => {
   assert.equal(typeof protocol.modelCapabilities, 'function', '必须提供模型能力表');
   assert.deepEqual(protocol.modelCapabilities({ baseUrl: 'https://api.openai.com/v1', protocol: 'responses', model: 'gpt-5.4-future' }).efforts, ['default']);

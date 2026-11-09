@@ -4,7 +4,9 @@ import { api } from '../api';
 import { useAuth } from '../auth-context';
 import type { ModelOption, Settings } from '../types';
 import { Modal, Spinner } from './ui';
-import { providerPresets, profileKey, readProfiles, writeProfiles, modelDiagnosis } from '../model-profiles';
+import { profileKey, readProfiles, writeProfiles, modelDiagnosis } from '../model-profiles';
+import { providerByUrl, protocolLabel } from '../model-providers';
+import { ProviderCatalog } from './ProviderCatalog';
 import type { ModelProfile } from '../model-profiles';
 import './model-settings.css';
 import { AppearanceControls } from './AppearanceSettings';
@@ -82,13 +84,12 @@ export function SettingsModal({ settings, close, onSaved, notify }: {
     return () => { active = false; controller.abort(); window.clearTimeout(timer); };
   }, [canonical, addressError, key, keyReady, aiAllowed, refresh]);
 
-  function changeAddress(value: string) {
+  function changeAddress(value: string, presetModel?: string) {
     if (endpoint(value)?.baseUrl !== endpoint(baseUrl)?.baseUrl) setKey('');
     setDiagnostic(null);
-    setBaseUrl(value); setModel(''); setTestResult(''); setError('');
-    const host = endpoint(value)?.url.hostname;
-    const known: Record<string, string> = { 'api.deepseek.com': 'DeepSeek', 'api.anthropic.com': 'Claude（Anthropic）', 'api.openai.com': 'OpenAI' };
-    if (host && known[host]) setProvider(known[host]);
+    setBaseUrl(value); setModel(presetModel || ''); setTestResult(''); setError('');
+    const preset = providerByUrl(endpoint(value)?.baseUrl || value);
+    if (preset) setProvider(preset.name);
   }
   function toggleManual() { manualRef.current = !manual; setManual(!manual); setTestResult(''); }
 
@@ -129,7 +130,10 @@ export function SettingsModal({ settings, close, onSaved, notify }: {
         onSaved(result.settings);
       }} />
       <section className="legacy-model-settings" aria-label="旧会话模型设置"><h3>旧会话模型设置</h3><p>关闭阶段模型工作流后使用此入口。此处的 Key 仅保留在当前会话；凭据库的 Key 独立加密保存。</p></section>
-      <section className="provider-presets" aria-label="供应商预设"><h3>供应商预设</h3><div>{providerPresets.map(preset => { const allowed = !cloud || modelHosts.includes(new URL(preset.baseUrl).hostname); return <button className="button secondary" key={preset.name} disabled={!!busy || !allowed} onClick={() => { changeAddress(preset.baseUrl); setProvider(preset.name); }}>{preset.name}{!allowed ? '（未开放）' : ''}</button>; })}</div><p>协议：{parsed?.url.hostname === 'api.anthropic.com' ? 'Claude Messages' : 'Chat Completions'} · 文本对话；具体模型能力与权限需检测确认。</p></section>
+      <section className="provider-presets" aria-label="供应商目录"><h3>供应商目录</h3>
+        <ProviderCatalog disabled={!!busy} allowed={preset => !cloud || modelHosts.includes(new URL(preset.baseUrl).hostname)} onPick={preset => { changeAddress(preset.baseUrl, preset.models[0]); setProvider(preset.name); }} />
+        <p>协议：{protocolLabel(providerByUrl(canonical)?.protocol || 'chat-completions')}；模型列表会按 Key 权限自动检测，检测不到时可手动填写模型 ID。</p>
+      </section>
       {parsed?.url.hostname === 'opencode.ai' && <p className="field-help" role="note">OpenCode Go 主要面向编码代理；本数据分析是否符合套餐使用范围，请向 OpenCode 确认。各模型的数据保留与训练政策不同，请先核对供应商的隐私说明。</p>}
       <section className="model-profiles" aria-label="模型配置档案"><div className="model-picker-heading"><h3>配置档案</h3><button className="text-button" disabled={!!busy || !!addressError || !model.trim()} onClick={saveProfile}>保存当前档案</button></div><label className="field">切换档案<select aria-label="切换模型配置档案" disabled={!!busy || !profiles.length} value="" onChange={event => { const profile = profiles[Number(event.target.value)]; if (event.target.value !== '' && profile) applyProfile(profile); }}><option value="">{profiles.length ? '选择地址与模型档案' : '尚无保存的档案'}</option>{profiles.map((profile, index) => <option key={profile.baseUrl + profile.model} value={index}>{profile.provider} · {profile.model}</option>)}</select></label><p>仅保存在此设备的当前账号下，不保存 Key；切换地址后需填写对应的 Key。</p>{profiles.length > 0 && <details><summary>管理档案（{profiles.length}）</summary>{profiles.map((profile, index) => <div className="profile-row" key={profile.baseUrl + profile.model}><span>{profile.provider} · {profile.model}<small>{profile.baseUrl}</small></span><button className="text-button" disabled={!!busy} onClick={() => setProfiles(previous => previous.filter((_, itemIndex) => itemIndex !== index))} aria-label={'删除档案 ' + profile.model}>删除</button></div>)}</details>}</section>
       <div className="settings-notice"><LockKeyhole size={19} /><p>{cloud ? 'API Key 仅保留在云端本次登录会话的内存中，退出或服务重启后需重新填写。' : 'API Key 仅保留在本机服务内存中。'}分析时只发送业务背景与聚合指标，不发送用户标识。</p></div>

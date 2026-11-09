@@ -37,6 +37,7 @@ import { ReportExplorer, assertExplorationSource, REPORT_EXPLORE_TIMEOUT_MESSAGE
 import { reportMetadata, updateReportMetadata, continuationInput, continueFromReport } from './report-assets.js';
 import { getProfile } from './domain-profiles.js';
 import { registerModelHub } from './model-hub.js';
+import { localCredentialKey } from './local-key.js';
 import { configureMultiTask } from './multi-workflow.js';
 import { restoreReusableArtifacts } from './artifact-lifecycle.js';
 import { reportContentHash } from './report-version.js';
@@ -173,7 +174,8 @@ export function createApp(options = {}) {
     next();
   });
   registerMemory(app, store, options.userId || 'local');
-  modelHub = registerModelHub(app, { store, ownerId: options.userId || 'local', masterKey: options.credentialMasterKey ?? process.env.DATAAGENT_CREDENTIAL_MASTER_KEY, assertModelSettings: options.assertModelSettings, fetchImpl: options.fetchImpl });
+  const configuredMasterKey = options.credentialMasterKey || process.env.DATAAGENT_CREDENTIAL_MASTER_KEY || (options.cloud ? undefined : localCredentialKey(storeDir));
+  modelHub = registerModelHub(app, { store, ownerId: options.userId || 'local', masterKey: configuredMasterKey, assertModelSettings: options.assertModelSettings, fetchImpl: options.fetchImpl });
   const agentPlanner = createAgentPlanner({ env: process.env });
   const workBrain = createWorkBrain({ modelHub, fetchImpl: options.fetchImpl || fetch });
   workflow.modelHub = modelHub;

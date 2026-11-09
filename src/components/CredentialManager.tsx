@@ -3,6 +3,7 @@ import { KeyRound, Plus, RefreshCw, Save, X } from 'lucide-react';
 import { credentialPayload } from '../workflow-types';
 import type { CredentialInput, HubModelCatalog, HubModelProfile, ModelCredential, ModelProtocol } from '../workflow-types';
 import { Spinner } from './ui';
+import { ProviderCatalog } from './ProviderCatalog';
 
 const protocolNames: Record<ModelProtocol, string> = { 'chat-completions': 'Chat Completions', anthropic: 'Anthropic Messages', responses: 'OpenAI Responses' };
 const emptyCredential: CredentialInput = { name: '', provider: '自定义兼容接口', baseUrl: 'https://api.openai.com/v1', protocol: 'chat-completions', apiKey: '' };
@@ -53,6 +54,7 @@ export function CredentialManager({ credentials, profiles, writable, vaultReason
     {!writable && <p className="hub-notice" role="status">{vaultReason || '服务端未启用加密凭据库，请联系管理员配置部署主密钥。'} 可继续使用下方旧会话设置。</p>}
     {editor && <form className="hub-editor" onSubmit={event => { event.preventDefault(); void save(); }}>
       <div className="hub-editor-heading"><h4>{saved ? '编辑凭据' : '新增凭据'}</h4><button type="button" className="hub-icon-button" disabled={!!busy} aria-label="取消编辑凭据" onClick={() => { setEditor(false); setDraft({ ...emptyCredential }); setSaved(undefined); }}><X size={17} /></button></div>
+      <ProviderCatalog compact disabled={!!busy} onPick={preset => setDraft({ ...draft, provider: preset.name, baseUrl: preset.baseUrl, protocol: preset.protocol, apiKey: '' })} />
       <div className="hub-form-grid"><label className="field">凭据名称<input required maxLength={80} value={draft.name} placeholder="例如：工作账号" disabled={!!busy} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label><label className="field">供应商名称<input required maxLength={80} value={draft.provider} disabled={!!busy} onChange={event => setDraft({ ...draft, provider: event.target.value })} /></label></div>
       <label className="field">API 基础地址<input aria-label="API 基础地址" required type="url" value={draft.baseUrl} placeholder="https://api.example.com/v1" disabled={!!busy} onChange={event => setDraft({ ...draft, baseUrl: event.target.value, apiKey: '' })} /><small>云端地址需在管理员允许的主机范围内。</small></label>
       <label className="field">接口协议<select value={draft.protocol} disabled={!!busy} onChange={event => setDraft({ ...draft, protocol: event.target.value as ModelProtocol, apiKey: '' })}>{Object.entries(protocolNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>

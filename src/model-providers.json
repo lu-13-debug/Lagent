@@ -1,0 +1,302 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "deepseek",
+      "name": "DeepSeek 深度求索",
+      "region": "cn",
+      "baseUrl": "https://api.deepseek.com",
+      "protocol": "chat-completions",
+      "models": ["deepseek-chat", "deepseek-reasoner"],
+      "keyUrl": "https://platform.deepseek.com/api_keys",
+      "note": "官方直连；deepseek-reasoner 不支持 temperature 等采样参数。"
+    },
+    {
+      "id": "moonshot",
+      "name": "月之暗面 Kimi",
+      "region": "cn",
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "protocol": "chat-completions",
+      "models": ["kimi-k2-0905-preview", "kimi-k2-turbo-preview", "moonshot-v1-128k"],
+      "keyUrl": "https://platform.moonshot.cn/console/api-keys",
+      "note": "长上下文见长，编码任务建议用 kimi-k2 系列。"
+    },
+    {
+      "id": "zhipu",
+      "name": "智谱 GLM",
+      "region": "cn",
+      "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+      "protocol": "chat-completions",
+      "models": ["glm-4.6", "glm-4.5", "glm-4.5-air"],
+      "keyUrl": "https://open.bigmodel.cn/usercenter/apikeys",
+      "note": "OpenAI 兼容接口，路径是 /api/paas/v4。"
+    },
+    {
+      "id": "qwen",
+      "name": "阿里通义千问",
+      "region": "cn",
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "protocol": "chat-completions",
+      "models": ["qwen-max", "qwen-plus", "qwen-turbo", "qwen3-max"],
+      "keyUrl": "https://bailian.console.aliyun.com/",
+      "note": "用百炼的兼容模式地址，不要填 /api/v1 原生接口。"
+    },
+    {
+      "id": "hunyuan",
+      "name": "腾讯混元",
+      "region": "cn",
+      "baseUrl": "https://api.hunyuan.cloud.tencent.com/v1",
+      "protocol": "chat-completions",
+      "models": ["hunyuan-turbos-latest", "hunyuan-plus-latest"],
+      "keyUrl": "https://console.cloud.tencent.com/hunyuan/api-key",
+      "note": "OpenAI 兼容接口。"
+    },
+    {
+      "id": "doubao",
+      "name": "火山方舟 豆包",
+      "region": "cn",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+      "protocol": "chat-completions",
+      "models": ["doubao-seed-1-6-250615"],
+      "keyUrl": "https://console.volcengine.com/ark",
+      "note": "模型名可以填推理接入点 ID（ep-…），以方舟控制台为准。"
+    },
+    {
+      "id": "qianfan",
+      "name": "百度文心千帆",
+      "region": "cn",
+      "baseUrl": "https://qianfan.baidubce.com/v2",
+      "protocol": "chat-completions",
+      "models": ["ernie-4.5-turbo-128k", "ernie-x1-turbo-32k"],
+      "keyUrl": "https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application",
+      "note": "v2 是 OpenAI 兼容接口；旧版 v1 需要 access_token，不适用。"
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax",
+      "region": "cn",
+      "baseUrl": "https://api.minimax.chat/v1",
+      "protocol": "chat-completions",
+      "models": ["MiniMax-M2", "abab6.5s-chat"],
+      "keyUrl": "https://platform.minimaxi.com/user-center/basic-information/interface-key",
+      "note": "若返回 GroupId 相关错误，请检查账号是否开通对应模型。"
+    },
+    {
+      "id": "spark",
+      "name": "讯飞星火",
+      "region": "cn",
+      "baseUrl": "https://spark-api-open.xf-yun.com/v1",
+      "protocol": "chat-completions",
+      "models": ["4.0Ultra", "generalv3.5"],
+      "keyUrl": "https://console.xfyun.cn/services/cbm",
+      "note": "HTTP 接口模型名与控制台版本号对应，以控制台为准。"
+    },
+    {
+      "id": "stepfun",
+      "name": "阶跃星辰 StepFun",
+      "region": "cn",
+      "baseUrl": "https://api.stepfun.com/v1",
+      "protocol": "chat-completions",
+      "models": ["step-2-16k", "step-1-8k"],
+      "keyUrl": "https://platform.stepfun.com/interface-key",
+      "note": "OpenAI 兼容接口。"
+    },
+    {
+      "id": "baichuan",
+      "name": "百川智能",
+      "region": "cn",
+      "baseUrl": "https://api.baichuan-ai.com/v1",
+      "protocol": "chat-completions",
+      "models": ["Baichuan4-Air", "Baichuan4-Turbo"],
+      "keyUrl": "https://platform.baichuan-ai.com/console/apikey",
+      "note": "OpenAI 兼容接口。"
+    },
+    {
+      "id": "yi",
+      "name": "零一万物 Yi",
+      "region": "cn",
+      "baseUrl": "https://api.lingyiwanwu.com/v1",
+      "protocol": "chat-completions",
+      "models": ["yi-lightning", "yi-large"],
+      "keyUrl": "https://platform.lingyiwanwu.com/apikeys",
+      "note": "OpenAI 兼容接口。"
+    },
+    {
+      "id": "siliconflow",
+      "name": "硅基流动 SiliconFlow",
+      "region": "cn",
+      "baseUrl": "https://api.siliconflow.cn/v1",
+      "protocol": "chat-completions",
+      "models": ["deepseek-ai/DeepSeek-V3", "Qwen/Qwen3-235B-A22B"],
+      "keyUrl": "https://cloud.siliconflow.cn/account/ak",
+      "note": "聚合平台，模型名必须带厂商前缀。"
+    },
+    {
+      "id": "modelscope",
+      "name": "魔搭 ModelScope",
+      "region": "cn",
+      "baseUrl": "https://api-inference.modelscope.cn/v1",
+      "protocol": "chat-completions",
+      "models": ["Qwen/Qwen3-235B-A22B-Instruct-2507"],
+      "keyUrl": "https://modelscope.cn/my/myaccesstoken",
+      "note": "模型名带组织前缀，免费额度有限。"
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "region": "global",
+      "baseUrl": "https://api.openai.com/v1",
+      "protocol": "chat-completions",
+      "models": ["gpt-5.5", "gpt-5.4", "gpt-4.1"],
+      "keyUrl": "https://platform.openai.com/api-keys",
+      "note": "支持 Chat Completions；gpt-5 系列会改用 max_completion_tokens。"
+    },
+    {
+      "id": "anthropic",
+      "name": "Claude（Anthropic）",
+      "region": "global",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "protocol": "anthropic",
+      "models": ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"],
+      "keyUrl": "https://platform.claude.com/settings/keys",
+      "note": "Messages 协议；Claude Code 用的也是这套接口。"
+    },
+    {
+      "id": "gemini",
+      "name": "Google Gemini",
+      "region": "global",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "protocol": "chat-completions",
+      "models": ["gemini-2.5-pro", "gemini-2.5-flash"],
+      "keyUrl": "https://aistudio.google.com/app/apikey",
+      "note": "用 OpenAI 兼容端点（路径以 /openai 结尾）。"
+    },
+    {
+      "id": "xai",
+      "name": "xAI Grok",
+      "region": "global",
+      "baseUrl": "https://api.x.ai/v1",
+      "protocol": "chat-completions",
+      "models": ["grok-4", "grok-3"],
+      "keyUrl": "https://console.x.ai/",
+      "note": "OpenAI 兼容接口。"
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral",
+      "region": "global",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "protocol": "chat-completions",
+      "models": ["mistral-large-latest", "mistral-medium-latest"],
+      "keyUrl": "https://console.mistral.ai/api-keys",
+      "note": "OpenAI 兼容接口。"
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "region": "global",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "protocol": "chat-completions",
+      "models": ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"],
+      "keyUrl": "https://console.groq.com/keys",
+      "note": "推理速度快，适合做规划与校验。"
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "region": "global",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "protocol": "chat-completions",
+      "models": ["anthropic/claude-sonnet-4.5", "openai/gpt-5"],
+      "keyUrl": "https://openrouter.ai/settings/keys",
+      "note": "聚合平台，模型名是「厂商/模型」。"
+    },
+    {
+      "id": "together",
+      "name": "Together AI",
+      "region": "global",
+      "baseUrl": "https://api.together.xyz/v1",
+      "protocol": "chat-completions",
+      "models": ["meta-llama/Llama-3.3-70B-Instruct-Turbo"],
+      "keyUrl": "https://api.together.ai/settings/api-keys",
+      "note": "开源模型托管平台。"
+    },
+    {
+      "id": "fireworks",
+      "name": "Fireworks AI",
+      "region": "global",
+      "baseUrl": "https://api.fireworks.ai/inference/v1",
+      "protocol": "chat-completions",
+      "models": ["accounts/fireworks/models/llama-v3p3-70b-instruct"],
+      "keyUrl": "https://fireworks.ai/account/api-keys",
+      "note": "模型名带 accounts/… 前缀。"
+    },
+    {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "region": "global",
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "protocol": "chat-completions",
+      "models": ["llama-3.3-70b"],
+      "keyUrl": "https://cloud.cerebras.ai/",
+      "note": "OpenAI 兼容接口。"
+    },
+    {
+      "id": "deepinfra",
+      "name": "DeepInfra",
+      "region": "global",
+      "baseUrl": "https://api.deepinfra.com/v1/openai",
+      "protocol": "chat-completions",
+      "models": ["meta-llama/Llama-3.3-70B-Instruct"],
+      "keyUrl": "https://deepinfra.com/dash/api_keys",
+      "note": "端点路径是 /v1/openai。"
+    },
+    {
+      "id": "opencode-go",
+      "name": "OpenCode Go 套餐",
+      "region": "global",
+      "baseUrl": "https://opencode.ai/inference/go/openai/v1",
+      "protocol": "chat-completions",
+      "models": ["grok-code"],
+      "keyUrl": "https://opencode.ai/auth",
+      "note": "套餐按订阅计费，仅限编码代理场景，请核对使用范围。"
+    },
+    {
+      "id": "opencode-zen",
+      "name": "OpenCode Zen 套餐",
+      "region": "global",
+      "baseUrl": "https://opencode.ai/zen/v1",
+      "protocol": "chat-completions",
+      "models": ["gpt-5-codex"],
+      "keyUrl": "https://opencode.ai/auth",
+      "note": "Zen 提供精选编码模型，模型名以控制台为准。"
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama（本机）",
+      "region": "local",
+      "baseUrl": "http://localhost:11434/v1",
+      "protocol": "chat-completions",
+      "models": ["qwen3:8b", "llama3.2"],
+      "note": "本机已装 Ollama 时可直接连，不需要 Key。"
+    },
+    {
+      "id": "lmstudio",
+      "name": "LM Studio（本机）",
+      "region": "local",
+      "baseUrl": "http://localhost:1234/v1",
+      "protocol": "chat-completions",
+      "models": ["local-model"],
+      "note": "在 LM Studio 里启动本地服务器后使用。"
+    },
+    {
+      "id": "vllm",
+      "name": "vLLM / 自建服务",
+      "region": "local",
+      "baseUrl": "http://localhost:8000/v1",
+      "protocol": "chat-completions",
+      "models": ["Qwen/Qwen3-32B"],
+      "note": "自建 OpenAI 兼容服务；地址与模型名按你的部署改。"
+    }
+  ]
+}
