@@ -4697,7 +4697,34 @@ html[data-theme="dark"] .sa-newchat kbd {
   color: var(--sa-text-2);
 }
 
-/* 左下角的小终端标记：说明这一类是「命令行 Agent」。 */
+/* 品牌图形放在图标框里，替换掉通用的终端 glyph。 */
+.sa-brand-img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.sa-brand-text {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+/* 单色标的图形在深色下反相，否则会和深色底糊在一起。 */
+html[data-theme="dark"] .sa-brand-mono {
+  filter: invert(1);
+}
+
+.sa-agent-row.is-off .sa-agent-glyph {
+  opacity: 0.62;
+}
 .sa-agent-term {
   position: absolute;
   right: -4px;
@@ -4717,29 +4744,6 @@ html[data-theme="dark"] .sa-newchat kbd {
   font-weight: 600;
   line-height: 1;
   letter-spacing: -0.03em;
-}
-
-.sa-agent-brand {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 7px;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  flex: none;
-  user-select: none;
-}
-
-.sa-agent-brand img {
-  width: 13px;
-  height: 13px;
-  filter: brightness(0) invert(1);
-}
-
-.sa-agent-row.is-off .sa-agent-brand {
-  opacity: 0.55;
 }
 
 .sa-agent-row.is-on .sa-agent-glyph {
