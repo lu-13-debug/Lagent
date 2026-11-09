@@ -24,7 +24,7 @@ export interface HubModelCatalog { models: { id: string; name?: string }[]; base
 
 export const WORKFLOW_STAGES: { id: string; name: string; description: string; tool?: boolean }[] = [
   { id: 'quality', name: '数据理解与质量检查', description: '字段、覆盖范围与口径风险' },
-  { id: 'plan', name: '分析计划', description: '分析分支、指标与数据需求' },
+  { id: 'plan', name: '任务规划', description: '理解目标、决定步骤与分工' },
   { id: 'preprocess', name: '数据处理', description: '标准化与可检查的处理计划' },
   { id: 'activity', name: '活跃分析', description: '新增、活跃与行为趋势' },
   { id: 'retention', name: '留存分析', description: '同期群与留存变化' },

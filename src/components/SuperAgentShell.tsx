@@ -842,7 +842,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     try { setPlanDetail((await api.workPlan(id)).plan); }
     catch (cause) { notify((cause as Error).message, true); }
   };
-  const enableTool = async (id: string) => setExecutorEnabled(id, true);
 
   const toggleAgent = (id: string) => setSelectedAgents(previous => previous.includes(id) ? (previous.length > 1 ? previous.filter(item => item !== id) : previous) : [...previous, id].slice(0, 4));
 
@@ -1225,17 +1224,17 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     </section>
   </section>;
 
-  const toolsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">TOOLS</p><h1>工具</h1><p>软件自带工具；启用后即可在指令和计划中使用。</p></div></header><div className="sa-card-grid">{tools.map(tool => {
+  const toolsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">TOOLS</p><h1>工具</h1><p>软件自带工具的状态一览；启用或停用统一在「设置 → 执行器策略」里调整。</p></div></header><div className="sa-card-grid">{tools.map(tool => {
     const enabled = (policy?.allowedExecutors || []).includes(tool.id);
     const action = tool.id === 'window';
     return <article className="sa-card" key={tool.id}><div className="sa-card-icon">{toolIcon(tool.id)}</div><div className="sa-card-title"><h2>{tool.name}</h2><Status status={tool.status} /></div><p className="sa-mono">{tool.kind}</p><div className="sa-tags">{tool.permissions.map(item => <span key={item}>{item}</span>)}</div>
       {tool.id === 'github' && tool.status === 'needs_setup' && <p className="sa-inline-note">需要配置 GITHUB_TOKEN 并允许外部执行器。</p>}
       {tool.id === 'browser' && tool.status === 'needs_setup' && <p className="sa-inline-note">正在安装或缺少 Chromium。</p>}
-      {action ? <div className="sa-plan-actions-inline"><button className="sa-button" disabled={enabled} onClick={() => void enableTool(tool.id)}>{enabled ? '已启用' : '启用工具'}</button><button className="sa-button" onClick={() => setView('agents')}>打开窗口 Agent</button></div> : tool.id === 'terminal' ? <span className="sa-tag-ok"><Check size={13} />内置可用</span> : <button className="sa-button" disabled={enabled || tool.status === 'needs_setup'} onClick={() => void enableTool(tool.id)}>{enabled ? '已启用' : tool.status === 'needs_setup' ? '需要先完成配置' : '启用工具'}</button>}
+      {action ? <div className="sa-plan-actions-inline"><span className={`sa-tag ${enabled ? 'sa-tag-ok' : ''}`}>{enabled ? '已启用' : '未启用'}</span><button className="sa-button" onClick={() => setView('agents')}>打开窗口 Agent</button><button className="sa-link" onClick={() => setView('settings')}>在策略中调整</button></div> : tool.id === 'terminal' ? <span className="sa-tag-ok"><Check size={13} />内置可用</span> : <div className="sa-plan-actions-inline"><span className={`sa-tag ${enabled ? 'sa-tag-ok' : ''}`}>{enabled ? '已启用' : tool.status === 'needs_setup' ? '待配置' : '未启用'}</span><button className="sa-link" onClick={() => setView('settings')}>在策略中调整</button></div>}
     </article>;
   })}{!tools.length && <p className="sa-empty">工具状态载入中。</p>}</div></section>;
 
-  const settingsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">SETTINGS</p><h1>设置</h1><p>主题、模型与执行权限。</p></div></header><div className="sa-settings-grid"><article className="sa-card"><h2>外观</h2><p>当前仅保留简洁版，主题可切换。</p><button className="sa-button" onClick={() => setAppearanceOpen(true)}><SunMoon size={15} />打开显示设置</button></article><article className="sa-card"><h2>模型与 API</h2><p>配置执行器使用的模型和凭据。</p><button className="sa-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} />打开模型设置</button></article><article className="sa-card sa-policy-card"><h2>执行器策略</h2><p>默认只允许受控终端与内置工具；外部执行器还需设置 <code>DATAAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code>。</p>
+  const settingsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">SETTINGS</p><h1>设置</h1><p>主题、模型与执行权限。</p></div></header><div className="sa-settings-grid"><article className="sa-card"><h2>外观</h2><p>当前仅保留简洁版，主题可切换。</p><button className="sa-button" onClick={() => setAppearanceOpen(true)}><SunMoon size={15} />打开显示设置</button></article><article className="sa-card"><h2>模型与 API</h2><p>配置执行器使用的模型和凭据。</p><button className="sa-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} />打开模型设置</button></article><article className="sa-card sa-policy-card"><h2>执行器策略</h2><p>与「Agent」页的开关同步，这里可批量调整并设置预算；外部执行器还需 <code>DATAAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code>。</p>
     {policy ? <><div className="sa-policy-executors">{executorIds.map(id => <label key={id}><input type="checkbox" checked={(policy.allowedExecutors || []).includes(id)} onChange={() => toggleExecutor(id)} />{executorNames[id]}</label>)}</div>
       <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.acpWrites !== false} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), acpWrites: event.target.checked } } : previous)} /><span>项目内 ACP 可写<em>关闭后 ACP Agent 在项目里只能读文件；终端调用始终拒绝。</em></span></label>
       <div className="sa-policy-budgets">

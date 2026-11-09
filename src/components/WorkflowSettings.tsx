@@ -70,9 +70,9 @@ export function ModelHubSettings({ onWorkflowChanged, compact = false }: { onWor
   async function removeSkill(id: string) { await hubRequest(`/workflow-skills/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); }
 
   const [profileSeed, setProfileSeed] = useState('');
-  const sections = [{ id: 'workflow', name: '阶段工作流', icon: Layers3 }, { id: 'credentials', name: '凭据库', icon: KeyRound }, { id: 'profiles', name: '模型配置', icon: Settings2 }, { id: 'skills', name: 'Skill 指令', icon: BookOpen }];
+  const sections = [{ id: 'workflow', name: '规划设置', icon: Layers3 }, { id: 'credentials', name: '凭据库', icon: KeyRound }, { id: 'profiles', name: '模型配置', icon: Settings2 }, { id: 'skills', name: 'Skill 与插件', icon: BookOpen }];
   return <section className="model-hub" aria-label="模型中心与工作流">
-    <div className="hub-title"><div><h3>{compact ? '阶段模型与 Skill' : '模型中心与工作流'}</h3><p>为每个阶段选择模型和 Skill，设置影响后续创建的任务。</p></div></div>
+    {compact && <div className="hub-title"><div><h3>规划模型与 Skill</h3><p>为后续任务指定规划模型与 Skill 版本。</p></div></div>}
     {loading && <p className="hub-loading" role="status"><Spinner size={16} />正在读取账号配置…</p>}
     {unavailable && <p className="hub-notice" role="status">当前服务尚未开放模型中心。可使用下方旧会话设置连接模型。</p>}
     {error && <div className="hub-notice" role="alert"><p>{error}</p><button type="button" className="text-button" onClick={() => setRevision(value => value + 1)}><RefreshCw size={14} />重新读取</button></div>}
@@ -95,6 +95,7 @@ export function WorkflowSettings({ workflow, profiles, skills, onSave }: { workf
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [showErrors, setShowErrors] = useState(false);
+  const [showLegacy, setShowLegacy] = useState(false);
   const persisted = JSON.stringify(workflow);
   useEffect(() => { setDraft(completeWorkflow(workflow, skills)); setShowErrors(false); }, [persisted]); // 仅工作流保存改变时更新草稿，其他分区操作保留未保存编辑。
   const errors = validateWorkflow(draft, profiles, skills);
@@ -109,17 +110,17 @@ export function WorkflowSettings({ workflow, profiles, skills, onSave }: { workf
     finally { setBusy(false); }
   }
   return <section className="hub-section" aria-label="阶段工作流配置">
-    <div className="hub-section-heading"><div><h3>阶段工作流</h3><p>阶段顺序固定；每次任务冻结模型、强度和 Skill 版本。</p></div><span className="hub-badge">13 个阶段</span></div>
-    <label className="field">工作流默认模型<select aria-label="工作流默认模型" value={draft.defaultProfileId || ''} disabled={busy} onChange={event => { setDraft({ ...draft, defaultProfileId: event.target.value || null }); setMessage(''); }}><option value="">关闭阶段模型工作流，使用旧会话设置</option>{draft.defaultProfileId && !profiles.some(item => item.id === draft.defaultProfileId) && <option value={draft.defaultProfileId}>模型已删除，请重新选择</option>}{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model}</option>)}</select><small>{profiles.length ? '阶段选择「继承默认模型」时使用此配置；更换模型后需核对支持的强度。' : '先在凭据库保存 Key，再到模型配置添加模型。'}</small></label>
-    <p className="hub-notice">{draft.defaultProfileId ? '阶段模型工作流已启用。各阶段可独立覆盖默认模型。' : '当前未启用阶段模型工作流。你仍可编辑并保存阶段配置。'} 思考强度越高，耗时和供应商费用可能增加。</p>
-    <div className="hub-stage-list">{WORKFLOW_STAGES.map((stage, index) => {
+    <div className="hub-section-heading"><div><h3>规划设置</h3><p>指挥台理解任务、拆解步骤时使用这里的模型；执行任务本身仍由各 Agent 负责。</p></div><span className="hub-badge">{draft.defaultProfileId ? '模型规划已启用' : '按本地规则拆分'}</span></div>
+    <label className="field">规划模型<select aria-label="工作流默认模型" value={draft.defaultProfileId || ''} disabled={busy} onChange={event => { setDraft({ ...draft, defaultProfileId: event.target.value || null }); setMessage(''); }}><option value="">不指定（按本地规则拆分任务）</option>{draft.defaultProfileId && !profiles.some(item => item.id === draft.defaultProfileId) && <option value={draft.defaultProfileId}>模型已删除，请重新选择</option>}{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model}</option>)}</select><small>{profiles.length ? '指定后，任务会先由这个模型理解目标、决定步骤与分工；不指定则使用本地规则。' : '先在凭据库保存 Key，再到模型配置添加模型。'}</small></label>
+    <p className="hub-notice">{draft.defaultProfileId ? '规划时会把项目记忆与可用 Agent 一起交给模型，由它决定每步交给谁。' : '当前按本地规则拆分：只依据目标文本与目录结构决定分工。'} 思考强度越高，耗时和供应商费用可能增加。</p>
+    <div className="hub-stage-list">{WORKFLOW_STAGES.filter(stage => stage.id === 'plan' || showLegacy).map((stage, index) => {
       const config = draft.stages[stage.id];
       const profile = profiles.find(item => item.id === (config.profileId || draft.defaultProfileId));
       const options = effortOptions(profile);
       const reviewerCandidate = profiles.find(p => !p.unavailable && p.id !== (config.profileId ?? draft.defaultProfileId));
       const skillOptions = skills.filter(item => item.stageId === stage.id && item.enabled);
       const unsupported = Boolean(profile) && !options.some(option => option.value === normalizeEffort(config.effort) && option.supported);
-      return <article key={stage.id} className="hub-stage"><div className="hub-stage-heading"><span className="hub-step-number">{String(index + 1).padStart(2, '0')}</span><div><h4>{stage.name}</h4><p>{stage.description}</p></div>{stage.tool && <span className="hub-badge">工具执行</span>}</div>
+      return <article key={stage.id} className="hub-stage"><div className="hub-stage-heading"><span className="hub-step-number">{stage.id === 'plan' ? '01' : String(index + 1).padStart(2, '0')}</span><div><h4>{stage.name}</h4><p>{stage.description}</p></div>{stage.tool && <span className="hub-badge">工具执行</span>}{stage.id === 'plan' && <span className="hub-badge">当前使用</span>}</div>
         <div className="hub-stage-fields"><label className="field">Skill<select value={config.skillId} disabled={busy} onChange={event => update(stage.id, { skillId: event.target.value })}>{!skillOptions.some(item => item.id === config.skillId) && <option value={config.skillId}>{config.skillId ? 'Skill 不可用，请重新选择' : '请选择 Skill'}</option>}{skillOptions.map(skill => <option key={skill.id} value={skill.id}>{skill.name} · v{skill.version}</option>)}</select></label>
           {!stage.tool && <><label className="field">模型<select value={config.profileId || ''} disabled={busy} onChange={event => update(stage.id, { profileId: event.target.value || null })}><option value="">继承默认模型</option>{config.profileId && !profiles.some(item => item.id === config.profileId) && <option value={config.profileId}>模型已删除，请重新选择</option>}{profiles.map(item => <option key={item.id} value={item.id}>{item.name} · {item.model}</option>)}</select></label><label className="field">思考强度<select value={config.effort} disabled={busy} aria-invalid={unsupported} onChange={event => update(stage.id, { effort: event.target.value })}>{!options.some(option => option.value === config.effort) && <option value={config.effort} disabled>{config.effort}（不支持）</option>}{options.map(option => <option key={option.value} value={option.value} disabled={!option.supported}>{option.label}{option.supported ? '' : profile ? '（不支持）' : '（待选择模型）'}</option>)}</select></label></>}
         </div>
@@ -129,6 +130,7 @@ export function WorkflowSettings({ workflow, profiles, skills, onSave }: { workf
         <details className="hub-budget"><summary>{stage.tool ? '工具超时' : '输出预算与超时'}<span>{stage.tool ? '' : `${config.maxTokens.toLocaleString()} Token · `}{config.timeoutMs / 1000} 秒</span></summary><div className="hub-form-grid">{!stage.tool && <label className="field">最多输出 Token<input type="number" min={256} max={32768} step={1} value={Number.isNaN(config.maxTokens) ? '' : config.maxTokens} disabled={busy} onChange={event => update(stage.id, { maxTokens: event.target.valueAsNumber })} /></label>}<label className="field">超时（秒）<input type="number" min={1} max={600} step={1} value={Number.isNaN(config.timeoutMs) ? '' : config.timeoutMs / 1000} disabled={busy} onChange={event => update(stage.id, { timeoutMs: event.target.valueAsNumber * 1000 })} /></label></div></details>
       </article>;
     })}</div>
+    <button type="button" className="text-button hub-legacy-toggle" aria-expanded={showLegacy} onClick={() => setShowLegacy(value => !value)}>{showLegacy ? '收起旧分析流水线的 12 个阶段' : '显示旧分析流水线的 12 个阶段（当前版本不使用）'}</button>
     {showErrors && errors.length > 0 && <div className="hub-validation" role="alert"><p>请先修正以下配置：</p><ul>{errors.map(item => <li key={item}>{item}</li>)}</ul></div>}
     {error && <p className="form-error" role="alert">{error}</p>}{message && <p className="hub-feedback" role="status"><Check size={15} />{message}</p>}
     <div className="hub-save-bar"><span>{dirty ? '有未保存的工作流修改' : '当前配置已保存'}</span><button type="button" className="button primary" disabled={busy || !dirty} onClick={() => void save()}>{busy ? <Spinner size={15} /> : <Save size={15} />}保存工作流</button></div>
@@ -212,15 +214,26 @@ function ProfileManager({ hub, seedCredentialId, onSeedConsumed, onSave, onDelet
 function SkillManager({ skills, workflow, onSave, onDelete }: { skills: WorkflowSkill[]; workflow: WorkflowConfig; onSave: (input: WorkflowSkillInput, id?: string) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
   const [editor, setEditor] = useState(false);
   const [id, setId] = useState<string>();
-  const [draft, setDraft] = useState<WorkflowSkillInput>({ name: '', description: '', category: 'private', enabled: true, stageId: 'quality', content: '' });
+  const [draft, setDraft] = useState<WorkflowSkillInput>({ name: '', description: '', category: 'private', enabled: true, stageId: 'plan', content: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [deleting, setDeleting] = useState('');
   const contentBytes = new TextEncoder().encode(draft.content).byteLength;
   function edit(skill?: WorkflowSkill, copy = false) {
-    setId(copy ? undefined : skill?.id); setDraft(skill ? { name: skill.name + (copy ? '（私人副本）' : ''), description: skill.description, category: 'private', enabled: skill.enabled, stageId: skill.stageId, content: skill.content } : { name: '', description: '', category: 'private', enabled: true, stageId: 'quality', content: '' });
+    setId(copy ? undefined : skill?.id); setDraft(skill ? { name: skill.name + (copy ? '（私人副本）' : ''), description: skill.description, category: 'private', enabled: skill.enabled, stageId: skill.stageId, content: skill.content } : { name: '', description: '', category: 'private', enabled: true, stageId: 'plan', content: '' });
     setEditor(true); setError(''); setMessage(''); setDeleting('');
+  }
+  function importFile(file: File) {
+    const problem = validateSkillFile(file);
+    if (problem) { setError(problem); return; }
+    setError(''); setMessage('');
+    void file.text().then(content => {
+      setId(undefined);
+      setDraft({ name: file.name.replace(/\.(md|markdown)$/i, ''), description: '', category: 'private', enabled: true, stageId: 'plan', content });
+      setEditor(true);
+      setMessage('已从文件读取指令，确认阶段与名称后保存。');
+    }).catch(() => setError('无法读取此文件，请重新选择。'));
   }
   async function save() {
     setError(''); setMessage('');
@@ -231,7 +244,7 @@ function SkillManager({ skills, workflow, onSave, onDelete }: { skills: Workflow
     catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
-  return <section className="hub-section" aria-label="Skill 指令管理"><div className="hub-section-heading"><div><h3>Skill 指令</h3><p>内置指令只读，可复制为当前账号的私人版本。</p></div><button type="button" className="button secondary" disabled={busy} onClick={() => edit()}><Plus size={15} />新增 Skill</button></div>
+  return <section className="hub-section" aria-label="Skill 指令管理"><div className="hub-section-heading"><div><h3>Skill 与插件</h3><p>内置指令只读，可复制为私人版本；也可以从外部 Markdown 文件导入。</p></div><div className="hub-actions"><label className="button secondary hub-import-button"><FileUp size={15} />导入 Skill 文件<input type="file" accept=".md,.markdown,text/markdown" disabled={busy} aria-label="导入 Skill 文件" onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) importFile(file); }} /></label><button type="button" className="button secondary" disabled={busy} onClick={() => edit()}><Plus size={15} />新增 Skill</button></div></div>
     {editor && <form className="hub-editor" onSubmit={event => { event.preventDefault(); void save(); }}><div className="hub-editor-heading"><h4>{id ? '编辑私人 Skill' : '新增私人 Skill'}</h4><button type="button" className="hub-icon-button" disabled={busy} aria-label="取消编辑 Skill" onClick={() => setEditor(false)}><X size={17} /></button></div>
       <div className="hub-form-grid"><label className="field">Skill 名称<input required maxLength={80} value={draft.name} disabled={busy} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label><label className="field">适用阶段<select value={draft.stageId} disabled={busy} onChange={event => setDraft({ ...draft, stageId: event.target.value })}>{WORKFLOW_STAGES.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select></label></div>
       <label className="field">描述<input maxLength={500} value={draft.description} disabled={busy} onChange={event => setDraft({ ...draft, description: event.target.value })} /></label><label className="hub-checkbox"><input type="checkbox" checked={draft.enabled} disabled={busy} onChange={event => setDraft({ ...draft, enabled: event.target.checked })} />启用此 Skill</label>

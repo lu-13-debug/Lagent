@@ -41,7 +41,7 @@ test('校验继承模型、显式覆盖、Skill阶段和预算，不对PDF要求
   value.stages.charts.skillId = 'skill-plan';
   const errors = workflow.validateWorkflow(value, [profile], skills).join(' ');
   assert.match(errors, /报告撰写.*强度/);
-  assert.match(errors, /分析计划.*Token/);
+  assert.match(errors, /任务规划.*Token/);
   assert.match(errors, /活跃.*超时/);
   assert.match(errors, /图表.*Skill/);
 });

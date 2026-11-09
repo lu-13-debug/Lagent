@@ -80,3 +80,7 @@
 @media (pointer: coarse) { .hub-section .button, .hub-actions .text-button, .hub-nav button, .hub-section .field input, .hub-section .field select, .hub-budget summary, .hub-skill-content summary { min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) { .model-hub button { transition: none; } }
 .hub-review {margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:8px;color:var(--text-1);}.hub-review summary {cursor:pointer;font-weight:600;}.hub-review p {color:var(--text-2);line-height:1.7;}
+.hub-import-button { position: relative; overflow: hidden; cursor: pointer; }
+.hub-import-button input[type="file"] { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.hub-legacy-toggle { margin: 2px 0 4px; color: var(--muted); font-size: var(--text-sm); align-self: flex-start; }
+.hub-legacy-toggle:hover { color: var(--ink); }

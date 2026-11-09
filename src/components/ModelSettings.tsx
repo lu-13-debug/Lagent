@@ -9,7 +9,6 @@ import { providerByUrl, protocolLabel, suggestedModels } from '../model-provider
 import { ProviderCatalog } from './ProviderCatalog';
 import type { ModelProfile } from '../model-profiles';
 import './model-settings.css';
-import { AppearanceControls } from './AppearanceSettings';
 import { ModelHubSettings } from './WorkflowSettings';
 import { ModelPicker } from './ModelPicker';
 
@@ -123,16 +122,17 @@ export function SettingsModal({ settings, close, onSaved, notify }: {
     finally { setBusy(''); }
   }
 
-  return <Modal title="模型与工作流设置" subtitle="管理账号凭据、模型配置和各阶段 Skill。" close={close} dismissible={!busy} wide>
+  const hubEnabled = runtime.capabilities?.modelHub === true;
+  return <Modal title="模型设置" subtitle={hubEnabled ? '管理密钥、模型与 Skill；规划模型决定任务怎么拆分。' : '填写连接信息后可开始 AI 辅助分析。'} close={close} dismissible={!busy} wide>
     <div className="modal-body">
-      <section aria-label="外观与视图"><h3>外观与视图</h3><AppearanceControls /></section>
       <ModelHubSettings onWorkflowChanged={async () => {
         const response = await fetch('/api/settings', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(30000) });
         if (!response.ok) throw new Error('工作流已保存，但未能刷新模型状态，请关闭设置后刷新页面。');
         const result = await response.json() as { settings: Settings };
         onSaved(result.settings);
       }} />
-      <section className="legacy-model-settings" aria-label="旧会话模型设置"><h3>旧会话模型设置</h3><p>关闭阶段模型工作流后使用此入口。此处的 Key 仅保留在当前会话；凭据库的 Key 独立加密保存。</p></section>
+      {!hubEnabled && <>
+      <section className="legacy-model-settings" aria-label="会话级模型设置"><h3>会话级模型设置</h3><p>此处的 Key 仅保留在当前服务进程，重启后需要重新填写；凭据库的 Key 独立加密保存。</p></section>
       <section className="provider-presets" aria-label="供应商目录"><h3>供应商目录</h3>
         <ProviderCatalog disabled={!!busy} allowed={preset => !cloud || modelHosts.includes(new URL(preset.baseUrl).hostname)} onPick={preset => { changeAddress(preset.baseUrl, preset.models[0]); setProvider(preset.name); }} />
         <p>协议：{protocolLabel(providerByUrl(canonical)?.protocol || 'chat-completions')}；模型列表会按 Key 权限自动检测，检测不到时可手动填写模型 ID。</p>
@@ -157,7 +157,8 @@ export function SettingsModal({ settings, close, onSaved, notify }: {
       {error && <p className="form-error" role="alert">{error}</p>}{diagnostic && <aside className="model-diagnosis" role="note"><strong>{diagnostic.title}</strong><p>{diagnostic.action}</p></aside>}
       {testResult && <p className="form-success" role="status"><Check size={15} />{testResult}</p>}
       <p className="settings-test-note">模型调用费用从你的供应商账户扣除，与平台服务额度分开。</p>
+      </>}
     </div>
-    <div className="modal-footer"><button className="button secondary" onClick={() => void save(true)} disabled={!!busy || !aiAllowed || !keyReady || !model.trim()}>{busy === 'test' ? <Spinner size={15} /> : <Zap size={15} />}测试连接</button><button className="button primary" disabled={!!busy || !aiAllowed} onClick={() => void save()}>{busy === 'save' && <Spinner size={15} />}保存设置</button></div>
+    {!hubEnabled && <div className="modal-footer"><button className="button secondary" onClick={() => void save(true)} disabled={!!busy || !aiAllowed || !keyReady || !model.trim()}>{busy === 'test' ? <Spinner size={15} /> : <Zap size={15} />}测试连接</button><button className="button primary" disabled={!!busy || !aiAllowed} onClick={() => void save()}>{busy === 'save' && <Spinner size={15} />}保存设置</button></div>}
   </Modal>;
 }
