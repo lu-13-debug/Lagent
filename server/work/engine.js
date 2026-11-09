@@ -10,6 +10,7 @@ import { executorRegistry } from './executors/index.js';
 import { decideTeamProposal, projectTeamTask, reviewTeamNode, teamEventKey } from './team.js';
 import { cancelTicketEffects, claimDue, complete, enqueue, fail as failOutbox, recoverRunningEffects, sanitizeOutboxError, WORK_EFFECT_KIND } from './outbox.js';
 import { PROJECT_CHAT_EXECUTORS, projectService } from './projects.js';
+import { createProjectMemory, summarizeExecution } from './project-memory.js';
 import { analyzeTask } from './task-analyzer.js';
 import * as teamwork from './teamwork.js';
 
@@ -45,6 +46,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   const outboxEnabled = options.outboxEnabled === true;
   const windowBridge = options.windowBridge || null;
   const projects = projectService(db, { environment: env, home: options.home });
+  const memory = createProjectMemory(db);
+  const brain = options.brain || null;
   const workspace = typeof options.workspace === 'string' && options.workspace ? options.workspace : null;
   const planSuggestionTimes = [];
   let drainingOutbox = false;
@@ -131,6 +134,14 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     if (!project) throw workError('项目文件夹已不存在，请重新导入', 409);
     return { chat, project };
   };
+  const projectMemoryContext = project => {
+    try {
+      const digest = memory.digest(project.id, { limit: 6 });
+      return digest ? `【项目记忆 · 之前会话留下的结论与待办】\n${digest}` : '';
+    } catch {
+      return '';
+    }
+  };
   const projectBriefContext = project => {
     try {
       const brief = projects.getBrief(project.id);
@@ -153,6 +164,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         lines.push('', '最近变更：');
         for (const change of recent) lines.push(`- ${change.title}${change.summary ? `：${String(change.summary).slice(0, 90)}` : ''}`);
       }
+      const digest = projectMemoryContext(project);
+      if (digest) lines.push('', digest);
       lines.push('', '以上是背景，请直接执行下面的任务，不要复述本段。', '', '任务：', '');
       const context = lines.join('\n');
       return context.length > 1600 ? `${context.slice(0, 1600)}\n\n任务：\n` : context;
@@ -177,7 +190,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     // 12 个回合会在「刚开始动手」时就被 error_max_turns 掐断。
     const maxTurns = Number.isInteger(requestedTurns) && requestedTurns >= 1 && requestedTurns <= 60 ? requestedTurns : 24;
     const resuming = typeof chat.sessionId === 'string' && chat.sessionId;
-    const context = resuming ? '' : projectBriefContext(project);
+    // 首条消息给完整项目简报；后续消息只带记忆摘录，避免每轮都塞大段背景。
+    const context = resuming ? projectMemoryContext(project) : projectBriefContext(project);
     // ACP 的文件读写走客户端回调，性能上等价于给 Agent 项目目录写权限，
     // 所以额外受 policy.limits.acpWrites 约束（CLI 执行器本来就有写权限）。
     const isAcp = Array.isArray(executor.capabilities) && executor.capabilities.includes('acp');
@@ -433,6 +447,36 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       drainingOutbox=false;
     }
   }
+  /** 把一次完成/失败的执行写成项目记忆；有模型时异步换成更好的总结。 */
+  function recordProjectMemory(project, { ticket, status, summary, files, executorId, projectChatId }) {
+    let entry = null;
+    try {
+      const base = summarizeExecution({
+        ticket: { title: ticket.title, command: ticket.command },
+        report: { summary },
+        files,
+        status
+      });
+      entry = memory.add(project.id, {
+        ...base,
+        ticketId: ticket.id,
+        projectChatId: projectChatId || null,
+        executorId,
+        source: 'local'
+      });
+    } catch { /* 记忆写入失败不影响工单。 */ }
+    if (!entry || !brain) return entry;
+    const availability = brain.availability?.();
+    if (!availability?.ok) return entry;
+    void brain
+      .summarize({ goal: ticket.command, project, executorId, summary, files, kind: 'ticket' })
+      .then(result => {
+        if (!result?.summary) return;
+        memory.update(entry.id, { ...result, source: 'model' });
+      })
+      .catch(() => { /* 模型总结失败就保留本地总结。 */ });
+    return entry;
+  }
   function sync(ticket, assignment, task) {
     if(!task)return;
     const activeId=assignmentExecutorId(ticket, assignment);
@@ -530,6 +574,16 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
             } catch { /* 变更档案写入失败不影响工单状态。 */ }
           }
           if (project && status !== 'completed') changedSinceSnapshot(ticket.id, project.path);
+          if (project) {
+            recordProjectMemory(project, {
+              ticket,
+              status,
+              summary: cliSummary,
+              files: changedFiles,
+              executorId: activeId,
+              projectChatId: chat.id
+            });
+          }
         }
       }
     }
@@ -965,6 +1019,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     recordProjectChange(id,input){return projects.recordChange(id,input);},
     deleteProjectChange(projectId,changeId){return projects.deleteChange(projectId,changeId);},
     projectBriefMarkdown(id){return projects.briefMarkdown(id);},
+    projectMemory(id,limit){projects.getProject(id);return memory.list(id,limit||20);},
+    projectMemoryDigest(id){projects.getProject(id);return {digest:memory.digest(id,{limit:8}),entries:memory.list(id,30)};},
+    deleteProjectMemory(id,memoryId){projects.getProject(id);return memory.remove(memoryId);},
     createProjectChat(projectId,input){
       const chat=projects.createChat(projectId,input);
       try{
@@ -1172,7 +1229,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const datasets=store.list('dataset').slice(0,10).map(dataset=>({id:dataset.id,name:typeof dataset.name==='string'?dataset.name.slice(0,120):dataset.id}));
       const windows=windowBridge?await windowBridge.listWindows():[];
       const analysis=analyzeTask({goal,executors:allowedExecutors,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch}}:{}),hasDataset:datasets.length>0,hasWindow:windows.length>0});
-      const result=await options.planner({goal,executors:allowedExecutors,agents:agentDescriptors,datasets,windows,analysis,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch,chats:projectChats.map(chat=>({executorId:chat.executorId,title:chat.title,window:chat.window?.process||null}))}}:{})});
+      const result=await options.planner({goal,executors:allowedExecutors,agents:agentDescriptors,datasets,windows,analysis,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch,memory:memory.digest(projectRow.id,{limit:5}),chats:projectChats.map(chat=>({executorId:chat.executorId,title:chat.title,window:chat.window?.process||null}))}}:{})});
       const steps=Array.isArray(result?.steps)?result.steps:[];
       if(steps.length<2||steps.length>5)throw workError('规划模型必须返回 2–5 个步骤',502);
       const allowedSet=new Set(allowedExecutors);
@@ -1208,7 +1265,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       audit(null,'plan/suggest','planner','suggested',`步骤 ${safeSteps.length}`);
       return {steps:safeSteps,analysis};
     },
-    analyze(input){
+    async analyze(input){
       const goal=typeof input?.goal==='string'?input.goal.trim():'';
       if(!goal||goal.length>300)throw workError('任务描述须为 1–300 字');
       const projectChat=projectContext(input?.projectChatId);
@@ -1217,7 +1274,26 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const available=executors.list().filter(agent=>agent.available&&policy.allowedExecutors.includes(agent.id)&&externalExecutorAllowed(agent.id,policy,env)).map(agent=>agent.id);
       const requested=Array.isArray(input?.executors)?input.executors.filter(id=>typeof id==='string'):null;
       const scoped=requested&&requested.length?available.filter(id=>requested.includes(id)):available;
-      return analyzeTask({goal,executors:scoped.length?scoped:available,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch}}:{}),hasDataset:store.list('dataset').length>0,hasWindow:input?.hasWindow===true});
+      const pool=scoped.length?scoped:available;
+      const local=analyzeTask({goal,executors:pool,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch}}:{}),hasDataset:store.list('dataset').length>0,hasWindow:input?.hasWindow===true});
+      const availability=brain?.availability?.()||{ok:false,reason:'没有配置模型'};
+      local.modelAvailable=Boolean(availability.ok);
+      if(!availability.ok)return {...local,source:'local'};
+      try{
+        const digest=projectRow?memory.digest(projectRow.id,{limit:5}):'';
+        const thought=await brain.think({goal,executors:pool,project:projectRow?{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch}:null,digest,browserHosts:policy.limits?.browserHosts||[]});
+        return {
+          ...local,
+          source:'model',
+          model:thought.model,
+          understanding:thought.understanding.length?thought.understanding:local.understanding,
+          thoughts:thought.notes.slice(0,4),
+          toolCalls:thought.toolCalls.slice(0,8),
+          steps:thought.steps
+        };
+      }catch(error){
+        return {...local,source:'local',modelError:error?.message||'模型思考失败，已回退本地分析。'};
+      }
     },
     plan(input){return startPlan(input);},
     getPlan(id){return readPlan(id);},

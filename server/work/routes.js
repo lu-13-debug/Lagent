@@ -3,13 +3,13 @@ import { workEvents } from './effects.js';
 import { registerMobileWorkRoutes } from '../mobile-gateway.js';
 import { registerMcpRoutes } from './mcp.js';
 
-export function registerWork(app,store,executor,{isSessionValid,onConnect,mobileGateway,mobileOwnerId,onMobileEventConnect,planner,windowBridge,providerRegistry,workspace,allowFilesystemBrowser=false}={}) {
+export function registerWork(app,store,executor,{isSessionValid,onConnect,mobileGateway,mobileOwnerId,onMobileEventConnect,planner,windowBridge,providerRegistry,workspace,brain,allowFilesystemBrowser=false}={}) {
   const events=workEvents();
   const publish=event=>{
     events.publish(event);
     if(mobileGateway)mobileGateway.publish(mobileOwnerId,event);
   };
-  const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace});
+  const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain});
   app.get('/api/work/bootstrap',(_req,res)=>res.json(engine.bootstrap()));
   app.get('/api/work/projects',(_req,res)=>res.json({projects:engine.listProjects()}));
   if(allowFilesystemBrowser)app.get('/api/work/files',(req,res)=>res.json(engine.listDirectory({path:req.query?.path})));
@@ -36,12 +36,14 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.get('/api/work/projects/:id/changes',(req,res)=>res.json({changes:engine.projectChanges(req.params.id)}));
   app.post('/api/work/projects/:id/changes',(req,res)=>res.status(201).json({change:engine.recordProjectChange(req.params.id,req.body)}));
   app.delete('/api/work/projects/:id/changes/:changeId',(req,res)=>res.json(engine.deleteProjectChange(req.params.id,req.params.changeId)));
+  app.get('/api/work/projects/:id/memory',(req,res)=>res.json(engine.projectMemoryDigest(req.params.id)));
+  app.delete('/api/work/projects/:id/memory/:memoryId',(req,res)=>res.json(engine.deleteProjectMemory(req.params.id,req.params.memoryId)));
   app.get('/api/work/policy',(_req,res)=>res.json({policy:engine.policy()}));
   app.put('/api/work/policy',(req,res)=>res.json({policy:engine.updatePolicy(req.body)}));
   app.post('/api/work/plans',(req,res)=>res.status(201).json({plan:engine.plan(req.body)}));
   app.post('/api/work/plans/suggest',async(req,res)=>res.json(await engine.suggestPlan(req.body)));
   app.post('/api/work/commander',async(req,res)=>res.status(201).json(await engine.commander(req.body)));
-  app.post('/api/work/analyze',(req,res)=>res.json(engine.analyze(req.body)));
+  app.post('/api/work/analyze',async(req,res)=>res.json(await engine.analyze(req.body)));
   app.get('/api/work/commander/:id/report',(req,res)=>res.json(engine.commanderReport(req.params.id)));
   app.get('/api/work/plans/:id',(req,res)=>res.json({plan:engine.getPlan(req.params.id)}));
   app.post('/api/work/plans/:id/cancel',(req,res)=>res.json({plan:engine.cancelPlan(req.params.id)}));

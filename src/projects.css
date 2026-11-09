@@ -694,3 +694,106 @@
     align-items: flex-start;
   }
 }
+
+/* 项目记忆：谁改了什么、改进了什么、还欠什么 */
+.pj-memory {
+  display: grid;
+  gap: 12px;
+}
+
+.pj-memory-digest {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface-2);
+  font-family: inherit;
+  font-size: var(--sa-fs-xs);
+  line-height: 1.75;
+  color: var(--sa-text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pj-memory-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pj-memory-item {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface);
+}
+
+.pj-memory-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pj-memory-head strong {
+  font-size: var(--sa-fs-sm);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.pj-memory-head span {
+  flex: none;
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.pj-memory-item p {
+  margin: 0;
+  font-size: var(--sa-fs-xs);
+  line-height: 1.7;
+  color: var(--sa-text-2);
+}
+
+.pj-memory-points {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding-left: 14px;
+  font-size: var(--sa-fs-2xs);
+  line-height: 1.7;
+  color: var(--sa-text-2);
+}
+
+.pj-memory-points.is-open {
+  color: var(--sa-warning);
+}
+
+.pj-memory-files {
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+  word-break: break-all;
+}
+
+.pj-memory-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.pj-link.pj-danger {
+  color: var(--sa-danger);
+}
+
+@media (max-width: 720px) {
+  .pj-memory-head {
+    flex-direction: column;
+    gap: 2px;
+  }
+}

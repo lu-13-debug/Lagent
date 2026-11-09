@@ -37,7 +37,25 @@ export interface WorkTaskAnalysis {
   understanding: string[];
   conflicts: { between: number[]; reason: string; resolution: string }[];
   steps: WorkTaskAnalysisStep[];
+  /** 这次拆分是模型想的还是本地规则算的。 */
+  source?: 'model' | 'local' | string;
+  modelAvailable?: boolean;
+  model?: { provider?: string; model?: string } | null;
+  thoughts?: string[];
+  toolCalls?: { name: string; query: string; ok: boolean; summary: string }[];
+  modelError?: string;
 }
+
+export interface WorkProjectMemoryEntry {
+  id: string; projectId: string; ticketId: string | null; projectChatId: string | null;
+  executorId: string | null; title: string; status: string | null; summary: string;
+  files: string[]; improvements: string[]; openQuestions: string[];
+  source: 'local' | 'model' | string;
+  model: { provider?: string; model?: string } | null;
+  createdAt: string; updatedAt: string;
+}
+
+export interface WorkProjectMemory { digest: string; entries: WorkProjectMemoryEntry[] }
 export interface WorkProjectChat {
   id: string; projectId: string; executorId: 'claude-code' | 'codex' | 'window' | string; title: string;
   sessionId: string; writable: boolean; source: 'manual' | 'imported' | string;

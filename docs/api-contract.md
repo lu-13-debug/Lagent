@@ -187,6 +187,11 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 - `GET /api/work/commander/:id/report` → `{plan,rows,completed,total,markdown}`。markdown 为 `# 指挥汇总：<目标>`，逐条列出「执行 / 状态 / 产出说明」，未完成步骤单列在「需要你处理」下；只读拼装，不写文件、不改工单状态。
 - 步骤失败只影响依赖它的后续步骤（`advancePlan` 会把这些步骤标为 `blocked` 并写明依赖未完成），其余步骤照常推进。
 - `POST /api/work/analyze {goal,executors?,projectId?,projectChatId?}` → `{goal,category,categoryLabel,project,needs,understanding,conflicts,steps}`。这是**本地的任务理解**，不联网、不调用模型：先从目标里判类型（游戏/前端/数据/文档/修缺陷/调研/自动化），再根据关键词推断要改的目录（`src/**`、`server/**`、`docs/**`、`tests/**`），最后排出「调研 → 写文件 → 验证」的步骤。`steps[i].kind` 为 `research|write|verify`，`scope` 是它被允许改的目录，`readOnly` 表示不要写权限。分工规则：不同目录的写步骤交给不同 Agent（`claude-code`/`codex` 轮转）并行执行；同目录只排一个写步骤；验证步骤优先交给没参与写代码的执行器。未绑定工作文件夹时所有步骤降级为只读，`understanding` 里会明说「只出结论」。`conflicts` 列出目录重叠、已被改成串行的步骤对。`commander` 的内部拆解会把这份理解作为「预设理解」传给规划模型，并在响应里带上 `analysis`。
+
+  配置了模型（「模型与 API」里的默认规划模型）时，`POST /api/work/analyze` 会先让模型带着工具想一想：响应里 `source` 为 `model`，并带 `model:{provider,model}`、`thoughts:string[]`、`toolCalls:{name,query,ok,summary}[]`，`steps` 换成模型给出的分工；调用失败时退回本地规则并给 `modelError`。没有配置模型时 `source` 为 `local`、`modelAvailable=false`。模型可用三个只读工具：`github_search`（匿名搜索仓库）、`fetch_page`（只读 https 页面，受 `limits.browserHosts` 白名单约束）、`project_files`（列绑定工作文件夹内的目录，越界拒绝）。
+
+- `GET /api/work/projects/:id/memory?limit=20` → `{digest:string, entries:ProjectMemoryEntry[]}`。`ProjectMemoryEntry` 为 `{id,projectId,ticketId,projectChatId,executorId,title,status,summary,files,improvements,openQuestions,source:'local'|'model',model,createdAt,updatedAt}`。每次项目工单结束（completed/failed/blocked）自动写一条：先按报告摘要与改动文件生成 `source:'local'`，配置了模型时再异步升级成模型总结（`source:'model'`，带 improvements/openQuestions）。`digest` 是给 Agent 读的纯文本（最近 6 条 + 聚合后的待办），会注入项目会话的 prompt：首条消息带完整简报 + 记忆，后续消息只带记忆，因此新会话不必从头开始；同时作为 `project.memory` 传给规划器与 `work_project_memory` MCP 工具。
+- `DELETE /api/work/projects/:id/memory/:memoryId` → `{removed:boolean}`。
 - 执行期的冲突闸门：`advancePlan` 放行一个有 `scope` 的步骤前，会先看同一计划里是否还有另一个带 `scope` 的步骤在 `working`/`awaiting_review`/`queued` 且目录重叠；有就继续等，避免两个 Agent 同时改同一批文件。
 
 

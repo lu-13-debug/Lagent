@@ -86,6 +86,7 @@ export function createAgentPlanner({ env = process.env, timeoutMs = 180000 } = {
       `可用执行器：${agents.map(agent => `${agent.id}（${agent.name}${Array.isArray(agent.capabilities) && agent.capabilities.length ? `：${agent.capabilities.join('、')}` : ''}）`).join('；')}`,
       Array.isArray(input?.datasets) && input.datasets.length ? `可用数据集：${input.datasets.map(dataset => `${dataset.id}（${dataset.name}）`).join('；')}` : '',
       input?.project ? `项目：${input.project.name}（${input.project.path}${input.project.gitBranch ? `，分支 ${input.project.gitBranch}` : ''}）` : '',
+      input?.project?.memory ? `项目记忆（之前的会话留下的结论，别重复踩坑）：\n${String(input.project.memory).slice(0, 1600)}` : '',
       ...analysisLines
     ].filter(Boolean).join('\n');
     const failures = [];

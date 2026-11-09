@@ -103,7 +103,7 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     }
     return freeze({ version: 1, ownerId, capturedAt: new Date().toISOString(), defaultProfileId: config.defaultProfileId, stages });
   };
-  const suggestWorkPlan = async ({ goal, executors, agents, datasets, windows } = {}) => {
+  const suggestWorkPlan = async ({ goal, executors, agents, datasets, windows, project } = {}) => {
     const goalText = field(goal, '计划目标', 300);
     const allowed = [...new Set((Array.isArray(executors) ? executors : []).filter(id => typeof id === 'string' && id.trim() && id.length <= 60).map(id => id.trim()))].slice(0, 12);
     if (!allowed.length) throw vaultError('没有可用于规划的执行器');
@@ -122,7 +122,7 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
       key: modelContext.key,
       maxTokens: 1600,
       timeoutMs: Math.min(modelContext.timeoutMs, 60000),
-      messages: [{ role: 'system', content: PLAN_SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify({ goal: goalText, executors: plannerExecutors, datasets: datasetList, windows: windowList }) }],
+      messages: [{ role: 'system', content: PLAN_SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify({ goal: goalText, executors: plannerExecutors, datasets: datasetList, windows: windowList, project: project && typeof project === 'object' ? { name: typeof project.name === 'string' ? project.name.slice(0, 80) : '', path: typeof project.path === 'string' ? project.path.slice(0, 300) : '', gitBranch: typeof project.gitBranch === 'string' ? project.gitBranch.slice(0, 80) : '', memory: typeof project.memory === 'string' ? project.memory.slice(0, 1600) : '' } : null }) }],
       fetchImpl: modelContext.fetchImpl,
       onUsage: value => { usage = value || null; }
     });

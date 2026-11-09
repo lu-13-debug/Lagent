@@ -1324,8 +1324,24 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       {commanderAnalysis && <section className="sa-analysis" aria-live="polite">
         <header className="sa-analysis-head">
           <div><p className="sa-eyebrow">UNDERSTANDING</p><h2>任务理解{analysisBusy ? '（更新中…）' : ''}</h2></div>
-          <span className="sa-analysis-tag">{commanderAnalysis.categoryLabel}</span>
+          <div className="sa-analysis-tags">
+            <span className="sa-analysis-tag">{commanderAnalysis.categoryLabel}</span>
+            <span className={`sa-analysis-tag sa-analysis-source${commanderAnalysis.source === 'model' ? ' is-model' : ''}`} title={commanderAnalysis.model ? `${commanderAnalysis.model.provider || ''} ${commanderAnalysis.model.model || ''}` : commanderAnalysis.modelError || '没有配置模型，使用本地规则拆分'}>
+              {commanderAnalysis.source === 'model' ? '模型思考' : '本地规则'}
+            </span>
+          </div>
         </header>
+        {commanderAnalysis.thoughts && commanderAnalysis.thoughts.length > 0 && <ul className="sa-analysis-thoughts">
+          {commanderAnalysis.thoughts.map(line => <li key={line}>{line}</li>)}
+        </ul>}
+        {commanderAnalysis.toolCalls && commanderAnalysis.toolCalls.length > 0 && <div className="sa-analysis-tools">
+          {commanderAnalysis.toolCalls.map((call, index) => <span className={`sa-analysis-tool${call.ok ? '' : ' is-failed'}`} key={`${call.name}-${index}`} title={call.summary}>
+            {call.name === 'github_search' ? '搜 GitHub' : call.name === 'fetch_page' ? '读网页' : call.name === 'project_files' ? '看目录' : call.name}
+            {call.query ? `：${call.query}` : ''}
+            {` · ${call.summary}`}
+          </span>)}
+        </div>}
+        {commanderAnalysis.modelError && <p className="sa-inline-note"><Sparkles size={13} />{commanderAnalysis.modelError}</p>}
         <ul className="sa-analysis-lines">{commanderAnalysis.understanding.map(line => <li key={line}>{line}</li>)}</ul>
         {commanderAnalysis.needs.length > 0 && <div className="sa-analysis-needs">
           {commanderAnalysis.needs.map(item => <span className="sa-analysis-need" key={item.id} title={item.reason}>{item.label}</span>)}

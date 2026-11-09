@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AppWindow, Bot, Check, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, Hammer, History, Inbox, Layers, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users } from 'lucide-react';
+import { AppWindow, Bot, Brain, Check, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, Hammer, History, Inbox, Layers, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users } from 'lucide-react';
 import { api } from '../api';
 import { Modal } from './ui';
-import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectSession, WorkTeamwork, WorkTicket } from '../superagent';
+import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkTeamwork, WorkTicket } from '../superagent';
 import '../projects.css';
 
 type Props = {
@@ -85,7 +85,9 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const [planGoal, setPlanGoal] = useState('');
   const [planSteps, setPlanSteps] = useState<{ executorId: string; text: string; dependsOn?: number[] }[]>([]);
   const [planBusy, setPlanBusy] = useState('');
-  const [tab, setTab] = useState<'chat' | 'archive'>('chat');
+  const [tab, setTab] = useState<'chat' | 'archive' | 'memory'>('chat');
+  const [memory, setMemory] = useState<WorkProjectMemory | null>(null);
+  const [memoryBusy, setMemoryBusy] = useState('');
   const [brief, setBrief] = useState<WorkProjectBrief | null>(null);
   const [briefDraft, setBriefDraft] = useState({ goal: '', summary: '', keyPoints: '', decisions: '', constraints: '' });
   const [changes, setChanges] = useState<WorkProjectChange[]>([]);
@@ -156,7 +158,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     if (!item) return;
     setActiveChatId(previous => previous && item.chats.some(entry => entry.id === previous) ? previous : item.chats[0]?.id || null);
     setSessionsOpen(false); setSessions(null);
-    setTab('chat'); setBrief(null); setChanges([]); setChangeTitle(''); setChangeSummary('');
+    setTab('chat'); setBrief(null); setChanges([]); setChangeTitle(''); setChangeSummary(''); setMemory(null);
   }, [activeProjectId, projects]);
   // 从侧栏或工单详情进入时，切到指定项目 / 指定会话，并清除一次性焦点。
   // 必须排在「切换项目时校正当前会话」之后，否则会被它矫正回第一条会话。
@@ -430,6 +432,26 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     setTab('archive');
     if (!brief) void loadArchive();
   };
+  const loadMemory = async (projectId = activeProjectId) => {
+    if (!projectId) return;
+    setMemoryBusy('load');
+    try {
+      setMemory(await api.workProjectMemory(projectId));
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setMemoryBusy(''); }
+  };
+  const openMemory = () => {
+    setTab('memory');
+    if (!memory) void loadMemory();
+  };
+  const removeMemory = async (memoryId: string) => {
+    if (!project) return;
+    try {
+      await api.workDeleteProjectMemory(project.id, memoryId);
+      setMemory(current => current ? { ...current, entries: current.entries.filter(entry => entry.id !== memoryId) } : current);
+      notify('已删除这条记忆。');
+    } catch (cause) { notify((cause as Error).message, true); }
+  };
   const splitLines = (value: string) => value.split('\n').map(item => item.trim()).filter(Boolean);
   const saveBrief = async () => {
     if (!project) return;
@@ -642,6 +664,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
           <div className="pj-tabs">
             <button type="button" className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}><Bot size={13} />对话</button>
             <button type="button" className={tab === 'archive' ? 'active' : ''} onClick={openArchive}><History size={13} />变更档案</button>
+            <button type="button" className={tab === 'memory' ? 'active' : ''} onClick={openMemory}><Brain size={13} />项目记忆</button>
           </div>
 
           {tab === 'chat' && sessionsOpen && <div className="pj-sessions">
@@ -676,7 +699,40 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
             </div>
           </div>}
 
-          {tab === 'archive' ? <div className="pj-archive">
+          {tab === 'memory' ? <div className="pj-memory">
+            <div className="pj-card-head">
+              <strong>项目记忆</strong>
+              <button type="button" className="pj-link" onClick={() => void loadMemory()} disabled={memoryBusy === 'load'}>{memoryBusy === 'load' ? '读取中…' : '刷新'}</button>
+            </div>
+            <p className="pj-note">每次执行结束后自动记下「谁改了什么、改进了什么、还欠什么」。新会话、新的计划都会先读到这段记忆，不必从头讲一遍。</p>
+            {memory === null || memoryBusy === 'load'
+              ? <p className="pj-empty">正在读取项目记忆…</p>
+              : memory.entries.length === 0
+                ? <p className="pj-empty">还没有记忆。在这个项目里跑完一次任务后，会自动出现第一条。</p>
+                : <>
+                  <pre className="pj-memory-digest">{memory.digest}</pre>
+                  <ul className="pj-memory-list">
+                    {memory.entries.map(entry => <li key={entry.id} className="pj-memory-item">
+                      <div className="pj-memory-head">
+                        <strong>{entry.title}</strong>
+                        <span>{EXECUTOR_LABELS[entry.executorId || ''] || entry.executorId || 'Agent'} · {new Date(entry.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      {entry.summary && <p>{entry.summary}</p>}
+                      {entry.improvements.length > 0 && <ul className="pj-memory-points">
+                        {entry.improvements.map(item => <li key={item}>改进：{item}</li>)}
+                      </ul>}
+                      {entry.openQuestions.length > 0 && <ul className="pj-memory-points is-open">
+                        {entry.openQuestions.map(item => <li key={item}>待办：{item}</li>)}
+                      </ul>}
+                      {entry.files.length > 0 && <p className="pj-memory-files">{entry.files.slice(0, 6).join('、')}{entry.files.length > 6 ? ` 等 ${entry.files.length} 个文件` : ''}</p>}
+                      <div className="pj-memory-foot">
+                        <span>{entry.source === 'model' ? `模型总结${entry.model?.model ? ` · ${entry.model.model}` : ''}` : '自动记录'}</span>
+                        <button type="button" className="pj-link pj-danger" onClick={() => void removeMemory(entry.id)}><Trash2 size={12} />删除</button>
+                      </div>
+                    </li>)}
+                  </ul>
+                </>}
+          </div> : tab === 'archive' ? <div className="pj-archive">
             <div className="pj-archive-grid">
               <section className="pj-card">
                 <div className="pj-card-head">

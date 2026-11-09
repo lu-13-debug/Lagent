@@ -256,9 +256,12 @@ test('P1 项目对话消息经审批后在工作目录续接会话并回写 sess
   assert.deepEqual(plannerInput.executors, ['claude-code']);
   assert.equal(plannerInput.executors.includes('analysis'), false);
 
+  const memoryAfterRun = engine.projectMemoryDigest(imported.project.id);
+  assert.equal(memoryAfterRun.entries.length, 2);
+  assert.match(memoryAfterRun.digest, /项目记忆（最近 2 条 \/ 共 2 条）/);
+  assert.equal(memoryAfterRun.entries[0].executorId, 'claude-code');
   const changes = engine.projectChanges(imported.project.id);
   assert.equal(changes.length, 2);
-  assert.ok(changes.every(change => change.source === 'auto' && change.executorId === 'claude-code'));
   const recorded = changes.find(change => change.ticketId === ticket.id);
   assert.equal(recorded.summary, '第一步完成');
   assert.equal(recorded.sessionId, 'cli-session-1');
@@ -307,6 +310,14 @@ test('P1 项目对话消息经审批后在工作目录续接会话并回写 sess
     executorInput: { prompt: 'x', maxTurns: 1, workspace: projectDir }
   }), { status: 400 });
 
+  const freshChat = engine.createProjectChat(imported.project.id, { executorId: 'claude-code' }).chat;
+  const freshTicket = engine.projectChatMessage(freshChat.id, { text: '新开会话继续做导出' });
+  engine.action(freshTicket.id, 'approve');
+  await waitFor(() => engine.detail(freshTicket.id).ticket.status === 'completed', '新项目会话未完成');
+  assert.match(spawned[2].args.join('\n'), /项目记忆/);
+  assert.match(spawned[2].args.join('\n'), /只回复两个字母|第一步完成/);
+
+  engine.deleteProjectChat(freshChat.id);
   engine.deleteProjectChat(chat.id);
   assert.equal(engine.getProject(imported.project.id).chats.length, 0);
   engine.deleteProject(imported.project.id);

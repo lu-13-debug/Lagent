@@ -5283,3 +5283,62 @@ html[data-theme="dark"] .sa-brand-mono {
   line-height: 1.6;
   color: var(--sa-text-3);
 }
+
+/* 18. 任务大脑：模型思考与工具检索 */
+.sa-analysis-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sa-analysis-source {
+  color: var(--sa-text-3);
+}
+
+.sa-analysis-source.is-model {
+  border-color: var(--sa-accent-line);
+  background: var(--sa-accent-soft);
+  color: var(--sa-accent-ink);
+}
+
+.sa-analysis-thoughts {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--sa-accent-line);
+  border-radius: 0 var(--sa-r-sm) var(--sa-r-sm) 0;
+  background: var(--sa-surface-2);
+  list-style: none;
+  font-size: var(--sa-fs-xs);
+  line-height: 1.7;
+  color: var(--sa-text-2);
+}
+
+.sa-analysis-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sa-analysis-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface);
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-analysis-tool.is-failed {
+  border-color: var(--sa-danger-soft);
+  color: var(--sa-danger);
+}

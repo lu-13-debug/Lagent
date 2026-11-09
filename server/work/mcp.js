@@ -34,6 +34,9 @@ export function createMcpHandler({ engine, windowBridge } = {}) {
     tool('work_project_brief', '读取项目简报：目标、进展、任务要点、关键决定、约束与变更记录（Markdown，可直接作为其他 Agent 的项目上下文）', {
       type: 'object', properties: { projectId: { type: 'string' } }, required: ['projectId'], additionalProperties: false
     }, async input => textResult(engine.projectBriefMarkdown(requiredString(input, 'projectId')))),
+    tool('work_project_memory', '读取项目记忆：之前每次执行谁做了什么、对项目的改进、还没解决的问题（新会话开工前先读它，避免从头开始）', {
+      type: 'object', properties: { projectId: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 50 } }, required: ['projectId'], additionalProperties: false
+    }, async input => textResult(engine.projectMemoryDigest(requiredString(input, 'projectId')))),
     tool('work_update_project_brief', '更新项目简报的目标、进展、任务要点、关键决定与约束', {
       type: 'object',
       properties: {

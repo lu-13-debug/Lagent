@@ -1,5 +1,5 @@
 import type { ModelUsageReport, Bootstrap, PublicReport, ShareItem, Dataset, ExploreInput, Exploration, Mode, ModelCatalog, ReportMetadata, Runtime, Settings, Task, TaskSnapshot, TaskResponse, Transaction, User, Wallet } from './types';
-import type { WorkAction, WorkBootstrap, WorkPlan, WorkPolicy, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectSession, WorkTaskAnalysis, WorkTeam, WorkTeamwork, WorkTicket, WorkTicketDetail } from './superagent';
+import type { WorkAction, WorkBootstrap, WorkPlan, WorkPolicy, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkTaskAnalysis, WorkTeam, WorkTeamwork, WorkTicket, WorkTicketDetail } from './superagent';
 import { uploadFiles } from './upload.ts';
 import type { UploadOptions } from './upload';
 
@@ -43,6 +43,8 @@ export const api = {
   workProjectChanges: (id: string) => request<{ changes: WorkProjectChange[] }>(`/work/projects/${encodeURIComponent(id)}/changes`),
   workRecordProjectChange: (id: string, input: { title?: string; summary?: string; files?: string[]; executorId?: string; ticketId?: string }) => request<{ change: WorkProjectChange }>(`/work/projects/${encodeURIComponent(id)}/changes`, { method: 'POST', body: JSON.stringify(input) }),
   workDeleteProjectChange: (projectId: string, changeId: string) => request<{ id: string }>(`/work/projects/${encodeURIComponent(projectId)}/changes/${encodeURIComponent(changeId)}`, { method: 'DELETE' }),
+  workProjectMemory: (id: string) => request<WorkProjectMemory>(`/work/projects/${encodeURIComponent(id)}/memory`),
+  workDeleteProjectMemory: (projectId: string, memoryId: string) => request<{ ok: boolean }>(`/work/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(memoryId)}`, { method: 'DELETE' }),
   workDeleteProject: (id: string) => request<{ id: string }>(`/work/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   workRenameProject: (id: string, name: string) => request<{ project: WorkProject }>(`/work/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
   workProjectSessions: (id: string, executor?: string) => request<{ sessions: WorkProjectSession[] }>(`/work/projects/${encodeURIComponent(id)}/sessions${executor ? `?executor=${encodeURIComponent(executor)}` : ''}`),
