@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { assertWorkAction, workError } from './domain.js';
 import { manualTrigger } from './sources/manual.js';
@@ -58,6 +59,21 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   };
   const get = id => {const ticket=db.get('ticket',id);if(!ticket)throw workError('工单不存在',404);return publicTicket(ticket);};
   const related = (kind,id) => db.list(kind).filter(row=>row.ticketId===id);
+  // 浏览器「允许域名」以前只被存进策略、执行器从不读取，等于摆设；这里真正拦下来。
+  const enforceBrowserHost = (id, executorInput, hosts) => {
+    if (id !== 'browser') return;
+    const url = executorInput && typeof executorInput.url === 'string' ? executorInput.url : '';
+    if (!url) return;
+    const list = (Array.isArray(hosts) ? hosts : []).filter(item => typeof item === 'string' && item.trim());
+    if (!list.length) return;
+    let host = '';
+    try { host = new URL(url).hostname.toLowerCase(); } catch { return; }
+    const allowed = list.some(entry => {
+      const value = entry.trim().toLowerCase();
+      return host === value || host.endsWith(`.${value}`);
+    });
+    if (!allowed) throw workError(`浏览器只允许访问 ${list.join('、')}`, 403);
+  };
   const selectedDatasetId = value => {
     if(value===undefined||value===null)return null;
     if(typeof value!=='string'||!value.trim())throw workError('datasetId 必须是非空字符串');
@@ -93,8 +109,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     if(datasets.length>1)throw workError('当前工作区有多个数据集，请明确选择 datasetId');
     return null;
   };
-  const executorFor = assignment => executors.resolve(assignment?.executor || 'analysis');
-  const assignmentExecutorId = (ticket, assignment) => assignment?.executor || ticket?.executor || 'analysis';
+  const executorFor = assignment => executors.resolve(assignment?.executor || 'analysis');  const assignmentExecutorId = (ticket, assignment) => assignment?.executor || ticket?.executor || 'analysis';
   const normalizeExecutorInput = (id, target, input, fallbackText) => {
     let value = input;
     if (value === undefined && typeof target.defaultInput === 'function' && typeof fallbackText === 'string' && fallbackText.trim()) value = target.defaultInput(fallbackText);
@@ -187,6 +202,49 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       return after.filter(file => !before.includes(file));
     } catch { return []; }
     finally { try { db.delete('git-snapshot', ticketId); } catch { /* 清理失败可忽略。 */ } }
+  };
+  // 计划步骤的完整产出落盘：工单报告会截断到几千字，下游步骤要靠文件才能读到完整材料。
+  const planRunDir = project => {
+    const base = project && typeof project.path === 'string' && project.path
+      ? path.join(project.path, '.dataagent', 'runs')
+      : path.join(os.tmpdir(), 'dataagent-runs');
+    return base;
+  };
+  const writeStepArtifact = (ticket, body) => {
+    try {
+      const chat = ticket.projectChatId ? db.get('project-chat', ticket.projectChatId) : null;
+      const plan = ticket.planId ? db.get('plan', ticket.planId) : null;
+      const project = chat ? db.get('project', chat.projectId) : (plan && plan.projectId ? db.get('project', plan.projectId) : null);
+      const dir = path.join(planRunDir(project), String(ticket.planId));
+      fs.mkdirSync(dir, { recursive: true });
+      const index = Number.isSafeInteger(ticket.planStep) ? ticket.planStep + 1 : 0;
+      const file = path.join(dir, `${String(index).padStart(2, '0')}-${ticket.executor}.md`);
+      fs.writeFileSync(file, body, 'utf8');
+      return file;
+    } catch { return null; }
+  };
+  const stepContext = (plan, upTo) => {
+    const lines = [];
+    for (const step of plan.steps.slice(0, upTo)) {
+      const ticket = db.get('ticket', step.ticketId);
+      if (!ticket || ticket.status !== 'completed') continue;
+      const reports = related('report', ticket.id);
+      const report = reports[reports.length - 1];
+      const summary = typeof report?.summary === 'string' ? report.summary.trim() : '';
+      // 优先用落盘的完整产出（报告只有一句摘要），拿不到才退回摘要。
+      const plan = db.get('plan', ticket.planId);
+      const chat = ticket.projectChatId ? db.get('project-chat', ticket.projectChatId) : null;
+      const project = chat ? db.get('project', chat.projectId) : plan && plan.projectId ? db.get('project', plan.projectId) : null;
+      let body = '';
+      try {
+        const file = path.join(planRunDir(project), String(ticket.planId), `${String(step.index + 1).padStart(2, '0')}-${ticket.executor}.md`);
+        if (fs.existsSync(file)) body = fs.readFileSync(file, 'utf8').replace(/^# 第 \d+ 步 · .*\n+/, '').trim();
+      } catch { body = ''; }
+      if (!body) body = summary.slice(0, 1500);
+      if (!body) continue;
+      lines.push(`### 第 ${step.index + 1} 步 · ${step.executorId}\n${body.slice(0, 4000)}`);
+    }
+    return lines.length ? `【前序步骤材料 · 由 DataAgent 汇总，供你直接使用】\n${lines.join('\n\n')}\n\n` : '';
   };
   const ensureProjectChat = (project, executorId) => {
     const existing = projects.listChats(project.id).find(chat => chat.executorId === executorId);
@@ -387,10 +445,35 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const cli=active.kind==='cli';
     const tool=active.kind==='tool';
     const label=terminal?'终端命令':cli?'只读 CLI':tool?(activeId==='browser'?'浏览器':activeId==='github'?'GitHub':active.name):'分析';
+    const toolInfo=tool?(task.artifacts?.[activeId]||{}):null;
+    const toolSummary=activeId==='github'
+      ? (toolInfo?.action==='search'
+        ? `GitHub 搜索「${toolInfo.query||''}」命中 ${toolInfo.total??0} 个仓库`
+        : toolInfo?.action==='file' ? `读取 GitHub 文件 ${toolInfo.path||''}` : 'GitHub 查询完成')
+      : activeId==='browser'
+        ? (toolInfo?.title ? `浏览器读取完成：${String(toolInfo.title).slice(0,60)}` : '浏览器读取完成')
+        : `${label}执行完成`;
+    const toolDetail=(() => {
+      if(!tool)return '';
+      const info=toolInfo||{};
+      if(activeId==='github'){
+        if(info.action==='search'&&Array.isArray(info.items)){
+          return [`搜索：${info.query||''}`, `命中：${info.total??info.items.length} 个仓库`, '',
+            ...info.items.map(item=>`- ${item.fullName}（${item.stars??0}★${item.language?` · ${item.language}`:''}）${item.description?`— ${item.description}`:''}\n  ${item.url}`)].join('\n');
+        }
+        if(info.action==='file'&&typeof info.content==='string')return [`文件：${info.path||''}`, `大小：${info.size??0} 字节`, '', String(info.content).slice(0,8000)].join('\n');
+        if(Array.isArray(info.items))return info.items.map(item=>`- ${item.title||item.fullName||item.number||item.id}${item.state?`（${item.state}）`:''}`).join('\n');
+        return '';
+      }
+      if(activeId==='browser'){
+        return [`页面：${info.title||''}`, `地址：${info.url||''}`, '', String(info.text||'').slice(0,4000)].join('\n');
+      }
+      return '';
+    })();
     const summary=status==='failed'?String(task.error||`${label}执行失败`).slice(0,400):{
       working:`${label}执行中`,
       awaiting_review:`${label}等待确认`,
-      completed:activeId==='window'?(typeof task.report?.summary==='string'&&task.report.summary.trim()?task.report.summary.trim():'窗口指令已发送'):activeId==='browser'?'浏览器读取完成':activeId==='github'?'GitHub 查询完成':terminal?'终端命令执行完成':cli?'只读 CLI 执行完成':'分析报告已生成',
+      completed:activeId==='window'?(typeof task.report?.summary==='string'&&task.report.summary.trim()?task.report.summary.trim():'窗口指令已发送'):tool?toolSummary:terminal?'终端命令执行完成':cli?'只读 CLI 执行完成':'分析报告已生成',
       cancelled:`${label}已停止`
     }[status];
     const finished=['completed','failed','cancelled'].includes(status);
@@ -399,6 +482,22 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const kind={awaiting_review:'waiting',completed:'ready',failed:'failed',cancelled:'dropped'}[status];
     const artifacts={taskId:task.id,...(status==='completed'&&task.report?{report:task.report}:{}),...(terminal&&task.artifacts?.terminal?{terminal:task.artifacts.terminal}:{}),...(cli&&task.artifacts?.cli?{cli:task.artifacts.cli}:{}),...(tool&&task.artifacts?.[activeId]?{[activeId]:task.artifacts[activeId]}:{})};
     write(next,['assignment',run],...(kind?[['report',makeReport(next,run,kind,summary,artifacts)]]:[]));
+    if (finished && next.planId && Number.isSafeInteger(next.planStep)) {
+      const detail = (cli && typeof task.artifacts?.cli?.summary === 'string' && task.artifacts.cli.summary.trim()) || (toolDetail || summary);
+      const body = [
+        `# 第 ${next.planStep + 1} 步 · ${next.executor}`,
+        '',
+        `- 工单：${next.id}`,
+        `- 状态：${status}`,
+        `- 更新时间：${next.updatedAt}`,
+        '',
+        '## 产出',
+        '',
+        String(detail || '').slice(0, 20000) || '_没有产出说明_',
+        ''
+      ].join('\n');
+      writeStepArtifact(next, body);
+    }
     if (next.projectChatId) {
       const chat = db.get('project-chat', next.projectChatId);
       if (chat) {
@@ -505,8 +604,15 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     if (!Array.isArray(input.steps) || input.steps.length < 2 || input.steps.length > 5) throw workError('计划必须包含 2–5 个步骤');
     const clientRequestId = typeof input.clientRequestId === 'string' ? input.clientRequestId.trim() : '';
     const autoRun = input.autoRun === true;
-    const project = projectContext(input.projectChatId);
-    if (project && !PROJECT_CHAT_EXECUTORS.includes(project.chat.executorId)) throw workError('该执行器暂不支持项目拆解', 400);
+    const projectChat = projectContext(input.projectChatId);
+    if (projectChat && !PROJECT_CHAT_EXECUTORS.includes(projectChat.chat.executorId)) throw workError('该执行器暂不支持项目拆解', 400);
+    // 计划可以直接绑定「工作文件夹」：每一步都在这个目录里读写，未指定对话时按执行器自动建会话。
+    let projectRecord = projectChat ? projectChat.project : null;
+    if (!projectChat && typeof input.projectId === 'string' && input.projectId.trim()) {
+      projectRecord = db.get('project', input.projectId.trim());
+      if (!projectRecord) throw workError('工作文件夹不存在', 404);
+      if (!fs.existsSync(projectRecord.path)) throw workError('工作文件夹已不在本机，请重新导入', 409);
+    }
     if (clientRequestId.length > 120) throw workError('clientRequestId 最长 120 字');
     if (clientRequestId) {
       const prior = store.list('plan').find(plan => plan.clientRequestId === clientRequestId);
@@ -519,10 +625,13 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const target = executors.requireAvailable(targetId);
       guard(targetId, null, 'plan');
       let chat = null;
-      if (project) {
-        chat = targetId === project.chat.executorId ? project.chat : projects.listChats(project.project.id).find(row => row.executorId === targetId) || null;
+      if (projectChat || projectRecord) {
+        const holder = projectChat ? projectChat.chat : null;
+        chat = holder && targetId === holder.executorId
+          ? holder
+          : projects.listChats((projectRecord || projectChat.project).id).find(row => row.executorId === targetId) || null;
         if (!chat && targetId === 'window') throw workError(`第 ${index + 1} 步的窗口 Agent 需要先在项目中绑定窗口对话`);
-        if (!chat && !PROJECT_CHAT_EXECUTORS.includes(targetId)) throw workError(`第 ${index + 1} 步的执行器不支持项目工作区`);
+        if (!chat && target.kind === 'cli' && !PROJECT_CHAT_EXECUTORS.includes(targetId)) throw workError(`第 ${index + 1} 步的执行器不支持项目工作区`);
       }
       const text = typeof step.text === 'string' ? step.text.trim() : '';
       if (!text || text.length > 3000) throw workError(`第 ${index + 1} 步说明须为 1–3000 字`);
@@ -534,9 +643,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       return { targetId, target, text, rawInput: step.executorInput, datasetId, dependsOn: [...dependsOn], chat };
     });
     for (const step of prepared) {
-      if (project && !step.chat) step.chat = ensureProjectChat(project.project, step.targetId);
-      step.executorInput = project
-        ? normalizeExecutorInput(step.targetId, step.target, projectExecutorInput(step.chat, project.project, step.text, step.rawInput, step.target), step.text)
+      if (projectRecord && !step.chat && PROJECT_CHAT_EXECUTORS.includes(step.targetId)) step.chat = ensureProjectChat(projectRecord, step.targetId);
+      step.executorInput = step.chat
+        ? normalizeExecutorInput(step.targetId, step.target, projectExecutorInput(step.chat, projectRecord, step.text, step.rawInput, step.target), step.text)
         : normalizeExecutorInput(step.targetId, step.target, step.rawInput, step.text);
     }
     const planId = randomUUID();
@@ -568,7 +677,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       goal,
       status: 'active',
       autoRun,
-      ...(project ? { projectChatId: project.chat.id, projectId: project.project.id } : {}),
+      ...(projectChat ? { projectChatId: projectChat.chat.id } : {}),
+      ...(projectRecord ? { projectId: projectRecord.id } : {}),
       currentStep: prepared.findIndex(step => step.dependsOn.length === 0) ?? 0,
       steps: tickets.map((ticket, index) => ({ index, ticketId: ticket.id, executorId: ticket.executor, title: ticket.title, dependsOn: prepared[index].dependsOn, ...(ticket.projectChatId ? { projectChatId: ticket.projectChatId } : {}) })),
       ...(clientRequestId ? { clientRequestId } : {}),
@@ -632,6 +742,13 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           transaction.event('ticket', blocked);
           audit(planId, 'plan/block', ticket.executor, 'blocked');
           continue;
+        }
+        const context = stepContext(stored, step.index);
+        // 前序材料要写进 control（执行器真正读取的输入），票面 publicTicket 不保留 executorInput。
+        const control = transaction.get('control', ticket.id);
+        const baseInput = control?.executorInput;
+        if (context && typeof baseInput?.prompt === 'string' && !baseInput.prompt.includes('【前序步骤材料')) {
+          transaction.put('control', { ...control, executorInput: { ...baseInput, prompt: context + baseInput.prompt } });
         }
         const ready = {
           ...ticket,
@@ -994,6 +1111,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const executorInput=project
         ?normalizeExecutorInput(activeId,active,projectExecutorInput(project.chat,project.project,trigger.text,input?.executorInput,active),trigger.text)
         :normalizeExecutorInput(activeId,active,input?.executorInput,trigger.text);
+      enforceBrowserHost(activeId, executorInput, policy.limits?.browserHosts);
       const datasetId=selectedDatasetId(input?.datasetId);
       if(datasetId)requireDataset(datasetId);
       const prior=trigger.clientRequestId&&db.list('ticket').find(t=>store.get('work-control',t.id)?.clientRequestId===trigger.clientRequestId);
@@ -1015,28 +1133,40 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       if(!goal||goal.length>300)throw workError('计划目标须为 1–300 字');
       if(typeof options.planner!=='function')throw workError('请先在模型设置中配置规划模型',503);
       const project=projectContext(input?.projectChatId);
-      const projectChats=project?projects.listChats(project.project.id):[];
+      let projectRow=project?project.project:null;
+      if(!project&&typeof input?.projectId==='string'&&input.projectId.trim()){
+        projectRow=db.get('project',input.projectId.trim())||null;
+        if(!projectRow)throw workError('工作文件夹不存在',404);
+      }
+      const projectChats=projectRow?projects.listChats(projectRow.id):[];
       const projectWindows=projectChats.filter(chat=>chat.executorId==='window');
       if(project&&!PROJECT_CHAT_EXECUTORS.includes(project.chat.executorId))throw workError('该执行器暂不支持项目拆解',400);
       const requested=Array.isArray(input?.executors)?new Set(input.executors.filter(id=>typeof id==='string'&&id.length<=60)):null;
       let allowedExecutors=executors.list().filter(agent=>agent.available&&policy.allowedExecutors.includes(agent.id)&&externalExecutorAllowed(agent.id,policy,env)&&(!requested||requested.has(agent.id))).map(agent=>agent.id);
-      if(project)allowedExecutors=allowedExecutors.filter(id=>PROJECT_CHAT_EXECUTORS.includes(id)&&(id!=='window'||projectWindows.length>0||project.chat.executorId==='window'));
-      if(!allowedExecutors.length)throw workError(project?'项目中没有可用的 Agent':'没有可用于规划的执行器');
+      if(projectRow){
+        const kinds=new Map(executors.list().map(agent=>[agent.id,agent.kind]));
+        allowedExecutors=allowedExecutors.filter(id=>{
+          if(id==='window')return projectWindows.length>0||project?.chat.executorId==='window';
+          return PROJECT_CHAT_EXECUTORS.includes(id)||kinds.get(id)==='tool'||id==='analysis';
+        });
+      }
+      if(!allowedExecutors.length)throw workError(projectRow?'项目中没有可用的 Agent':'没有可用于规划的执行器');
       const agentDescriptors=executors.list().filter(agent=>allowedExecutors.includes(agent.id)).map(({id,name,kind,capabilities})=>({id,name,kind,capabilities}));
       const nowMs=Date.now();
       while(planSuggestionTimes.length&&planSuggestionTimes[0]<=nowMs-60000)planSuggestionTimes.shift();
       if(planSuggestionTimes.length>=5)throw workError('规划请求过于频繁，请稍后再试',429);
       const datasets=store.list('dataset').slice(0,10).map(dataset=>({id:dataset.id,name:typeof dataset.name==='string'?dataset.name.slice(0,120):dataset.id}));
       const windows=windowBridge?await windowBridge.listWindows():[];
-      const result=await options.planner({goal,executors:allowedExecutors,agents:agentDescriptors,datasets,windows,...(project?{project:{name:project.project.name,path:project.project.path,gitBranch:project.project.gitBranch,chats:projectChats.map(chat=>({executorId:chat.executorId,title:chat.title,window:chat.window?.process||null}))}}:{})});
+      const result=await options.planner({goal,executors:allowedExecutors,agents:agentDescriptors,datasets,windows,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch,chats:projectChats.map(chat=>({executorId:chat.executorId,title:chat.title,window:chat.window?.process||null}))}}:{})});
       const steps=Array.isArray(result?.steps)?result.steps:[];
       if(steps.length<2||steps.length>5)throw workError('规划模型必须返回 2–5 个步骤',502);
       const allowedSet=new Set(allowedExecutors);
+      const kindsOf=new Map(executors.list().map(agent=>[agent.id,agent.kind]));
       const datasetIds=new Set(datasets.map(dataset=>dataset.id));
       const safeSteps=steps.map((step,index)=>{
         const executor=typeof step?.executorId==='string'?step.executorId.trim():'';
         if(!allowedSet.has(executor))throw workError(`规划第 ${index+1} 步使用了不可用执行器`,502);
-        if(project&&!PROJECT_CHAT_EXECUTORS.includes(executor))throw workError(`规划第 ${index+1} 步的执行器不支持项目工作区`,502);
+        if(projectRow&&!PROJECT_CHAT_EXECUTORS.includes(executor)&&kindsOf.get(executor)==='cli')throw workError(`规划第 ${index+1} 步的执行器不支持项目工作区`,502);
         const text=typeof step?.text==='string'?step.text.trim():'';
         if(!text||text.length>500)throw workError(`规划第 ${index+1} 步说明无效`,502);
         const datasetId=typeof step?.datasetId==='string'?step.datasetId.trim():'';
@@ -1049,6 +1179,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           const target=windows.find(window=>window.handle===handle);
           if(!target)throw workError(`规划第 ${index+1} 步引用了未知窗口`,502);
           executorInput={handle,process:target.process,submit:true,...(target.title?{title:target.title}:{})};
+        }else if(step?.executorInput&&typeof step.executorInput==='object'&&!Array.isArray(step.executorInput)){
+          const size=JSON.stringify(step.executorInput).length;
+          if(size>2000)throw workError(`规划第 ${index+1} 步的输入过大`,502);
+          executorInput={...step.executorInput};
         }
         return {executorId:executor,text,...(datasetId?{datasetId}:{}),...(executorInput?{executorInput}:{}),...(dependsOn.length?{dependsOn:[...dependsOn]}:{})};
       });
@@ -1063,9 +1197,11 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const goal=typeof input?.goal==='string'?input.goal.trim():'';
       if(!goal||goal.length>300)throw workError('指挥目标须为 1–300 字');
       const projectChatId=typeof input?.projectChatId==='string'?input.projectChatId.trim():'';
-      const suggestion=await api.suggestPlan({goal,...(projectChatId?{projectChatId}:{}),...(Array.isArray(input?.executors)?{executors:input.executors}:{})});
-      const plan=startPlan({goal,steps:suggestion.steps,...(projectChatId?{projectChatId}:{}),autoRun:input?.autoRun===true,clientRequestId:typeof input?.clientRequestId==='string'?input.clientRequestId:''});
-      return {plan,steps:suggestion.steps};
+      const projectId=typeof input?.projectId==='string'?input.projectId.trim():'';
+      const scope={...(projectChatId?{projectChatId}:{}),...(projectId&&!projectChatId?{projectId}:{})};
+      const suggestion=await api.suggestPlan({goal,...scope,...(Array.isArray(input?.executors)?{executors:input.executors}:{})});
+      const plan=startPlan({goal,steps:suggestion.steps,...scope,autoRun:input?.autoRun===true,clientRequestId:typeof input?.clientRequestId==='string'?input.clientRequestId:''});
+      return {plan,steps:plan.steps};
     },
     commanderReport(id){return commanderReport(id);},
     detail(id){

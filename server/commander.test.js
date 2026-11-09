@@ -78,3 +78,33 @@ test('指挥台：汇总按步骤拼出 Markdown，未完成的步骤单独列�
   assert.equal(report.rows[0].status, 'awaiting_review');
   assert.throws(() => engine.commanderReport('plan-missing'), /计划不存在/);
 });
+
+test('指挥台：绑定工作文件夹后，每一步都拿到该目录与写权限', async t => {
+  const { engine, root, store } = harness(t, {
+    planner: async input => {
+      assert.equal(input.project?.path, root, '规划器应看到工作文件夹路径');
+      return {
+        steps: [
+          { executorId: 'claude-code', text: '在这个目录里建 index.html 骨架' },
+          { executorId: 'codex', text: '补充样式与交互', dependsOn: [0] }
+        ]
+      };
+    }
+  });
+  const project = engine.importProject({ path: root, name: 'demo' }).project;
+  const { plan } = await engine.commander({ goal: '做一个页面', projectId: project.id, executors: ['claude-code', 'codex'] });
+  assert.equal(plan.projectId, project.id);
+  const detail = engine.bootstrap().tickets.filter(ticket => ticket.planId === plan.id);
+  assert.equal(detail.length, 2);
+  for (const ticket of detail) {
+    assert.ok(ticket.projectChatId, '每一步都应绑定项目会话');
+    const stored = engine.detail(ticket.id);
+    assert.equal(stored.project?.id, project.id);
+    const control = store.get('work-control', ticket.id);
+    assert.equal(control.executorInput.workspace, root, '每一步都应以工作文件夹为 cwd');
+    assert.equal(control.executorInput.write, true, '每一步都应有写权限');
+  }
+  const chats = engine.getProject(project.id).chats;
+  assert.deepEqual(chats.map(chat => chat.executorId).sort(), ['claude-code', 'codex']);
+  await assert.rejects(() => engine.commander({ goal: 'x', projectId: 'missing-project', executors: ['claude-code'] }), /工作文件夹不存在/);
+});

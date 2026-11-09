@@ -2,7 +2,7 @@ import { workError } from '../domain.js';
 
 const API_BASE = 'https://api.github.com';
 const statusError = (message, status = 400) => Object.assign(workError(message, status), { status });
-const ACTIONS = new Set(['repo', 'issues', 'pulls', 'checks', 'file']);
+const ACTIONS = new Set(['repo', 'issues', 'pulls', 'checks', 'file', 'search']);
 
 function positiveNumber(value) {
   return Number.isSafeInteger(value) && value > 0 ? value : null;
@@ -26,6 +26,14 @@ function validFilePath(value) {
 export function validateGithubInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw workError('GitHub 执行器需要查询参数');
   if (!ACTIONS.has(input.action)) throw workError('不支持的 GitHub action');
+  // search 只需要关键词：用于「先看看开源项目怎么做」这类调研，不需要预先知道仓库。
+  if (input.action === 'search') {
+    const query = typeof input.query === 'string' ? input.query.trim() : '';
+    if (!query || query.length > 200 || /[\u0000-\u001f\u007f]/.test(query)) throw workError('GitHub 搜索关键词须为 1–200 字');
+    const limit = input.limit === undefined ? 5 : input.limit;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw workError('GitHub 搜索条数须为 1–20');
+    return { action: 'search', query, limit };
+  }
   if (!validOwner(input.owner)) throw workError('GitHub owner 格式无效');
   if (!validRepo(input.repo)) throw workError('GitHub repo 格式无效');
   const result = { action: input.action, owner: input.owner, repo: input.repo };
@@ -119,7 +127,7 @@ function httpError(status) {
 function requestHeaders(token, accept = 'application/vnd.github+json') {
   return {
     Accept: accept,
-    Authorization: `Bearer ${token}`,
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'DataAgent/1.1.0'
   };
@@ -201,7 +209,27 @@ async function queryFile(input, options) {
   return { action: 'file', path: input.path, size: decoded.length, content: redact(decoded.toString('utf8'), options.token, options.maxFileBytes), truncated: false };
 }
 
+async function querySearch(input, options) {
+  const params = new URLSearchParams({
+    q: input.query,
+    sort: 'stars',
+    order: 'desc',
+    per_page: String(input.limit)
+  });
+  const data = await requestJson(`${API_BASE}/search/repositories?${params.toString()}`, options);
+  const items = (Array.isArray(data?.items) ? data.items : []).slice(0, input.limit).map(item => ({
+    fullName: typeof item?.full_name === 'string' ? item.full_name.slice(0, 140) : '',
+    stars: Number.isSafeInteger(item?.stargazers_count) ? item.stargazers_count : 0,
+    language: typeof item?.language === 'string' ? item.language.slice(0, 40) : null,
+    description: redact(item?.description, options.token, 240),
+    url: safeGithubUrl(item?.html_url),
+    updatedAt: typeof item?.pushed_at === 'string' ? item.pushed_at : null
+  })).filter(item => item.fullName);
+  return { action: 'search', query: input.query, total: Number.isFinite(data?.total_count) ? data.total_count : items.length, count: items.length, items };
+}
+
 async function queryGithub(input, options) {
+  if (input.action === 'search') return querySearch(input, options);
   if (input.action === 'repo') return queryRepo(input, options);
   if (input.action === 'issues') return queryIssues(input, options);
   if (input.action === 'pulls') return queryPulls(input, options);
@@ -276,12 +304,22 @@ export function githubExecutor({
     id: 'github',
     name: 'GitHub 只读',
     kind: 'tool',
-    available: Boolean(token),
+    available: true,
     requiresDataset: false,
-    capabilities: ['github', 'repository', 'issues', 'pulls', 'checks', 'file', 'read-only', 'human-approval'],
+    capabilities: ['github', 'repository', 'issues', 'pulls', 'checks', 'file', 'search', 'read-only', 'human-approval'],
     validateInput: validateGithubInput,
+    // 只说一句话时（计划/指挥里的步骤），按「搜索仓库」执行——调研开源项目不需要预先知道仓库名。
+    // GitHub 搜索接口对整句中文几乎没有命中，所以先把句子压成英文关键词；压不出来才退回默认词。
+    defaultInput: text => {
+      const ascii = String(text || '')
+        .replace(/[^\x20-\x7E]/g, ' ')
+        .replace(/[^A-Za-z0-9+#./\s-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const query = ascii.length >= 3 ? ascii.slice(0, 80) : 'platformer game';
+      return validateGithubInput({ action: 'search', query, limit: 5 });
+    },
     start(ticket, assignment, input) {
-      if (!token) throw statusError('GitHub 执行器当前不可用', 503);
       const normalized = validateGithubInput(input?.executorInput ?? input);
       const prior = store.get('task', assignment.id);
       if (prior) return prior;

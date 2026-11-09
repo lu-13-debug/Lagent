@@ -140,6 +140,8 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 - 这些 id 同时加入 `policy.allowedExecutors` 白名单与项目工作区执行器清单；Agent 页的开关写的就是 `allowedExecutors`。
 
 - `GET /api/work/projects` → `{projects:[ProjectWorkspace]}`；`POST /api/work/projects {path,name?}` → `201/200 {project,created}`。path 必须是存在的绝对目录，服务端取 realpath 后拒绝磁盘根目录与 `Windows`、`Program Files*`、`ProgramData`；同路径重复导入返回 `created:false` 与原记录。只保存记录，不复制、移动或删除本地文件。最多 100 个项目。
+- `POST /api/work/command {text,executorId,executorInput}` 的浏览器执行器受 `policy.limits.browserHosts` 约束：列表为空时不限制；非空时目标主机必须等于其中一项或以 `.<项>` 结尾，否则 403「浏览器只允许访问 …」。
+- `github` 执行器不再要求 `GITHUB_TOKEN`：无 token 时匿名读取公开仓库，新增 `search` 动作（`GET https://api.github.com/search/repositories?q=&sort=stars&order=desc&per_page=`，返回 `{action:'search',query,total,count,items:[{fullName,stars,language,description,url,updatedAt}]}`，`limit` 1–20，默认 5）。计划/指挥里只给一句话时，默认动作是 `search`，中文句子会先被压成英文关键词再检索。
 - `GET /api/work/files?path=` → `{path,parent,roots,entries:[{name,path,isDir}],truncated}`，仅供浏览器端选择项目目录。仅本地模式启用（云端返回 404）；省略 path 返回可用盘符，否则只返回子文件夹，最多 500 项，不读取或返回任何文件内容。浏览器无法调用系统目录对话框，桌面客户端使用 `pickFolder()` 打开系统对话框。
 - `GET /api/work/projects/:id` → `{project}`；`DELETE /api/work/projects/:id` → `{id}`，同时删除该项目下的项目对话记录，不影响 Agent 端会话文件。
 - `GET /api/work/projects/:id/sessions?executor=claude-code|codex` → `{sessions:[{executorId,sessionId,title,updatedAt,imported}]}`。扫描 `~/.claude/projects/<路径编码目录>/*.jsonl` 与 `~/.codex/sessions/**/rollout-*.jsonl`，只保留记录中 `cwd` 与项目路径一致的会话，每个来源最多读取 200 个文件头（64KB），返回最多 60 条；不返回会话正文。
@@ -167,7 +169,8 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 
 软件在这里是「指挥官」：把一句话目标拆成带依赖的步骤，按能力分给不同 Agent，执行后把各步结果汇总成一份结论。
 
-- `POST /api/work/commander {goal,executors,projectChatId?,autoRun?}` → `201 {plan,steps}`。goal 1–300 字；executors 必须在可用执行器里（缺省时由服务端取可用的）。拆解优先走已配置的规划模型；没有配置或调用失败时，回退到**用本机已安装的 Agent 自己拆**（依次尝试 `dsh --profile headless`、`claude -p`、`codex exec`，只取它返回的 JSON 步骤）。规划必须给出 2–5 步，每步含 `executorId`、`text`（1–500 字）、可选 `dependsOn`。生成的工单按依赖放行：无依赖步骤为 `awaiting_review`（`autoRun:true` 时为 `queued`），有依赖步骤为 `waiting`，由 `advancePlan` 在依赖完成后自动放行。
+- `POST /api/work/commander {goal,executors,projectChatId?,projectId?,autoRun?}` → `201 {plan,steps}`。goal 1–300 字；executors 必须在可用执行器里（缺省时由服务端取可用的）。`projectChatId` 与 `projectId` 二选一即可绑定工作文件夹：绑定后每一步都以该目录为 cwd 且带写权限（CLI 类走项目对话；`github`/`browser`/`analysis` 这类不写文件的执行器不需要项目对话，直接参与），未绑定时每一步只读、只出结论。拆解优先走已配置的规划模型；没有配置或调用失败时，回退到**用本机已安装的 Agent 自己拆**（依次尝试 `dsh --profile headless`、`claude -p`、`codex exec`，只取它返回的 JSON 步骤）。规划必须给出 2–5 步，每步含 `executorId`、`text`（1–500 字）、可选 `dependsOn`、可选 `executorInput`（结构化输入，例如交给 `github` 的 `{action:'search',query:'英文关键词',limit:5}`）。生成的工单按依赖放行：无依赖步骤为 `awaiting_review`（`autoRun:true` 时为 `queued`），有依赖步骤为 `waiting`，由 `advancePlan` 在依赖完成后自动放行。
+- 步骤产出会落盘：每一步完成时把「第 N 步 + 工单 + 状态 + 产出」写到 `<项目路径>/.dataagent/runs/<planId>/NN-<executor>.md`（未绑定工作文件夹时写到系统临时目录的 `dataagent-runs/`）。下游步骤放行时，前面已完成步骤的文件内容（截 4000 字，拿不到文件才退回摘要 1500 字）会以「【前序步骤材料 · 由 DataAgent 汇总，供你直接使用】」为标题注入到它的 `executorInput.prompt` 前面，所以后一步能直接读到前一步的完整材料。
 - `GET /api/work/commander/:id/report` → `{plan,rows,completed,total,markdown}`。markdown 为 `# 指挥汇总：<目标>`，逐条列出「执行 / 状态 / 产出说明」，未完成步骤单列在「需要你处理」下；只读拼装，不写文件、不改工单状态。
 - 步骤失败只影响依赖它的后续步骤（`advancePlan` 会把这些步骤标为 `blocked` 并写明依赖未完成），其余步骤照常推进。
 

@@ -228,10 +228,19 @@ test('E3 GitHub 输入白名单、无 token 不可用与固定只读请求', asy
 
   const { store } = fixture(t);
   let called = false;
-  const unavailable = githubExecutor({ store, environment: {}, fetchImpl: async () => { called = true; } });
-  assert.equal(unavailable.available, false);
-  assert.throws(() => unavailable.start({ command: 'x' }, { id: 'github-unavailable' }, { action: 'repo', owner: 'acme', repo: 'repo' }), { status: 503 });
-  assert.equal(called, false);
+  const anonymous = githubExecutor({ store, environment: {}, fetchImpl: async (url) => { called = true; return jsonResponse({ total_count: 1, items: [{ full_name: 'phaserjs/phaser', stargazers_count: 12000, language: 'JavaScript', description: 'game framework', html_url: 'https://github.com/phaserjs/phaser', pushed_at: '2026-01-01T00:00:00Z' }] }); } });
+  assert.equal(anonymous.available, true);
+  const anonTask = anonymous.start({ command: '搜索平台跳跃游戏' }, { id: 'github-anon' }, { action: 'search', query: 'platformer', limit: 3 });
+  await waitFor(() => store.get('task', anonTask.id)?.status === 'completed');
+  assert.equal(called, true);
+  const anonSaved = store.get('task', anonTask.id);
+  assert.equal(anonSaved.artifacts.github.action, 'search');
+  assert.equal(anonSaved.artifacts.github.items[0].fullName, 'phaserjs/phaser');
+  assert.deepEqual(validateGithubInput({ action: 'search', query: '  platformer  ' }), { action: 'search', query: 'platformer', limit: 5 });
+  assert.throws(() => validateGithubInput({ action: 'search', query: '   ' }), { status: 400 });
+  assert.throws(() => validateGithubInput({ action: 'search', query: 'x'.repeat(201) }), { status: 400 });
+  assert.throws(() => validateGithubInput({ action: 'search', query: 'ok', limit: 0 }), { status: 400 });
+  anonymous.close();
 
   const token = 'ghp_super_secret_token';
   const calls = [];
@@ -398,7 +407,7 @@ test('E3 Work 对 browser/github 先审批后执行并只公开白名单 artifac
   await waitFor(() => engine.detail(browserTicket.id).ticket.status === 'completed');
   const browserDetail = engine.detail(browserTicket.id);
   assert.equal(browserDetail.reports.find(report => report.kind === 'ready').artifacts.browser.title, 'Public');
-  assert.equal(browserDetail.ticket.summary, '浏览器读取完成');
+  assert.equal(browserDetail.ticket.summary, '浏览器读取完成：Public');
 
   const githubTicket = engine.command({
     text: '查询仓库',

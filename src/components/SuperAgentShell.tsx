@@ -180,6 +180,9 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [commanderBusy, setCommanderBusy] = useState(false);
   const [commanderPlan, setCommanderPlan] = useState<WorkPlan | null>(null);
   const [commanderReport, setCommanderReport] = useState<{ markdown: string; completed: number; total: number } | null>(null);
+  // 指挥台绑定的工作文件夹与「一次跑完」开关：绑定后每一步都在该目录内读写。
+  const [commanderProject, setCommanderProject] = useState('');
+  const [commanderAuto, setCommanderAuto] = useState(false);
   // 新对话绑定的工作文件夹：选中后指令会作为项目任务分派，Agent 在该目录内读写。
   const [newFolder, setNewFolder] = useState<string>(() => { try { return localStorage.getItem('dataagent.newchatfolder.v1') || ''; } catch { return ''; } });
   useEffect(() => { try { localStorage.setItem('dataagent.newchatfolder.v1', newFolder); } catch { /* 存储禁用时仅当前会话生效。 */ } }, [newFolder]);
@@ -696,43 +699,25 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       const window = windows.find(item => windowKey(item.handle) === id);
       return window ? { handle: window.handle, text: prompt, submit: true, process: window.process, title: window.title } : undefined;
     };
-    // 拆分分发：先让规划器把目标拆成子任务，再按子任务分派，避免同一段话广播给所有 Agent。
+    // 指挥模式：软件自己把目标拆成带依赖的步骤，再把每一步交给合适的 Agent，而不是把同一段话广播给所有人。
     const splitAndDispatch = async (goal: string, targets: string[]): Promise<boolean> => {
-      const execs = [...new Set(targets.map(execIdFor))];
-      let steps: { executorId: string; text: string; datasetId?: string; dependsOn?: number[]; executorInput?: { handle?: number; process?: string; title?: string } }[];
+      const execs = [...new Set(targets.map(execIdFor).filter(id => id !== 'window'))];
+      if (execs.length < 2) return false;
       try {
-        steps = (await api.suggestWorkPlan(goal, execs)).steps;
+        const result = await api.workCommander(goal, execs, { autoRun: false });
+        setCommand('');
+        setActiveTicketId(null);
+        setActiveGroupId(null);
+        setCommanderPlan(result.plan);
+        setView('parallel');
+        await refresh();
+        const agents = new Set(result.plan.steps.map(step => step.executorId)).size;
+        notify(`软件把目标拆成 ${result.plan.steps.length} 步，分别交给 ${agents} 个 Agent；确认某一步后它才开始执行。`);
+        return true;
       } catch (cause) {
         notify(`任务拆分失败：${(cause as Error).message}；改为并行对比。`, true);
         return false;
       }
-      const usable = steps.filter(step => step.text.trim() && execs.includes(step.executorId));
-      if (usable.length < 2) return false;
-      const windowId = targets.find(id => id.startsWith('win:'));
-      const targetWindow = windowId ? windows.find(item => windowKey(item.handle) === windowId) : undefined;
-      const payload = usable.map(step => {
-        const text = step.text.trim();
-        const input = step.executorId === 'window'
-          ? { handle: targetWindow?.handle ?? step.executorInput?.handle, text, submit: true, process: targetWindow?.process || step.executorInput?.process, title: targetWindow?.title || step.executorInput?.title }
-          : step.executorInput;
-        return {
-          executorId: step.executorId,
-          text,
-          ...(input ? { executorInput: input } : {}),
-          ...(step.executorId === 'analysis' && (step.datasetId || datasetId) ? { datasetId: step.datasetId || datasetId } : {}),
-          ...(Array.isArray(step.dependsOn) && step.dependsOn.length ? { dependsOn: step.dependsOn } : {}),
-        };
-      });
-      try {
-        await api.createWorkPlan(goal, payload, `plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, true);
-        setCommand('');
-        setActiveTicketId(null);
-        setActiveGroupId(null);
-        setView('parallel');
-        await refresh();
-        notify(`已拆成 ${payload.length} 个步骤，分发给 ${payload.length} 个 Agent 并行执行。`);
-        return true;
-      } catch (cause) { notify((cause as Error).message, true); return true; }
     };
     const problem = chosen.length === 1 ? validateSingleInput(execIdFor(chosen[0])) : chosen.some(id => execIdFor(id) === 'analysis') ? (datasets.length === 0 ? '交叉验证包含数据分析，请先上传数据集。' : datasets.length > 1 && !datasetId ? '交叉验证包含数据分析，请先选择数据集。' : null) : null;
     if (problem) { notify(problem, true); return; }
@@ -906,11 +891,14 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     if (!chosen.length) { notify('没有可用的 Agent 可以分派。', true); return; }
     setCommanderBusy(true);
     try {
-      const result = await api.workCommander(goal, chosen);
+      const result = await api.workCommander(goal, chosen, {
+        ...(commanderProject ? { projectId: commanderProject } : {}),
+        ...(commanderAuto ? { autoRun: true } : {})
+      });
       setCommanderPlan(result.plan);
       setCommanderReport(null);
       setCommanderGoal('');
-      notify(`已拆成 ${result.plan.steps.length} 步，分给 ${new Set(result.plan.steps.map(step => step.executorId)).size} 个 Agent。确认某一步后它才开始执行。`);
+      notify(`已拆成 ${result.plan.steps.length} 步，分给 ${new Set(result.plan.steps.map(step => step.executorId)).size} 个 Agent。${commanderProject ? '每一步都会在这个工作文件夹里读写。' : '没有绑定工作文件夹，步骤只读。'}`);
       void refresh();
     } catch (cause) { notify((cause as Error).message, true); }
     finally { setCommanderBusy(false); }
@@ -1222,6 +1210,16 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       const min = Math.floor(sec / 60);
       return min < 60 ? `${min} 分 ${sec % 60} 秒` : `${Math.floor(min / 60)} 小时 ${min % 60} 分`;
     };
+    const durationOf = (from: string, to?: string) => {
+      const start = Date.parse(from);
+      const end = Date.parse(to || '');
+      const ms = (Number.isFinite(end) ? end : Date.now()) - start;
+      if (!Number.isFinite(ms) || ms < 0) return '';
+      const sec = Math.max(1, Math.round(ms / 1000));
+      if (sec < 60) return `${sec} 秒`;
+      const min = Math.floor(sec / 60);
+      return min < 60 ? `${min} 分 ${sec % 60} 秒` : `${Math.floor(min / 60)} 小时 ${min % 60} 分`;
+    };
     const liveCard = (ticket: WorkTicket) => {
       const detail = parallelDetails[ticket.id];
       const text = reportText(detail).trim();
@@ -1255,11 +1253,22 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           </div>
           <button className="sa-button sa-primary" type="submit" disabled={commanderBusy || !commanderGoal.trim()}>{commanderBusy ? '正在拆解…' : '拆解并分发'}</button>
         </div>
-        <p className="sa-inline-note"><Sparkles size={13} />不选 Agent 时由软件从前三个可用 Agent 里分配；拆解后的每一步仍需要你确认才会执行。</p>
+        <div className="sa-commander-scope">
+          <label htmlFor="sa-commander-project">工作文件夹</label>
+          <select id="sa-commander-project" className="sa-commander-select" value={commanderProject} onChange={event => setCommanderProject(event.target.value)}>
+            <option value="">不绑定（每一步只读，只出结论）</option>
+            {sortedFolders.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+          <label className="sa-commander-auto">
+            <input type="checkbox" checked={commanderAuto} onChange={event => setCommanderAuto(event.target.checked)} />
+            <span>一次跑完（不再逐步确认）</span>
+          </label>
+        </div>
+        <p className="sa-inline-note"><Sparkles size={13} />{commanderProject ? '绑定工作文件夹后，每一步都在该目录内读写文件。' : '不绑定工作文件夹时，步骤只读，不会改动任何文件。'}{commanderAuto ? '「一次跑完」会连续执行到结束。' : ''}</p>
       </form>
       {commanderPlan && <section className="sa-plan-board">
         <header className="sa-plan-board-head">
-          <div><strong>{commanderPlan.goal}</strong><span>{commanderSteps.filter(row => row.ticket?.status === 'completed').length}/{commanderSteps.length} 步完成 · {commanderPlan.status === 'active' ? '进行中' : commanderPlan.status === 'completed' ? '已全部完成' : commanderPlan.status === 'failed' ? '有步骤失败' : '已取消'}</span></div>
+          <div><strong title={commanderPlan.goal}>{commanderPlan.goal}</strong><span>{commanderSteps.filter(row => row.ticket?.status === 'completed').length}/{commanderSteps.length} 步完成 · {commanderPlan.status === 'active' ? '进行中' : commanderPlan.status === 'completed' ? '已全部完成' : commanderPlan.status === 'failed' ? '有步骤失败' : '已取消'}</span></div>
           <div className="sa-plan-board-actions">
             <button className="sa-button" type="button" onClick={() => void openCommanderReport()}>汇总结果</button>
             {commanderPlan.status === 'active' && <button className="sa-button" type="button" onClick={() => void api.cancelWorkPlan(commanderPlan.id).then(() => { setCommanderPlan(null); void refresh(); notify('计划已取消。'); }).catch((cause: Error) => notify(cause.message, true))}>取消计划</button>}
@@ -1268,7 +1277,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         </header>
         <div className="sa-steps">{commanderSteps.map(({ step, ticket }) => <article className="sa-step" key={step.ticketId}>
           <span className="sa-step-index">{step.index + 1}</span>
-          <div className="sa-step-main"><strong>{step.title}</strong><span>{executorNames[step.executorId] || step.executorId}{step.dependsOn?.length ? ` · 依赖第 ${step.dependsOn.map(index => index + 1).join('、')} 步` : ''}</span></div>
+          <div className="sa-step-main"><strong>{step.title}</strong><span>{executorNames[step.executorId] || step.executorId}{step.dependsOn?.length ? ` · 依赖第 ${step.dependsOn.map(index => index + 1).join('、')} 步` : ''}{ticket && ['completed', 'failed', 'blocked', 'cancelled'].includes(ticket.status) ? ` · 用时 ${durationOf(ticket.createdAt, ticket.updatedAt)}` : ''}</span></div>
           <Status status={ticket?.status || 'waiting'} />
           <div className="sa-step-actions">
             {ticket?.status === 'awaiting_review' && <button type="button" className="sa-link" onClick={() => void act(ticket.id, 'approve')}>批准</button>}

@@ -1,24 +1,46 @@
 import { execFile } from 'node:child_process';
 import { resolveLocalCommand } from './providers.js';
+import { findCodexBinary } from './executors/discover.js';
 
 // 没有配置规划模型时，用本机已安装的 Agent 自己来拆任务：
 // 软件把「目标 + 可用执行器清单 + 输出格式」交给一个 Agent，只取它回的 JSON 步骤。
+// 注意：规划器只负责「想」，不需要出现在本次要分发的执行器里；
+// 用户点名的 Agent 优先，其次再按顺序找本机可用的。
 const PLANNERS = [
-  { id: 'dsh', args: (prompt) => ['--profile', 'headless', prompt] },
-  { id: 'claude-code', args: (prompt) => ['-p', '--output-format', 'text', prompt] },
-  { id: 'codex', args: (prompt) => ['exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check', prompt] }
+  {
+    id: 'dsh',
+    command: env => resolveLocalCommand('dsh', env),
+    args: prompt => ['--profile', 'headless', prompt]
+  },
+  {
+    id: 'claude-code',
+    command: env => resolveLocalCommand('claude', env),
+    args: prompt => ['-p', '--output-format', 'text', prompt]
+  },
+  {
+    id: 'codex',
+    command: env => (findCodexBinary(env) ? { command: findCodexBinary(env), args: [], shell: false } : resolveLocalCommand('codex', env)),
+    args: prompt => ['exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check', prompt]
+  }
 ];
 
 const SYSTEM = [
   '你是任务规划器，只做拆解，不执行任务。',
-  '把目标拆成 2–5 步，每步交给一个最合适的执行器；有先后依赖时用 dependsOn 指定前面的步骤下标。',
+  '不要调用任何工具，不要读取或修改文件，只根据目标、执行器清单和数据集清单来拆解。',
+  '把目标拆成 2–5 步，每步交给一个最合适的执行器；有先后依赖时用 dependsOn 指定前面的步骤下标（从 0 开始）。',
   '每个执行器的说明要具体到「谁、在什么范围内、产出什么」，一条不超过 200 字。',
+  '要查开源项目怎么做的，就把第一步交给 github（它只读、能搜索仓库），不要交给会被沙箱禁网的 CLI。',
+  '交给 github 的步骤必须带 executorInput，格式 {"action":"search","query":"英文关键词，2-5 个词","limit":5}，query 不要写整句中文，也不要加 open source / github 这类词。',
+  '成本高的执行器（codex / claude-code）尽量只用在真正要改文件的那几步。',
   '只输出一个 JSON 对象，格式：{"steps":[{"executorId":"...","text":"...","dependsOn":[0]}]}',
-  '不要输出解释、Markdown 代码块以外的东西。'
+  '除了这个 JSON，不要输出任何解释或其它内容。'
 ].join('\n');
 
-function candidates(executors) {
-  return executors.map(id => PLANNERS.find(planner => planner.id === id)).filter(Boolean);
+function ordered(executors) {
+  const wanted = new Set(executors);
+  const preferred = PLANNERS.filter(planner => wanted.has(planner.id));
+  const rest = PLANNERS.filter(planner => !wanted.has(planner.id));
+  return [...preferred, ...rest];
 }
 
 function extractJson(text) {
@@ -38,18 +60,16 @@ function run(command, args, { env, timeoutMs }) {
     execFile(command.command, [...(command.args || []), ...args], {
       env, timeout: timeoutMs, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8'
     }, (error, stdout, stderr) => {
-      if (error) { reject(new Error(String(stderr || error.message || '规划器执行失败').trim().slice(0, 400))); return; }
+      if (error) { reject(new Error(String(stderr || error.message || '规划器执行失败').trim().slice(0, 300))); return; }
       resolve(String(stdout || ''));
     });
   });
 }
 
-export function createAgentPlanner({ env = process.env, timeoutMs = 150000 } = {}) {
+export function createAgentPlanner({ env = process.env, timeoutMs = 180000 } = {}) {
   return async function agentPlanner(input) {
     const executors = Array.isArray(input?.executors) ? input.executors : [];
     const agents = Array.isArray(input?.agents) ? input.agents : [];
-    const usable = candidates(executors);
-    if (!usable.length) throw new Error('本机没有可以用来自动拆解任务的 Agent');
     const prompt = [
       SYSTEM,
       '',
@@ -58,17 +78,19 @@ export function createAgentPlanner({ env = process.env, timeoutMs = 150000 } = {
       Array.isArray(input?.datasets) && input.datasets.length ? `可用数据集：${input.datasets.map(dataset => `${dataset.id}（${dataset.name}）`).join('；')}` : '',
       input?.project ? `项目：${input.project.name}（${input.project.path}${input.project.gitBranch ? `，分支 ${input.project.gitBranch}` : ''}）` : ''
     ].filter(Boolean).join('\n');
-    let lastError = null;
-    for (const planner of usable) {
-      const resolved = resolveLocalCommand(planner.id, env);
-      if (!resolved) { lastError = new Error(`找不到 ${planner.id} 可执行文件`); continue; }
+    const failures = [];
+    for (const planner of ordered(executors)) {
+      const resolved = planner.command(env);
+      if (!resolved || !resolved.command) { failures.push(`${planner.id} 未安装`); continue; }
       try {
         const stdout = await run(resolved, planner.args(prompt), { env, timeoutMs });
         const parsed = extractJson(stdout);
-        if (!parsed || !Array.isArray(parsed.steps)) throw new Error('规划结果缺少 steps');
+        if (!parsed || !Array.isArray(parsed.steps) || !parsed.steps.length) throw new Error('规划结果缺少 steps');
         return { steps: parsed.steps, model: { provider: 'local', model: planner.id } };
-      } catch (error) { lastError = error; }
+      } catch (error) {
+        failures.push(`${planner.id}：${String(error?.message || '失败').slice(0, 120)}`);
+      }
     }
-    throw new Error(`自动拆解失败：${lastError?.message || '没有可用的规划器'}`);
+    throw new Error(`自动拆解失败：${failures.join('；') || '没有可用的规划器'}`);
   };
 }
