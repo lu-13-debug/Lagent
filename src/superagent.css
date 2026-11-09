@@ -4460,3 +4460,368 @@ html[data-theme="dark"] .sa-newchat kbd {
 .sa-side-scroll .sa-conv-section {
   min-height: 200px;
 }
+
+/* 多 Agent 工作方式：拆分分发 / 并行对比 */
+.sa-dispatch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-2);
+}
+
+.sa-dispatch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--sa-r-full);
+  background: transparent;
+  color: var(--sa-text-3);
+  font: inherit;
+  font-size: var(--sa-fs-2xs);
+  cursor: pointer;
+  transition: background 120ms var(--sa-ease), color 120ms var(--sa-ease);
+}
+
+.sa-dispatch button:hover {
+  color: var(--sa-text);
+}
+
+.sa-dispatch button.on {
+  background: var(--sa-surface);
+  color: var(--sa-accent-ink);
+  box-shadow: var(--sa-shadow-sm);
+}
+
+.sa-dispatch button:focus-visible {
+  outline: 2px solid var(--sa-accent);
+  outline-offset: 1px;
+}
+
+.sa-composer-modes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 2px;
+}
+/* 并行导航上的实时计数：带呼吸点，表示「正在跑」 */
+.sa-nav-live {
+  position: relative;
+}
+
+.sa-nav-live::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -9px;
+  width: 5px;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 50%;
+  background: var(--sa-success);
+  animation: sa-live-dot 1.8s var(--sa-ease) infinite;
+}
+
+@keyframes sa-live-dot {
+  50% {
+    opacity: .3;
+  }
+}
+
+/* 并行面板：多个 Agent 同屏 */
+.sa-live-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  align-items: start;
+}
+
+.sa-live-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface);
+  box-shadow: var(--sa-shadow-sm);
+}
+
+.sa-live-card.is-live {
+  border-color: var(--sa-line-strong);
+  box-shadow: inset 0 0 0 1px var(--sa-accent-soft), var(--sa-shadow-sm);
+}
+
+.sa-live-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.sa-live-title {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sa-live-title strong {
+  font-size: var(--sa-fs-base);
+  font-weight: 560;
+  color: var(--sa-text);
+}
+
+.sa-live-title span {
+  overflow: hidden;
+  font-size: var(--sa-fs-xs);
+  color: var(--sa-text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-live-body {
+  margin: 0;
+  max-height: 210px;
+  overflow: auto;
+  padding: 10px 11px;
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-2);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-xs);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sa-live-card.is-live .sa-live-body {
+  border: 1px solid var(--sa-line);
+  background: var(--sa-surface);
+}
+
+.sa-live-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.sa-live-foot > div {
+  display: flex;
+  gap: 10px;
+}
+
+.sa-empty-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--sa-r-md);
+  background: var(--sa-accent-soft);
+  color: var(--sa-accent-ink);
+}
+
+@media (max-width: 760px) {
+  .sa-live-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sa-live-body {
+    max-height: 150px;
+  }
+
+  .sa-dispatch {
+    width: 100%;
+  }
+
+  .sa-dispatch button {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .sa-composer-modes .sa-inline-note {
+    display: none;
+  }
+}
+
+/* 17. 本机 Agent：探测列表 + 开关 */
+.sa-agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sa-agent-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface);
+  transition: border-color var(--sa-fast) var(--sa-ease), background var(--sa-fast) var(--sa-ease);
+}
+
+.sa-agent-row:hover {
+  border-color: var(--sa-line-strong);
+}
+
+.sa-agent-row.is-on {
+  border-color: var(--sa-line-strong);
+}
+
+.sa-agent-row.is-off {
+  background: var(--sa-surface-2);
+}
+
+.sa-agent-glyph {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-2);
+}
+
+.sa-agent-row.is-on .sa-agent-glyph {
+  background: var(--sa-accent-soft);
+  color: var(--sa-accent-ink);
+}
+
+.sa-agent-main {
+  min-width: 0;
+}
+
+.sa-agent-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sa-agent-line strong {
+  font-size: var(--sa-fs-base);
+  font-weight: 580;
+  color: var(--sa-text);
+}
+
+.sa-agent-kind {
+  padding: 1px 5px;
+  border: 1px solid var(--sa-line);
+  border-radius: 4px;
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+  line-height: 1.5;
+}
+
+.sa-agent-ver {
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+}
+
+.sa-agent-path {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--sa-text-3);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-agent-note-line {
+  margin: 4px 0 0;
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-xs);
+  line-height: 1.55;
+}
+
+.sa-agent-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sa-agent-tag {
+  padding: 2px 7px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+}
+
+.sa-shell .sa-switch {
+  position: relative;
+  flex: none;
+  width: 38px;
+  min-width: 38px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 1px solid var(--sa-line-strong);
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-2);
+  cursor: pointer;
+  transition: background var(--sa-base) var(--sa-ease), border-color var(--sa-base) var(--sa-ease);
+}
+
+.sa-switch > span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--sa-surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.28);
+  transition: transform var(--sa-base) var(--sa-ease);
+}
+
+.sa-switch.on {
+  border-color: var(--sa-accent);
+  background: var(--sa-accent);
+}
+
+.sa-switch.on > span {
+  transform: translateX(16px);
+}
+
+.sa-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.sa-switch:focus-visible {
+  outline: 2px solid var(--sa-accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .sa-agent-row {
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+    gap: 9px;
+    padding: 9px 10px;
+  }
+
+  .sa-agent-glyph {
+    width: 30px;
+    height: 30px;
+  }
+
+  .sa-agent-side .sa-status {
+    display: none;
+  }
+}

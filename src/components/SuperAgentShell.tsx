@@ -13,9 +13,10 @@ import { SettingsModal } from './ModelSettings';
 import { Logo, Modal, Toast } from './ui';
 import '../superagent.css';
 
-type ShellView = 'command' | 'inbox' | 'projects' | 'agents' | 'tools' | 'memory' | 'settings';
+type ShellView = 'command' | 'inbox' | 'parallel' | 'projects' | 'agents' | 'tools' | 'memory' | 'settings';
 const navItems: { id: ShellView; label: string; icon: typeof Terminal }[] = [
   { id: 'inbox', label: '收件箱', icon: Inbox },
+  { id: 'parallel', label: '并行', icon: Activity },
   { id: 'agents', label: 'Agent', icon: Bot },
   { id: 'tools', label: '工具', icon: Wrench },
   { id: 'memory', label: '记忆', icon: Brain },
@@ -166,6 +167,9 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [crossChecks, setCrossChecks] = useState<CrossCheck[]>(() => loadCrossChecks());
   const [groupDetails, setGroupDetails] = useState<Record<string, WorkTicketDetail>>({});
   const [selectedAgents, setSelectedAgents] = useState<string[]>(['claude-acp']);
+  // 多 Agent 的两种用法：拆分分发（先拆成子任务再分派）与并行对比（同一问题各自作答）。
+  const [dispatchMode, setDispatchMode] = useState<'split' | 'compare'>('split');
+  const [parallelDetails, setParallelDetails] = useState<Record<string, WorkTicketDetail>>({});
   // 新对话绑定的工作文件夹：选中后指令会作为项目任务分派，Agent 在该目录内读写。
   const [newFolder, setNewFolder] = useState<string>(() => { try { return localStorage.getItem('dataagent.newchatfolder.v1') || ''; } catch { return ''; } });
   useEffect(() => { try { localStorage.setItem('dataagent.newchatfolder.v1', newFolder); } catch { /* 存储禁用时仅当前会话生效。 */ } }, [newFolder]);
@@ -261,8 +265,9 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [windowDrafts, setWindowDrafts] = useState<Record<string, string>>({});
   const [windowOutputs, setWindowOutputs] = useState<Record<string, string>>({});
   const [windowsLoading, setWindowsLoading] = useState(false);
-  const [providers, setProviders] = useState<{ id: string; name: string; kind?: string; command: string | null; installed: boolean; version: string | null; status: string; message: string; auth: { loggedIn: boolean | null; method: string | null; message: string } }[]>([]);
+  const [providers, setProviders] = useState<{ id: string; name: string; executorId?: string | null; kind?: string; command: string | null; installed: boolean; version: string | null; status: string; message: string; auth: { loggedIn: boolean | null; method: string | null; message: string } }[]>([]);
   const [providersLoading, setProvidersLoading] = useState(false);
+  const [executorBusy, setExecutorBusy] = useState('');
   useEffect(() => { if (work?.policy) setPolicy(work.policy); }, [work?.policy]);
   const savePolicy = async () => {
     if (!policy || policySaving) return;
@@ -276,6 +281,22 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     const current = previous.allowedExecutors || [];
     return { ...previous, allowedExecutors: current.includes(id) ? current.filter(item => item !== id) : [...current, id] };
   });
+  // 开关即时落盘：读最新的 work.policy（避免设置页未保存的本地编辑互相覆盖）。
+  const setExecutorEnabled = async (id: string, enabled: boolean) => {
+    const base = work?.policy || policy;
+    if (!base || executorBusy) return;
+    const current = base.allowedExecutors || [];
+    const nextList = enabled ? [...new Set([...current, id])] : current.filter(item => item !== id);
+    if (nextList.length === current.length && enabled === current.includes(id)) return;
+    setExecutorBusy(id);
+    try {
+      const saved = await api.updateWorkPolicy({ ...base, allowedExecutors: nextList });
+      setPolicy(saved.policy);
+      await refresh();
+      notify(`${executorNames[id] || id}${enabled ? ' 已启用，可在新对话里选择' : ' 已停用'}。`);
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setExecutorBusy(''); }
+  };
   const setBudget = (key: 'maxConcurrent' | 'maxCallsPerTicket' | 'maxRuntimeMs' | 'maxTokensPerTicket', value: number) => setPolicy(previous => previous ? { ...previous, budgets: { ...(previous.budgets || { maxConcurrent: 2, maxCallsPerTicket: 12, maxRuntimeMs: 3600000, maxTokensPerTicket: 200000 }), [key]: value } } : previous);
   const [mobilePair, setMobilePair] = useState<{ code: string; expiresAt: string } | null>(null);
   const [mobileDevices, setMobileDevices] = useState<{ id: string; name: string; createdAt: string; expiresAt: string }[]>([]);
@@ -475,6 +496,30 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   }, [tickets, crossChecks]);
   const activeTicket = activeDetail?.ticket?.id === activeTicketId ? activeDetail.ticket : tickets.find(ticket => ticket.id === activeTicketId) || null;
 
+  // 并行面板：把每个在跑的工单的最新输出都拉回来，同屏刷新，不必逐个点开。
+  const liveTickets = useMemo(() => tickets.filter(ticket => !terminalStatuses.includes(ticket.status)), [tickets]);
+  const liveKey = liveTickets.map(ticket => `${ticket.id}:${ticket.status}`).join(',');
+  useEffect(() => {
+    if (view !== 'parallel' || !liveKey) return;
+    let cancelled = false;
+    const ids = liveKey.split(',').map(part => part.split(':')[0]);
+    const pull = async () => {
+      const results = await Promise.all(ids.map(async id => {
+        try { return [id, await api.workTicket(id)] as const; }
+        catch { return null; }
+      }));
+      if (cancelled) return;
+      setParallelDetails(previous => {
+        const next = { ...previous };
+        for (const entry of results) if (entry) next[entry[0]] = entry[1];
+        return next;
+      });
+    };
+    void pull();
+    const timer = setInterval(() => void pull(), 2500);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [view, liveKey]);
+
   useEffect(() => {
     try { localStorage.setItem(CROSS_CHECK_KEY, JSON.stringify(crossChecks.slice(0, 30))); } catch { /* 隐私模式忽略。*/ }
   }, [crossChecks]);
@@ -631,6 +676,44 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       const window = windows.find(item => windowKey(item.handle) === id);
       return window ? { handle: window.handle, text: prompt, submit: true, process: window.process, title: window.title } : undefined;
     };
+    // 拆分分发：先让规划器把目标拆成子任务，再按子任务分派，避免同一段话广播给所有 Agent。
+    const splitAndDispatch = async (goal: string, targets: string[]): Promise<boolean> => {
+      const execs = [...new Set(targets.map(execIdFor))];
+      let steps: { executorId: string; text: string; datasetId?: string; dependsOn?: number[]; executorInput?: { handle?: number; process?: string; title?: string } }[];
+      try {
+        steps = (await api.suggestWorkPlan(goal, execs)).steps;
+      } catch (cause) {
+        notify(`任务拆分失败：${(cause as Error).message}；改为并行对比。`, true);
+        return false;
+      }
+      const usable = steps.filter(step => step.text.trim() && execs.includes(step.executorId));
+      if (usable.length < 2) return false;
+      const windowId = targets.find(id => id.startsWith('win:'));
+      const targetWindow = windowId ? windows.find(item => windowKey(item.handle) === windowId) : undefined;
+      const payload = usable.map(step => {
+        const text = step.text.trim();
+        const input = step.executorId === 'window'
+          ? { handle: targetWindow?.handle ?? step.executorInput?.handle, text, submit: true, process: targetWindow?.process || step.executorInput?.process, title: targetWindow?.title || step.executorInput?.title }
+          : step.executorInput;
+        return {
+          executorId: step.executorId,
+          text,
+          ...(input ? { executorInput: input } : {}),
+          ...(step.executorId === 'analysis' && (step.datasetId || datasetId) ? { datasetId: step.datasetId || datasetId } : {}),
+          ...(Array.isArray(step.dependsOn) && step.dependsOn.length ? { dependsOn: step.dependsOn } : {}),
+        };
+      });
+      try {
+        await api.createWorkPlan(goal, payload, `plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, true);
+        setCommand('');
+        setActiveTicketId(null);
+        setActiveGroupId(null);
+        setView('parallel');
+        await refresh();
+        notify(`已拆成 ${payload.length} 个步骤，分发给 ${payload.length} 个 Agent 并行执行。`);
+        return true;
+      } catch (cause) { notify((cause as Error).message, true); return true; }
+    };
     const problem = chosen.length === 1 ? validateSingleInput(execIdFor(chosen[0])) : chosen.some(id => execIdFor(id) === 'analysis') ? (datasets.length === 0 ? '交叉验证包含数据分析，请先上传数据集。' : datasets.length > 1 && !datasetId ? '交叉验证包含数据分析，请先选择数据集。' : null) : null;
     if (problem) { notify(problem, true); return; }
     // 新对话绑定了工作文件夹：走项目分派，工单在项目目录内执行。
@@ -670,6 +753,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         await refresh();
         await loadActiveTicket(ticket.id);
         notify('指令已提交，Agent 正在处理。');
+      } else if (dispatchMode === 'split' && await splitAndDispatch(value, chosen)) {
+        // 已按子任务分派，不再把同一份提示词广播给所有 Agent。
       } else {
         const stamp = Date.now();
         const results = await Promise.all(chosen.map(id => {
@@ -734,13 +819,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     try { setPlanDetail((await api.workPlan(id)).plan); }
     catch (cause) { notify((cause as Error).message, true); }
   };
-  const enableTool = async (id: string) => {
-    if (!policy) return;
-    try {
-      const next = await api.updateWorkPolicy({ ...policy, allowedExecutors: [...new Set([...(policy.allowedExecutors || []), id])] });
-      setPolicy(next.policy); await refresh(); notify(`${executorNames[id] || id} 已加入允许策略。`);
-    } catch (cause) { notify((cause as Error).message, true); }
-  };
+  const enableTool = async (id: string) => setExecutorEnabled(id, true);
 
   const toggleAgent = (id: string) => setSelectedAgents(previous => previous.includes(id) ? (previous.length > 1 ? previous.filter(item => item !== id) : previous) : [...previous, id].slice(0, 4));
 
@@ -832,7 +911,11 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   };
 
   const singleExecutor = selectedAgents.length === 1 ? selectedAgents[0] : null;
-  const composerTitle = selectedAgents.length > 1 ? `交叉验证 · ${selectedAgents.length} 个 Agent` : '发送指令';
+  const composerTitle = selectedAgents.length > 1 ? (dispatchMode === 'split' ? `拆分分发 · ${selectedAgents.length} 个 Agent` : `并行对比 · ${selectedAgents.length} 个 Agent`) : '发送指令';
+  const dispatchToggle = selectedAgents.length > 1 ? <span className="sa-dispatch" role="group" aria-label="多个 Agent 的工作方式">
+    <button type="button" className={dispatchMode === 'split' ? 'on' : ''} aria-pressed={dispatchMode === 'split'} onClick={() => setDispatchMode('split')} title="先拆成子任务，再各领一部分"><GitBranch size={12} />拆分分发</button>
+    <button type="button" className={dispatchMode === 'compare' ? 'on' : ''} aria-pressed={dispatchMode === 'compare'} onClick={() => setDispatchMode('compare')} title="同一问题各自作答，便于比较"><Users size={12} />并行对比</button>
+  </span> : null;
   const isLanding = !activeTicket && !activeGroup;
   const conversationGroups = useMemo(() => {
     const keyword = convQuery.trim().toLowerCase();
@@ -865,7 +948,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         <header className="sa-hero">
           <p className="sa-eyebrow">PERSONAL AGENT</p>
           <h1>今天想让我做什么？</h1>
-          <p className="sa-hero-sub">选择一个或多个 Agent，描述目标。需要时我会拆解任务、并行交叉验证，并把结论汇总给你。</p>
+          <p className="sa-hero-sub">选择一个或多个 Agent，描述目标。多选时我会把任务拆成子任务分派下去，进度在「并行」里同屏可见。</p>
         </header>
         <section className="sa-picker" aria-labelledby="sa-picker-title">
           <div className="sa-picker-head"><span id="sa-picker-title">执行 Agent</span><span className="sa-picker-hint">{crossCapable.length + windows.length} 个可用 · 最多选 4 个</span></div>
@@ -974,7 +1057,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             const on = selectedAgents.includes(id);
             return <button key={id} type="button" className={`sa-agent-pick ${on ? 'on' : ''}`} title={`${window.title || window.process} · PID ${window.pid}`} aria-pressed={on} onClick={() => toggleAgent(id)}>{on ? <Check size={12} /> : <Plus size={12} />}窗口 · {window.process}</button>;
           })}
-          {selectedAgents.length > 1 && <span className="sa-xc-badge"><Users size={12} />交叉验证</span>}
         </div>}
         {isLanding && folderState.projects.length > 0 && <div className="sa-scope">
           <FolderGit2 size={13} />
@@ -985,14 +1067,15 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           </select>
           <span className="sa-scope-hint">{newFolder ? 'Agent 会在这个目录里读写文件，工单仍需你确认' : '选择一个文件夹，Agent 才能改项目里的文件'}</span>
         </div>}
-        <textarea id="sa-command" value={command} maxLength={3000} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} rows={2} placeholder={selectedAgents.length > 1 ? '描述要交叉验证的问题，例如：审查这段鉴权逻辑是否有漏洞？' : '描述目标，例如：检查 DataAgent 仓库的 CI，修复失败项并开 PR'} />
+        {dispatchToggle && <div className="sa-composer-modes">{dispatchToggle}<span className="sa-inline-note">已选 {selectedAgents.length} 个 Agent，{dispatchMode === 'split' ? '任务会先拆成子任务' : '各自独立作答'}</span></div>}
+        <textarea id="sa-command" value={command} maxLength={3000} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} rows={2} placeholder={selectedAgents.length > 1 ? (dispatchMode === 'split' ? '描述目标，例如：重构鉴权模块，一个 Agent 改代码、一个写测试、一个更新文档' : '描述要对比的问题，例如：审查这段鉴权逻辑是否有漏洞？') : '描述目标，例如：检查 DataAgent 仓库的 CI，修复失败项并开 PR'} />
         {singleExecutor === 'analysis' && (datasets.length > 1 ? <div className="sa-executor-fields"><label className="sa-field"><span>数据集</span><select value={datasetId} onChange={event => setDatasetId(event.target.value)}><option value="">请选择数据集</option>{datasets.map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.name} · {dataset.rowCount.toLocaleString()} 行</option>)}</select></label></div> : datasets.length === 1 ? <div className="sa-executor-fields"><span className="sa-inline-note"><Check size={13} />数据集：{datasets[0].name}</span></div> : <div className="sa-executor-fields"><span className="sa-inline-note">还没有数据集，请先在工作区上传或加载示例数据。</span></div>)}
         {singleExecutor === 'terminal' && <div className="sa-executor-fields"><label className="sa-field"><span>程序</span><select value={terminalProgram} onChange={event => setTerminalProgram(event.target.value)}><option value="git">git</option><option value="npm">npm</option><option value="ls">ls</option><option value="pwd">pwd</option></select></label><label className="sa-field"><span>参数</span><input value={terminalArgs} onChange={event => setTerminalArgs(event.target.value)} placeholder="status --short" /></label></div>}
         {singleExecutor === 'browser' && <div className="sa-executor-fields"><label className="sa-field"><span>页面地址</span><input type="url" value={browserUrl} onChange={event => setBrowserUrl(event.target.value)} placeholder="https://example.com/page" /></label></div>}
         {singleExecutor === 'github' && <div className="sa-executor-fields"><label className="sa-field"><span>GitHub 动作</span><select value={githubAction} onChange={event => setGithubAction(event.target.value)}><option value="repo">仓库</option><option value="issues">Issues</option><option value="pulls">Pull Requests</option><option value="checks">CI Checks</option><option value="file">文件</option></select></label><label className="sa-field"><span>owner</span><input value={githubOwner} onChange={event => setGithubOwner(event.target.value)} placeholder="acme" /></label><label className="sa-field"><span>repo</span><input value={githubRepo} onChange={event => setGithubRepo(event.target.value)} placeholder="data-agent" /></label>{['issues', 'pulls', 'checks'].includes(githubAction) && <label className="sa-field"><span>编号</span><input inputMode="numeric" value={githubNumber} onChange={event => setGithubNumber(event.target.value)} placeholder="7" /></label>}{githubAction === 'file' && <label className="sa-field"><span>文件路径</span><input value={githubPath} onChange={event => setGithubPath(event.target.value)} placeholder="docs/readme.md" /></label>}</div>}
         <div className="sa-composer-foot"><div className="sa-chips">{!isLanding && quickCommands.map(item => <button type="button" key={item} onClick={() => setCommand(item)}>{item}</button>)}<button type="button" onClick={() => setPlanOpen(true)}>多步计划</button></div><button className="sa-send" type="submit" disabled={!command.trim() || sending} aria-label="发送指令">{sending ? <RefreshCw size={16} className="sa-spin" /> : <Send size={16} />}<span>{sending ? '提交中' : composerTitle}</span></button></div>
       </form>
-      <p className="sa-note"><ShieldCheck size={14} />{selectedAgents.length > 1 ? '多个 Agent 会并行独立作答，方便对比与交叉验证；会消耗对应执行器的额度。' : '只会执行你明确授权或规则允许的操作；危险动作会先请求确认。'}<span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
+      <p className="sa-note"><ShieldCheck size={14} />{selectedAgents.length > 1 ? (dispatchMode === 'split' ? '任务会先拆成子任务再分派给各 Agent，开工前仍按策略逐单确认。' : '多个 Agent 会并行独立作答，方便对比；会消耗对应执行器的额度。') : '只会执行你明确授权或规则允许的操作；危险动作会先请求确认。'}<span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
     </div>
   </div>;
 
@@ -1013,12 +1096,33 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const windowFallbackFor = (provider: { id: string; name: string }) => /deepseek/i.test(`${provider.id} ${provider.name}`) && dshWindow
     ? `已检出运行中的「${dshWindow.process}」窗口，无需安装 ACP：在左下角选择「窗口 · ${dshWindow.process}」即可直接发送指令。`
     : '';
-  const agentsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">EXECUTORS</p><h1>Agent</h1><p>可被调度的执行器，以及本机正在运行的 Agent 窗口。</p></div></header><div className="sa-card-grid">{(work?.agents || []).map(agent => <article className="sa-card" key={agent.id}><div className="sa-card-icon">{agentIcon(agent.id)}</div><div className="sa-card-title"><h2>{agent.name}</h2><Status status={agent.status} /></div><p className="sa-mono">{agent.kind}</p><div className="sa-tags">{agent.capabilities.map(item => <span key={item}>{item}</span>)}</div>{agent.capabilities.includes('acp') && <p className="sa-inline-note">ACP 统一协议：指令文本会作为提示词发送，v1 只读，拒绝文件与终端权限。</p>}</article>)}{!work?.agents?.length && <p className="sa-empty">还没有注册执行器。</p>}</div>
-    <section className="sa-providers"><div className="sa-section-head"><h2>本机 Agent 探测</h2><button type="button" className="sa-link" disabled={providersLoading} onClick={() => void loadProviders(true)}>{providersLoading ? '探测中…' : '重新探测'}</button></div>
-      <p className="sa-inline-note"><ShieldCheck size={13} />通过 PATH/PATHEXT 解析命令，并读取版本与登录状态；不会保存输出原文。</p>
-      <p className="sa-inline-note">可选 ACP 入口：<code>npm i -g @agentclientprotocol/claude-agent-acp</code>（Claude Code）。<code>npm i -g dsh-acp</code>（DeepSeek Harness）；安装后重启服务会自动出现在执行器列表。</p>
-      <ul className="sa-provider-list">{providers.map(provider => <li className="sa-provider" key={provider.id}><div className="sa-provider-head"><div><strong>{provider.name}</strong><span>{provider.command || '未找到命令'}</span></div><Status status={provider.status} /></div><div className="sa-provider-meta"><span>版本 {provider.version || '未知'}</span><span>{provider.auth.message}</span></div>{provider.status !== 'ready' || provider.kind === 'desktop' ? <p className="sa-inline-note">{provider.message}{!/窗口/.test(provider.message) && windowFallbackFor(provider) ? ` ${windowFallbackFor(provider)}` : ''}</p> : null}</li>)}</ul>
+  const providerIcon = (id: string) => /desktop|dsh/.test(id) ? <AppWindow size={18} /> : /acp/.test(id) ? <Bot size={18} /> : <Terminal size={18} />;
+  const providerKind = (provider: { id: string; kind?: string }) => provider.kind === 'desktop' ? '桌面版' : provider.id.endsWith('-acp') ? 'ACP' : 'CLI';
+  const enabledExecutors = policy?.allowedExecutors || work?.policy?.allowedExecutors || [];
+  const sortedProviders = [...providers].sort((left, right) => Number(right.installed) - Number(left.installed));
+  const agentsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">AGENTS</p><h1>本机 Agent</h1><p>自动识别本机已安装的 Agent 程序，用开关决定它们能否被调度。</p></div>
+    <button type="button" className="sa-button" disabled={providersLoading} onClick={() => void loadProviders(true)}>{providersLoading ? '探测中…' : '重新探测'}</button></header>
+    <section className="sa-providers">
+      <p className="sa-inline-note"><ShieldCheck size={13} />按 PATH / PATHEXT 解析命令并读取版本，探测结果不会保存输出原文；开关写入执行器策略，停用的 Agent 不会出现在新对话的选择里。</p>
+      <ul className="sa-agent-list">{sortedProviders.map(provider => {
+        const executorId = provider.executorId || '';
+        const switchable = Boolean(executorId) && provider.installed;
+        const enabled = switchable && enabledExecutors.includes(executorId);
+        return <li className={`sa-agent-row${enabled ? ' is-on' : ''}${provider.installed ? '' : ' is-off'}`} key={provider.id}>
+          <span className="sa-agent-glyph">{providerIcon(provider.id)}</span>
+          <div className="sa-agent-main">
+            <div className="sa-agent-line"><strong>{provider.name}</strong><span className="sa-agent-kind">{providerKind(provider)}</span>{provider.version ? <span className="sa-agent-ver">{provider.version}</span> : null}</div>
+            <p className="sa-agent-path" title={provider.command || ''}>{provider.command || '未找到命令'}{provider.installed ? '' : ' · 未安装或不在 PATH'}</p>
+            {(provider.status !== 'ready' || provider.kind === 'desktop') && provider.message ? <p className="sa-agent-note-line">{provider.message}{!/窗口/.test(provider.message) && windowFallbackFor(provider) ? ` ${windowFallbackFor(provider)}` : ''}</p> : null}
+          </div>
+          <div className="sa-agent-side">
+            <Status status={provider.status} />
+            {executorId ? <button type="button" role="switch" aria-checked={enabled} aria-label={`${provider.name} 开关`} className={`sa-switch${enabled ? ' on' : ''}`} disabled={!switchable || executorBusy === executorId} onClick={() => void setExecutorEnabled(executorId, !enabled)}><span /></button> : <span className="sa-agent-tag">仅识别</span>}
+          </div>
+        </li>;
+      })}</ul>
       {!providers.length && !providersLoading && <p className="sa-empty">尚未探测到本机 Agent。</p>}
+      <p className="sa-inline-note">可选 ACP 入口：<code>npm i -g @agentclientprotocol/claude-agent-acp</code>（Claude Code）、<code>npm i -g dsh-acp</code>（DeepSeek Harness）。内置工具（数据分析 / 受控终端 / 浏览器 / GitHub）在<button type="button" className="sa-link" onClick={() => setView('tools')}>工具页</button>管理。</p>
     </section>
     <section className="sa-windows"><div className="sa-section-head"><h2>已打开的 Agent 窗口</h2><button type="button" className="sa-link" disabled={windowsLoading} onClick={() => void loadWindows()}>{windowsLoading ? '刷新中…' : '刷新窗口'}</button></div>
       <p className="sa-inline-note"><ShieldCheck size={13} />只向白名单进程窗口发送；发送会直接键入该窗口并回车，请先确认标题。DeepSeek Harness 与 Codex 桌面版已加入默认白名单。</p>
@@ -1061,7 +1165,48 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     <div className="sa-code-note"><span>Claude Code 示例</span><code>claude mcp add --transport http dataagent {location.origin}/api/mcp --header "Authorization: Bearer &lt;令牌&gt;"</code></div>
   </article></div></section>;
 
-  const page = view === 'command' ? conversationPage : view === 'inbox' ? inboxPage : view === 'projects' ? <ProjectsPanel notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} allowedExecutors={allowedExecutors.filter(id => ['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'window'].includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
+  const parallelPage = (() => {
+    const elapsedOf = (iso: string) => {
+      const ms = Date.now() - Date.parse(iso);
+      if (!Number.isFinite(ms) || ms < 0) return '';
+      const sec = Math.floor(ms / 1000);
+      if (sec < 60) return `${sec} 秒`;
+      const min = Math.floor(sec / 60);
+      return min < 60 ? `${min} 分 ${sec % 60} 秒` : `${Math.floor(min / 60)} 小时 ${min % 60} 分`;
+    };
+    const done = tickets.filter(ticket => terminalStatuses.includes(ticket.status)).slice(0, 6);
+    const card = (ticket: WorkTicket, live: boolean) => {
+      const detail = parallelDetails[ticket.id];
+      const text = reportText(detail).trim();
+      const stopped = ['completed', 'failed', 'blocked', 'cancelled'].includes(ticket.status);
+      return <article className={`sa-live-card${live ? ' is-live' : ''}`} key={ticket.id}>
+        <header className="sa-live-head">
+          <span className="sa-agent-avatar">{agentIcon(ticket.executor, 15)}</span>
+          <div className="sa-live-title"><strong>{executorNames[ticket.executor] || ticket.executor}</strong><span title={ticket.title}>{ticket.title}</span></div>
+          <Status status={ticket.status} />
+        </header>
+        {(text || live) && <pre className="sa-live-body">{text ? text.slice(-1200) : '正在等待第一个输出…'}</pre>}
+        <footer className="sa-live-foot">
+          <span>{elapsedOf(ticket.createdAt)}{ticket.planId ? ` · 第 ${(ticket.planStep ?? 0) + 1}/${ticket.planTotal ?? 0} 步` : ''}{ticket.projectChatId ? ' · 项目任务' : ''}</span>
+          <div>
+            {ticket.status === 'awaiting_review' && <button type="button" className="sa-link" onClick={() => void act(ticket.id, 'approve')}>批准</button>}
+            {ticket.status === 'awaiting_review' && <button type="button" className="sa-link" onClick={() => void act(ticket.id, 'reject')}>要求修改</button>}
+            <button type="button" className="sa-link" onClick={() => viewTicket(ticket.id)}>打开</button>
+            {!stopped && <button type="button" className="sa-link sa-link-danger" onClick={() => void act(ticket.id, 'stop')}>停止</button>}
+            {['failed', 'blocked', 'cancelled'].includes(ticket.status) && <button type="button" className="sa-link" onClick={() => void act(ticket.id, 'retry')}>重试</button>}
+          </div>
+        </footer>
+      </article>;
+    };
+    return <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">PARALLEL</p><h1>并行执行<span className="sa-count">{liveTickets.length}</span></h1><p>所有 Agent 的实时进度同屏显示，每 2.5 秒自动刷新，不用逐个点开。</p></div><button className="sa-button" onClick={() => void refresh()}><RefreshCw size={14} />刷新</button></header>
+      {liveTickets.length
+        ? <div className="sa-live-grid">{liveTickets.map(ticket => card(ticket, true))}</div>
+        : <div className="sa-empty-card"><span className="sa-empty-icon"><Activity size={20} /></span><div><strong>现在没有正在执行的 Agent</strong><span>选择两个以上 Agent 后发送指令，任务会先被拆成子任务再分派，结果在这里同时出现。</span></div><button className="sa-button" onClick={() => setView('command')}>去下达指令</button></div>}
+      {done.length > 0 && <section className="sa-section"><div className="sa-section-head"><h2>刚结束</h2><span className="sa-inline-note">最多显示 6 个</span></div><div className="sa-live-grid">{done.map(ticket => card(ticket, false))}</div></section>}
+    </section>;
+  })();
+
+  const page = view === 'command' ? conversationPage : view === 'inbox' ? inboxPage : view === 'parallel' ? parallelPage : view === 'projects' ? <ProjectsPanel notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} allowedExecutors={allowedExecutors.filter(id => ['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'window'].includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
 
   return <div className="sa-shell" style={sidebarWidth ? { '--sa-sidebar': `${sidebarWidth}px` } as React.CSSProperties : undefined}>
     <a className="skip-link" href="#sa-main">跳到主内容</a>
@@ -1072,7 +1217,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       </div>
       <button className="sa-icon sa-nav-close" aria-label="关闭导航" onClick={() => setNavOpen(false)}><X size={18} /></button>
       <button className="sa-newchat" onClick={newChat}><span className="sa-newchat-label"><Plus size={16} />新对话</span></button>
-      <nav className="sa-nav" aria-label="功能导航">{navItems.map(item => <button key={item.id} className={`sa-nav-item ${view === item.id ? 'active' : ''}`} aria-current={view === item.id ? 'page' : undefined} onClick={() => { setView(item.id); setNavOpen(false); }}><item.icon size={16} /><span>{item.label}</span>{item.id === 'inbox' && attention.length > 0 && <em>{attention.length}</em>}</button>)}</nav>
+      <nav className="sa-nav" aria-label="功能导航">{navItems.map(item => <button key={item.id} className={`sa-nav-item ${view === item.id ? 'active' : ''}`} aria-current={view === item.id ? 'page' : undefined} onClick={() => { setView(item.id); setNavOpen(false); }}><item.icon size={16} /><span>{item.label}</span>{item.id === 'inbox' && attention.length > 0 && <em>{attention.length}</em>}{item.id === 'parallel' && liveTickets.length > 0 && <em className="sa-nav-live">{liveTickets.length}</em>}</button>)}</nav>
       <div className="sa-side-scroll">
       <section className={`sa-folders ${dropActive ? 'sa-drop-active' : ''}`} aria-label="工作文件夹"
         onDragOver={event => { if (Array.from(event.dataTransfer.types).includes('Files')) { event.preventDefault(); setDropActive(true); } }}

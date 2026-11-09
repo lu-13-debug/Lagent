@@ -8,14 +8,18 @@ const VERSION_TIMEOUT_MS = 5000;
 const MAX_OUTPUT = 16 * 1024;
 const CACHE_TTL_MS = 60 * 1000;
 
+// executorId 把「探测到的本机程序」和「真正可被调度的执行器」对上：
+// 有值才能开关（开关写 policy.allowedExecutors）；null 表示只做识别，暂无可调用适配器。
 const PROVIDERS = Object.freeze([
-  { id: 'codex', name: 'Codex CLI', commands: ['codex'], versionArgs: ['--version'], authArgs: ['login', 'status'], authKind: 'codex' },
-  { id: 'claude-code', name: 'Claude Code CLI', commands: ['claude'], versionArgs: ['--version'], authArgs: ['auth', 'status'], authKind: 'claude' },
-  { id: 'opencode', name: 'OpenCode', commands: ['opencode'], versionArgs: ['--version'], authArgs: ['auth', 'list'], authKind: 'opencode' },
-  { id: 'dsh', name: 'DeepSeek Harness', commands: ['dsh', 'deepseek'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
-  { id: 'codex-acp', name: 'Codex ACP', commands: ['codex-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
-  { id: 'claude-acp', name: 'Claude ACP', commands: ['claude-agent-acp', 'claude-code-acp', 'claude-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
-  { id: 'dsh-acp', name: 'DeepSeek Harness ACP', commands: ['dsh-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' }
+  { id: 'codex', name: 'Codex CLI', executorId: 'codex', commands: ['codex'], versionArgs: ['--version'], authArgs: ['login', 'status'], authKind: 'codex' },
+  // Codex 桌面版没有 CLI：只按运行中的窗口识别，发送走窗口 Agent。
+  { id: 'codex-desktop', name: 'Codex 桌面版', executorId: 'window', commands: [], versionArgs: [], authArgs: [], authKind: 'generic', desktopOnly: true },
+  { id: 'claude-code', name: 'Claude Code CLI', executorId: 'claude-code', commands: ['claude'], versionArgs: ['--version'], authArgs: ['auth', 'status'], authKind: 'claude' },
+  { id: 'opencode', name: 'OpenCode', executorId: null, commands: ['opencode'], versionArgs: ['--version'], authArgs: ['auth', 'list'], authKind: 'opencode' },
+  { id: 'dsh', name: 'DeepSeek Harness', executorId: null, commands: ['dsh', 'deepseek'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'codex-acp', name: 'Codex ACP', executorId: 'codex-acp', commands: ['codex-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'claude-acp', name: 'Claude ACP', executorId: 'claude-acp', commands: ['claude-agent-acp', 'claude-code-acp', 'claude-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'dsh-acp', name: 'DeepSeek Harness ACP', executorId: 'dsh-acp', commands: ['dsh-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' }
 ]);
 
 const pathValue = env => env.PATH ?? env.Path ?? env.path ?? '';
@@ -149,15 +153,20 @@ function normalizeSnapshot(def, resolved, versionResult, authResult, error) {
   const auth = isAcp ? { loggedIn: null, method: null, message: '登录状态由 ACP 适配器管理' } : authResult ? authOf(def.authKind, authResult) : { loggedIn: null, method: null, message: '未探测登录状态' };
   let status = installed ? 'ready' : 'not_installed';
   let message = installed ? '已安装' : '未安装或不在 PATH';
+  if (!installed && def.desktopOnly) message = '未检测到桌面版窗口；打开应用后点「重新探测」';
+  // 只能在桌面窗口里使用的执行器，即使未运行也按桌面类型展示，避免被当成 CLI。
+  const kind = def.desktopOnly ? 'desktop' : 'cli';
   if (installed && versionResult?.error) { status = 'error'; message = '无法执行版本探测'; }
-  if (installed && versionResult?.timedOut) { status = 'error'; message = '版本探测超时'; }
+  // 部分 ACP 适配器不支持 --version 会一直挂住；命令存在就算可用，只是版本未知。
+  if (installed && versionResult?.timedOut) { status = 'ready'; message = '版本探测超时（命令存在，可直接使用）'; }
   if (installed && auth.loggedIn === false && def.id !== 'codex') { status = 'needs_auth'; message = auth.message; }
   if (installed && def.id === 'codex' && auth.loggedIn === false) message = '未登录；执行器会使用 Codex 自定义 provider 配置（如已配置）';
   if (error) { status = 'error'; message = String(error).slice(0, 200); }
   return {
     id: def.id,
     name: def.name,
-    kind: 'cli',
+    executorId: def.executorId || null,
+    kind,
     command: resolved?.via || resolved?.command || null,
     installed,
     version,
@@ -172,7 +181,9 @@ function normalizeSnapshot(def, resolved, versionResult, authResult, error) {
 // 匹配运行中的窗口或显式安装路径，避免把已安装的桌面版误报成“未安装”。
 const DESKTOP_MATCHES = Object.freeze({
   dsh: /deepseek|harness/i,
-  'dsh-acp': /deepseek|harness/i
+  'dsh-acp': /deepseek|harness/i,
+  // 桌面版 Codex 的窗口进程/标题通常含 codex（Codex.exe / Codex Desktop / codex）。
+  'codex-desktop': /codex/i
 });
 
 function desktopFor(def, desktops) {
@@ -183,6 +194,19 @@ function desktopFor(def, desktops) {
 
 function desktopSnapshot(def, desktop) {
   const processName = String(desktop.process || '').slice(0, 80) || 'DeepSeek Harness';
+  if (def.id === 'codex-desktop') {
+    return {
+      ...normalizeSnapshot(def, null, null, null, null),
+      kind: 'desktop',
+      command: processName,
+      installed: true,
+      version: null,
+      status: 'ready',
+      message: `已检出 Codex 桌面版「${processName}」；用「窗口 · ${processName}」新建对话即可发送指令`,
+      auth: { loggedIn: null, method: null, message: '由桌面应用管理' },
+      capabilities: ['desktop', 'window', 'chat']
+    };
+  }
   if (def.id === 'dsh-acp') {
     return {
       ...normalizeSnapshot(def, null, null, null, null),
@@ -193,6 +217,7 @@ function desktopSnapshot(def, desktop) {
   return {
     id: def.id,
     name: def.name,
+    executorId: def.executorId || null,
     kind: 'desktop',
     command: processName,
     installed: true,
