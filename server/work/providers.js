@@ -15,15 +15,16 @@ const PROVIDERS = Object.freeze([
   // Codex 桌面版没有 CLI：只按运行中的窗口识别，发送走窗口 Agent。
   { id: 'codex-desktop', name: 'Codex 桌面版', executorId: 'window', commands: [], versionArgs: [], authArgs: [], authKind: 'generic', desktopOnly: true },
   { id: 'claude-code', name: 'Claude Code CLI', executorId: 'claude-code', commands: ['claude'], versionArgs: ['--version'], authArgs: ['auth', 'status'], authKind: 'claude' },
-  { id: 'opencode', name: 'OpenCode', executorId: null, commands: ['opencode'], versionArgs: ['--version'], authArgs: ['auth', 'list'], authKind: 'opencode' },
-  { id: 'dsh', name: 'DeepSeek Harness', executorId: null, commands: ['dsh', 'deepseek'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'opencode', name: 'OpenCode', executorId: 'opencode', commands: ['opencode'], versionArgs: ['--version'], authArgs: ['auth', 'list'], authKind: 'opencode' },
+  // 桌面版按运行中的窗口识别（走窗口 Agent）；同名 CLI 走 headless 一次性任务适配器。
+  { id: 'dsh', name: 'DeepSeek Harness CLI', executorId: 'dsh', commands: ['dsh', 'deepseek'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
   { id: 'codex-acp', name: 'Codex ACP', executorId: 'codex-acp', commands: ['codex-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
   { id: 'claude-acp', name: 'Claude ACP', executorId: 'claude-acp', commands: ['claude-agent-acp', 'claude-code-acp', 'claude-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
   { id: 'dsh-acp', name: 'DeepSeek Harness ACP', executorId: 'dsh-acp', commands: ['dsh-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
   // 只做识别：常见编码 Agent CLI，暂未提供调用适配器（列表里标记为「仅识别」）。
-  { id: 'gemini', name: 'Gemini CLI', executorId: null, commands: ['gemini'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
-  { id: 'cursor-agent', name: 'Cursor Agent', executorId: null, commands: ['cursor-agent'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
-  { id: 'qwen', name: 'Qwen Code', executorId: null, commands: ['qwen'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'gemini', name: 'Gemini CLI', executorId: 'gemini', commands: ['gemini'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'cursor-agent', name: 'Cursor Agent', executorId: 'cursor-agent', commands: ['cursor-agent'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'qwen', name: 'Qwen Code', executorId: 'qwen', commands: ['qwen'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
   { id: 'aider', name: 'Aider', executorId: null, commands: ['aider'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
   { id: 'amp', name: 'Amp', executorId: null, commands: ['amp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' }
 ]);

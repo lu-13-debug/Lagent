@@ -122,6 +122,23 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 
 需 `DATAAGENT_WORK_ENABLED=1`；CLI 项目对话还需要 `DATAAGENT_ALLOW_EXTERNAL_EXECUTORS=1` 并在执行器策略中勾选对应执行器。所有写操作仍经工单审批，不新增绕过审批的入口。
 
+### 本机 Agent 适配器（opencode / gemini / qwen / cursor-agent / dsh）
+
+`server/work/executors/local-agent.js` 把探测到的命令行 Agent 变成可调度执行器，统一按「stdout 即最终答复」解析（非零退出才判失败，stderr 记为错误；`dsh` 会把推理写进 stderr，退出码为 0 时不算失败）。参数按写入模式切换：
+
+| id | 只读 | 写入 |
+| --- | --- | --- |
+| `opencode` | `run --dir <workspace> <prompt>` | 追加 `--auto` |
+| `gemini` | `-p <prompt> --output-format text` | 追加 `--yolo` |
+| `qwen` | `-p <prompt> --output-format text` | 追加 `--yolo` |
+| `cursor-agent` | `-p <prompt> --output-format text` | 追加 `--force` |
+| `dsh` | `--profile headless <prompt>` | 同左（没有单独写入开关，按 CLI 自身默认权限运行） |
+
+- 可执行文件按 PATH/PATHEXT 解析，`.cmd/.bat` 垫片会自动换成 `node <入口>` 执行；找不到时该执行器 `available:false`，直接派活返回 503。
+- 子进程环境仍走 CLI 白名单，API Key 默认不继承；本机 Agent 自带 provider 时需要 `DATAAGENT_CLI_ENV_PASSTHROUGH=OPENCODE_API_KEY,ANTHROPIC_API_KEY` 显式点名。
+- 超时与输出上限与 codex/claude 一致（默认 900000ms / 8MB，可用 `DATAAGENT_CLI_TIMEOUT_MS` 覆盖）。
+- 这些 id 同时加入 `policy.allowedExecutors` 白名单与项目工作区执行器清单；Agent 页的开关写的就是 `allowedExecutors`。
+
 - `GET /api/work/projects` → `{projects:[ProjectWorkspace]}`；`POST /api/work/projects {path,name?}` → `201/200 {project,created}`。path 必须是存在的绝对目录，服务端取 realpath 后拒绝磁盘根目录与 `Windows`、`Program Files*`、`ProgramData`；同路径重复导入返回 `created:false` 与原记录。只保存记录，不复制、移动或删除本地文件。最多 100 个项目。
 - `GET /api/work/files?path=` → `{path,parent,roots,entries:[{name,path,isDir}],truncated}`，仅供浏览器端选择项目目录。仅本地模式启用（云端返回 404）；省略 path 返回可用盘符，否则只返回子文件夹，最多 500 项，不读取或返回任何文件内容。浏览器无法调用系统目录对话框，桌面客户端使用 `pickFolder()` 打开系统对话框。
 - `GET /api/work/projects/:id` → `{project}`；`DELETE /api/work/projects/:id` → `{id}`，同时删除该项目下的项目对话记录，不影响 Agent 端会话文件。

@@ -33,7 +33,11 @@ const reportKindNames: Record<string, string> = { ready: '已就绪', failed: '�
 const proposalNames: Record<string, string> = { proposed: '待决策', needsApproval: '需确认', accepted: '已接受', rejected: '已拒绝' };
 const quickCommands = ['检查 GitHub 仓库状态', '浏览网页并总结', '运行终端命令'];
 const executorIds = ['terminal', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'browser', 'github', 'window'];
-const executorNames: Record<string, string> = { analysis: '数据分析', terminal: '受控终端', codex: 'Codex CLI', 'claude-code': 'Claude Code', 'claude-acp': 'Claude ACP', 'codex-acp': 'Codex ACP', 'dsh-acp': 'DSH ACP', browser: '浏览器', github: 'GitHub', window: '窗口 Agent' };
+const executorNames: Record<string, string> = { analysis: '数据分析', terminal: '受控终端', codex: 'Codex CLI', 'claude-code': 'Claude Code', 'claude-acp': 'Claude ACP', 'codex-acp': 'Codex ACP', 'dsh-acp': 'DSH ACP', opencode: 'OpenCode', gemini: 'Gemini CLI', qwen: 'Qwen Code', 'cursor-agent': 'Cursor Agent', dsh: 'DSH CLI', browser: '浏览器', github: 'GitHub', window: '窗口 Agent' };
+// 可在对话/项目里直接派活的执行器（不含終端、浏览器、GitHub 这类内置工具）。
+const conversationExecutorIds = ['analysis', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh'];
+// 项目工作文件夹里能建会话的执行器：数据分析是内置工具，需要在数据集上跑，不能进项目。
+const projectExecutorIds = ['window', ...conversationExecutorIds.filter(id => id !== 'analysis')];
 const terminalStatuses = ['completed', 'failed', 'blocked', 'cancelled'];
 const time = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '–';
 const shortTime = (value?: string) => {
@@ -462,7 +466,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
 
   const usableAgents = useMemo(() => agents.filter(agent => agent.id !== 'analysis' && allowedExecutors.includes(agent.id) && agent.status === 'available'), [agents, allowedExecutors]);
   const visibleAgents = useMemo(() => agents.filter(agent => agent.id !== 'analysis'), [agents]);
-  const crossCapable = useMemo(() => usableAgents.filter(agent => ['analysis', 'codex', 'claude-code'].includes(agent.id) || agent.id.endsWith('-acp')), [usableAgents]);
+  const crossCapable = useMemo(() => usableAgents.filter(agent => conversationExecutorIds.includes(agent.id)), [usableAgents]);
   const agentLabel = (id: string) => id.startsWith('win:') ? `${windows.find(window => windowKey(window.handle) === id)?.process || '窗口 Agent'} 窗口` : executorNames[id] || id;
   useEffect(() => {
     setSelectedAgents(previous => {
@@ -799,7 +803,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     catch (cause) { notify((cause as Error).message, true); }
   };
   const open = async (id: string) => { try { setDetail(await api.workTicket(id)); } catch (cause) { notify((cause as Error).message, true); } };
-  const handoffTargets = usableAgents.filter(agent => ['codex', 'claude-code'].includes(agent.id) || agent.id.endsWith('-acp'));
+  const handoffTargets = usableAgents.filter(agent => conversationExecutorIds.includes(agent.id) && agent.id !== 'analysis');
   useEffect(() => {
     if (detail?.ticket.status === 'completed' && !handoffTargets.some(agent => agent.id === handoffExecutor)) setHandoffExecutor(handoffTargets[0]?.id || '');
   }, [detail?.ticket.status, handoffTargets, handoffExecutor]);
@@ -1210,7 +1214,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     </section>;
   })();
 
-  const page = view === 'command' ? conversationPage : view === 'inbox' ? inboxPage : view === 'parallel' ? parallelPage : view === 'projects' ? <ProjectsPanel notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} allowedExecutors={allowedExecutors.filter(id => ['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'window'].includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
+  const page = view === 'command' ? conversationPage : view === 'inbox' ? inboxPage : view === 'parallel' ? parallelPage : view === 'projects' ? <ProjectsPanel notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
 
   return <div className="sa-shell" style={sidebarWidth ? { '--sa-sidebar': `${sidebarWidth}px` } as React.CSSProperties : undefined}>
     <a className="skip-link" href="#sa-main">跳到主内容</a>

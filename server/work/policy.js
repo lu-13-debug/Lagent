@@ -1,6 +1,19 @@
 export const workEnabled = options => options?.workEnabled === true || (options?.workEnabled === undefined && process.env.DATAAGENT_WORK_ENABLED === '1');
 
-export const EXTERNAL_EXECUTORS = Object.freeze(['codex', 'claude-code', 'browser', 'github', 'codex-acp', 'claude-acp', 'dsh-acp']);
+export const EXTERNAL_EXECUTORS = Object.freeze([
+  'codex',
+  'claude-code',
+  'browser',
+  'github',
+  'codex-acp',
+  'claude-acp',
+  'dsh-acp',
+  'opencode',
+  'gemini',
+  'qwen',
+  'cursor-agent',
+  'dsh'
+]);
 export const WORK_POLICY_ID = 'default';
 
 const defaults = Object.freeze({
