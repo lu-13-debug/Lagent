@@ -1,0 +1,146 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { modelExecutor } from './work/executors/model.js';
+
+function memoryStore() {
+  const rows = new Map();
+  return {
+    put: (kind, body) => { rows.set(`${kind}:${body.id}`, structuredClone(body)); return body; },
+    get: (kind, id) => (rows.has(`${kind}:${id}`) ? structuredClone(rows.get(`${kind}:${id}`)) : null),
+    list: kind => [...rows.entries()].filter(([key]) => key.startsWith(`${kind}:`)).map(([, body]) => structuredClone(body)),
+  };
+}
+
+function fakeModelHub(replies) {
+  const queue = [...replies];
+  return {
+    context() {
+      return {
+        settings: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+        key: 'test-key',
+        maxTokens: 800,
+        timeoutMs: 5000,
+      };
+    },
+    reply: () => queue.shift() ?? '{"final":{"summary":"结束","files":[]}}',
+    size: () => queue.length,
+  };
+}
+
+function fakeFetch(hub) {
+  return async () => {
+    const content = hub.reply();
+    const body = { choices: [{ message: { content } }], usage: { prompt_tokens: 10, completion_tokens: 5 } };
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      async json() { return body; },
+      async text() { return JSON.stringify(body); },
+    };
+  };
+}
+
+async function settle(executor, taskId, timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const task = executor.get(taskId);
+    if (task && task.status !== 'running') return task;
+    await new Promise(resolve => setTimeout(resolve, 15));
+  }
+  throw new Error('模型 Agent 超时未结束');
+}
+
+test('模型 Agent 走工具循环并把过程写进 activity', async () => {
+  const store = memoryStore();
+  const hub = fakeModelHub([
+    '{"tool":"list_files","args":{"path":"."}}',
+    '{"final":{"summary":"仓库里有两个文件","files":["a.txt"]}}',
+  ]);
+  const executor = modelExecutor({ store, cwd: process.cwd(), context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  const task = executor.start({ command: '看看仓库里有什么' }, { id: 'assign-1' }, {
+    executorInput: { prompt: '看看仓库里有什么', workspace: process.cwd(), write: false },
+  });
+  assert.equal(task.status, 'running');
+  const done = await settle(executor, 'assign-1');
+  assert.equal(done.status, 'completed', done.error || '');
+  const kinds = done.activity.map(item => item.kind);
+  assert.ok(kinds.includes('tool'), '应记录工具调用');
+  assert.ok(kinds.includes('observation'), '应记录工具结果');
+  assert.equal(kinds.filter(kind => kind === 'result').length, 1);
+  assert.match(done.artifacts.cli.summary, /仓库里有两个文件/);
+  assert.equal(done.artifacts.cli.executorId, 'model');
+  assert.deepEqual(done.artifacts.cli.artifacts, ['a.txt']);
+  assert.equal(done.artifacts.cli.stats.steps, 2);
+});
+
+test('没有写权限时拒绝写入，并记录失败原因', async () => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-agent-'));
+  const hub = fakeModelHub([
+    '{"tool":"write_file","args":{"path":"note.txt","content":"hello"}}',
+    '{"final":{"summary":"写不了，已说明原因","files":[]}}',
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '写一个文件' }, { id: 'assign-2' }, {
+    executorInput: { prompt: '写一个文件', workspace: dir, write: false },
+  });
+  const done = await settle(executor, 'assign-2');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.ok(done.activity.some(item => item.kind === 'error'));
+  assert.equal(fs.existsSync(path.join(dir, 'note.txt')), false);
+});
+
+test('写入被限制在工作目录内，越界路径被拒绝', async () => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-agent-'));
+  const outside = path.join(os.tmpdir(), `escape-${Date.now()}.txt`);
+  const hub = fakeModelHub([
+    JSON.stringify({ tool: 'write_file', args: { path: '../' + path.basename(outside), content: 'x' } }),
+    '{"final":{"summary":"越界被拒","files":[]}}',
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '试着写到外面' }, { id: 'assign-3' }, {
+    executorInput: { prompt: '试着写到外面', workspace: dir, write: true },
+  });
+  const done = await settle(executor, 'assign-3');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(fs.existsSync(outside), false);
+  assert.ok(done.activity.some(item => item.kind === 'error'));
+});
+
+test('写权限打开后可以在工作目录里生成文件', async () => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-agent-'));
+  const hub = fakeModelHub([
+    '{"tool":"write_file","args":{"path":"out/note.txt","content":"hello"}}',
+    '{"final":{"summary":"写好了","files":["out/note.txt"]}}',
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '写一个文件' }, { id: 'assign-5' }, {
+    executorInput: { prompt: '写一个文件', workspace: dir, write: true },
+  });
+  const done = await settle(executor, 'assign-5');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(fs.readFileSync(path.join(dir, 'out', 'note.txt'), 'utf8'), 'hello');
+});
+
+test('未配置模型时启动直接报 503，而不是假装在跑', () => {
+  const store = memoryStore();
+  const executor = modelExecutor({ store, cwd: process.cwd(), context: () => null, fetchImpl: async () => { throw new Error('不该调用'); } });
+  assert.throws(
+    () => executor.start({ command: '随便做点什么' }, { id: 'assign-4' }, { executorInput: { prompt: '随便做点什么' } }),
+    error => error.status === 503 && /还没有可用的模型/.test(error.message),
+  );
+});
+
+test('输入校验：空目标、非法步数、相对工作目录都会被拒绝', () => {
+  const store = memoryStore();
+  const executor = modelExecutor({ store, cwd: process.cwd(), context: () => null });
+  assert.throws(() => executor.validateInput({ prompt: '' }), /非空字符串/);
+  assert.throws(() => executor.validateInput({ prompt: '做点事', maxSteps: 99 }), /maxSteps/);
+  assert.throws(() => executor.validateInput({ prompt: '做点事', workspace: 'relative/dir' }), /绝对路径/);
+});

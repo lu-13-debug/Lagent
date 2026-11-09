@@ -15,7 +15,7 @@ export interface WorkPolicy {
   mode: 'personal'; acceptMode: 'explicit' | 'observe' | 'auto';
   allowedExecutors?: string[]; requireApproval?: boolean;
   budgets?: { maxConcurrent: number; maxCallsPerTicket: number; maxRuntimeMs: number; maxTokensPerTicket: number };
-  limits?: { browserHosts: string[]; githubRepos: string[]; acpWrites?: boolean };
+  limits?: { browserHosts: string[]; githubRepos: string[]; acpWrites?: boolean; modelWrites?: boolean };
 }
 export interface WorkInboxItem { ticketId: string; title: string; question: string; options: WorkAttentionOption[]; createdAt: string }
 export interface WorkPlanStep { index: number; ticketId: string; executorId: string; title: string; status?: string; dependsOn?: number[]; scope?: string[]; projectChatId?: string | null }
@@ -118,4 +118,4 @@ export interface WorkTeam {
   usage: { calls: number; totalTokens: number; reservedTokens: number };
   cancelled: boolean; revision: number; updatedAt: string | null; events: WorkTeamEvent[]; nodes: WorkTeamNode[];
 }
-export interface WorkTicketDetail { ticket: WorkTicket; assignments: WorkAssignment[]; reports: WorkReport[]; team: WorkTeam | null; project?: { id: string; name: string; path: string; gitBranch: string } | null; projectChat?: { id: string; title: string; executorId: string } | null }
+export interface WorkTicketDetail { ticket: WorkTicket; assignments: WorkAssignment[]; reports: WorkReport[]; team: WorkTeam | null; project?: { id: string; name: string; path: string; gitBranch: string } | null; projectChat?: { id: string; title: string; executorId: string } | null; activity?: { kind: string; text: string; detail?: string; at?: string }[] }

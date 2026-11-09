@@ -152,6 +152,23 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 - Trae Agent、文心快码 Comate、通义灵码、CodeGeeX、WorkBuddy 目前只做识别（`executorId: null`）：本机装了 CLI 会显示版本与路径，没装则按运行中的桌面窗口匹配，提示用「窗口 · <进程名>」发送指令。要变成可调度执行器，需要在 `server/work/executors/local-agent.js` 补一档参数模板，并加入 `EXTERNAL_EXECUTORS` 与 `PROJECT_CHAT_EXECUTORS`。
 - `GET /api/work/bootstrap` 额外返回 `workspace`：未绑定工作文件夹的对话，Agent 就在这个目录里读写（本地模式默认是仓库根目录）。项目对话始终以项目路径为 cwd。
 
+### 内置模型 Agent（model）
+
+不依赖本机安装任何 CLI：只要在「设置 → 规划设置」里选定默认模型，`model` 执行器就可用。它按 `kind:'cli'` 走同一个 CLI 通道（工单执行、`artifacts.cli`、项目会话、计划落盘、项目记忆都复用），区别只在于「CLI 进程」换成了「模型 + 工具循环」。
+
+| 工具 | 说明 |
+| --- | --- |
+| `list_files {path?}` | 列目录，跳过 `node_modules`、`.git`、`dist`、`build`、`.dataagent`、`data`、`.venv`、`__pycache__`、`coverage`，最多 120 项 |
+| `read_file {path,offset?,limit?}` | 读文本文件，单文件上限 400KB，默认返回 8000 字符，超出返回 `truncated:true` |
+| `search_code {pattern,path?}` | 正则搜索，跳过 >200KB 与二进制文件，最多 40 条命中，返回 `{file,line,text}` |
+| `write_file {path,content}` | 仅在 `write:true` 时可用；单次上限 200KB，自动建父目录，返回 `{path,created,before,after}` |
+| `run_command {command}` | 只读白名单：`git status/diff/log/show/branch` 与 `node --check`，不经 shell，15 秒超时 |
+
+- 模型必须每一步只输出一个 JSON：`{"tool":"read_file","args":{...}}` 或 `{"final":{"summary":"...","files":["..."]}}`。解析失败会把原回复与「请只输出 JSON」压回上下文重试；步数上限 12（默认 8）。
+- 所有路径都经 `resolveInside` 双检，越界（`../`、绝对路径、工作目录之外）直接报错；未配置模型或没有 Key 时 `start` 直接 503，不会留下假运行的任务。
+- 写权限由执行器策略 `limits.modelWrites`（默认 `false`）控制：关闭时 `write_file` 不可用，模型只读取与检索并给结论；项目对话还要求 `chat.writable !== false`。
+- 过程流：执行器把每一步写进 `task.activity`（`{kind:'tool'|'observation'|'error'|'result', text, detail?, at}`，保留 60 条）。`GET /api/work/tickets/:id` 的 `detail` 在有过程时附带 `activity`（最近 40 条）；SSE `GET /api/work/events` 在过程变化时推送 `{type:'activity',ticketId,payload:{activity,status}}`，前端据此渲染时间线。`result` 与「结果」块内容相同，界面只显示 `tool/observation/error`。
+
 - `GET /api/work/projects` → `{projects:[ProjectWorkspace]}`；`POST /api/work/projects {path,name?}` → `201/200 {project,created}`。path 必须是存在的绝对目录，服务端取 realpath 后拒绝磁盘根目录与 `Windows`、`Program Files*`、`ProgramData`；同路径重复导入返回 `created:false` 与原记录。只保存记录，不复制、移动或删除本地文件。最多 100 个项目。
 - `POST /api/work/command {text,executorId,executorInput}` 的浏览器执行器受 `policy.limits.browserHosts` 约束：列表为空时不限制；非空时目标主机必须等于其中一项或以 `.<项>` 结尾，否则 403「浏览器只允许访问 …」。
 - `github` 执行器不再要求 `GITHUB_TOKEN`：无 token 时匿名读取公开仓库，新增 `search` 动作（`GET https://api.github.com/search/repositories?q=&sort=stars&order=desc&per_page=`，返回 `{action:'search',query,total,count,items:[{fullName,stars,language,description,url,updatedAt}]}`，`limit` 1–20，默认 5）。计划/指挥里只给一句话时，默认动作是 `search`，中文句子会先被压成英文关键词再检索。

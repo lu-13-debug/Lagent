@@ -5342,3 +5342,52 @@ html[data-theme="dark"] .sa-brand-mono {
   border-color: var(--sa-danger-soft);
   color: var(--sa-danger);
 }
+
+/* 19. 模型 Agent 的执行过程 */
+.sa-live-steps {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0 0 0 12px;
+  border-left: 2px solid var(--sa-line);
+  display: flex;
+  flex-direction: column;
+}
+
+.sa-live-step {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 5px 0;
+}
+
+.sa-live-icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--sa-r-xs);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-3);
+}
+
+.sa-live-step p {
+  margin: 0;
+  font-size: var(--sa-fs-xs);
+  line-height: 1.55;
+  color: var(--sa-text-2);
+}
+
+.sa-live-detail {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--sa-fs-2xs);
+  line-height: 1.6;
+  color: var(--sa-text-3);
+  word-break: break-word;
+}
+
+.sa-live-tool .sa-live-icon { background: var(--sa-accent-soft); color: var(--sa-accent-ink); }
+.sa-live-observation .sa-live-icon { background: var(--sa-surface-3); }
+.sa-live-error .sa-live-icon { background: var(--sa-danger-soft); color: var(--sa-danger); }
+.sa-live-result .sa-live-icon { background: var(--sa-success-soft); color: var(--sa-success); }

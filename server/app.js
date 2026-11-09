@@ -14,6 +14,7 @@ import { claudeCodeExecutor } from './work/executors/claude-code.js';
 import { localAgentExecutors } from './work/executors/local-agent.js';
 import { browserExecutor } from './work/executors/browser.js';
 import { githubExecutor } from './work/executors/github.js';
+import { modelExecutor } from './work/executors/model.js';
 import { registerMemory } from './memory-api.js';
 import express from 'express';
 import multer from 'multer';
@@ -200,11 +201,22 @@ export function createApp(options = {}) {
     const localAgents=options.cloud?[]:localAgentExecutors({store,cwd:workCwd,...cliTimeout});
     const browser=browserExecutor({store});
     const github=githubExecutor({store,fetchImpl:options.fetchImpl||fetch});
+    // 模型 Agent：直接使用「规划设置」里选中的默认模型，不依赖本机 CLI。
+    const modelAgent=modelExecutor({
+      store,
+      cwd:workCwd,
+      context:()=>{
+        const captured=modelHub.captureWorkflow();
+        const stage=captured?.stages?.plan;
+        return stage?modelHub.context(stage):null;
+      },
+      fetchImpl:options.fetchImpl||fetch,
+    });
     const mobileOwnerId=options.userId||'local';
     const windowBridge=options.cloud?null:(options.windowBridge??createWindowBridge());
     const providerRegistry=options.providerRegistry??createProviderRegistry(windowBridge?{desktopProbe:()=>windowBridge.listWindows()}:{});
     const window=windowBridge?windowExecutor({store,bridge:windowBridge,...(process.env.DATAAGENT_WINDOW_WAIT_MS?{maxWaitMs:Number(process.env.DATAAGENT_WINDOW_WAIT_MS)}:{})}):null;
-    const executors=createExecutorRegistry([analysis,terminal,codex,claudeCode,...localAgents,browser,github,...(window?[window]:[]),...acp]);
+    const executors=createExecutorRegistry([analysis,terminal,codex,claudeCode,...localAgents,browser,github,modelAgent,...(window?[window]:[]),...acp]);
     mobileGateway=options.mobileGateway||new MobileGateway({dataDir:path.join(storeDir,'mobile'),now:options.now});
     ownsMobileGateway=!options.mobileGateway;
     registerMobilePairingRoutes(app,mobileGateway,{desktopOwner:options.mobileDesktopOwner||(()=>mobileOwnerId)});

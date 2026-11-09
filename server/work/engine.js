@@ -49,6 +49,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   const memory = createProjectMemory(db);
   const brain = options.brain || null;
   const workspace = typeof options.workspace === 'string' && options.workspace ? options.workspace : null;
+  // 模型 Agent 只有在配置了可用模型时才真正能干活，否则界面上应显示为待配置。
+  const modelReady = () => { try { return Boolean(brain?.availability?.().ok); } catch { return false; } };
+  const agentUsable = agent => Boolean(agent?.available) && (agent.id !== 'model' || modelReady());
   const planSuggestionTimes = [];
   let drainingOutbox = false;
   let outboxTimer = null;
@@ -195,7 +198,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     // ACP 的文件读写走客户端回调，性能上等价于给 Agent 项目目录写权限，
     // 所以额外受 policy.limits.acpWrites 约束（CLI 执行器本来就有写权限）。
     const isAcp = Array.isArray(executor.capabilities) && executor.capabilities.includes('acp');
-    const write = chat.writable !== false && (!isAcp || policy.limits?.acpWrites !== false);
+    // 模型 Agent 默认只读：写权限必须由 limits.modelWrites 显式打开，避免它绕过审批改文件。
+    const isModel = executor?.id === 'model';
+    const write = chat.writable !== false && (isModel ? policy.limits?.modelWrites === true : (!isAcp || policy.limits?.acpWrites !== false));
     return {
       prompt: context ? `${context}\n${text}` : text,
       maxTurns,
@@ -321,7 +326,14 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   const latest = id => assignments(id)[0];
   const taskFor = id => {
     const assignment=latest(id);
-    return assignment?.sessionId ? executorFor(assignment)?.get?.(assignment.sessionId) : null;
+    if(!assignment?.sessionId) return null;
+    const live = executorFor(assignment)?.get?.(assignment.sessionId);
+    if(live) return live;
+    // 进程重启后执行器内存里的任务没了，过程流还留在库里：读回来，历史工单仍能看到当时做了什么
+    try {
+      const stored = db.get('task', assignment.sessionId);
+      return stored && stored.ticketId === id ? stored : null;
+    } catch { return null; }
   };
   const lastTeamKeys = new Map();
   const announceTeam = (ticketId, task, team = projectTeamTask(task)) => {
@@ -477,8 +489,20 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       .catch(() => { /* 模型总结失败就保留本地总结。 */ });
     return entry;
   }
+  // 模型 Agent 每走一步都会改写 task.activity；这里把它推给界面，让过程像 CLI 一样可见。
+  const activitySeen = new Map();
+  function announceActivity(ticketId, task) {
+    const list = Array.isArray(task?.activity) ? task.activity : [];
+    if (!list.length) return;
+    const last = list[list.length - 1];
+    const signature = `${list.length}:${last?.at || ''}`;
+    if (activitySeen.get(ticketId) === signature) return;
+    activitySeen.set(ticketId, signature);
+    publish({ type: 'activity', ticketId, payload: { activity: list.slice(-40), status: task.status || null } });
+  }
   function sync(ticket, assignment, task) {
     if(!task)return;
+    announceActivity(ticket.id, task);
     const activeId=assignmentExecutorId(ticket, assignment);
     const active=executors.resolve(activeId);
     if(!active)return;
@@ -490,7 +514,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const terminal=activeId==='terminal';
     const cli=active.kind==='cli';
     const tool=active.kind==='tool';
-    const label=terminal?'终端命令':cli?'只读 CLI':tool?(activeId==='browser'?'浏览器':activeId==='github'?'GitHub':active.name):'分析';
+    const label=terminal?'终端命令':cli?(activeId==='model'?'模型 Agent':'只读 CLI'):tool?(activeId==='browser'?'浏览器':activeId==='github'?'GitHub':active.name):'分析';
     const toolInfo=tool?(task.artifacts?.[activeId]||{}):null;
     const toolSummary=activeId==='github'
       ? (toolInfo?.action==='search'
@@ -519,7 +543,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const summary=status==='failed'?String(task.error||`${label}执行失败`).slice(0,400):{
       working:`${label}执行中`,
       awaiting_review:`${label}等待确认`,
-      completed:activeId==='window'?(typeof task.report?.summary==='string'&&task.report.summary.trim()?task.report.summary.trim():'窗口指令已发送'):tool?toolSummary:terminal?'终端命令执行完成':cli?'只读 CLI 执行完成':'分析报告已生成',
+      completed:activeId==='window'?(typeof task.report?.summary==='string'&&task.report.summary.trim()?task.report.summary.trim():'窗口指令已发送'):tool?toolSummary:terminal?'终端命令执行完成':activeId==='model'?(typeof task.artifacts?.cli?.summary==='string'&&task.artifacts.cli.summary.trim()?task.artifacts.cli.summary.trim().slice(0,200):'模型 Agent 执行完成'):cli?`${label}执行完成`:'分析报告已生成',
       cancelled:`${label}已停止`
     }[status];
     const finished=['completed','failed','cancelled'].includes(status);
@@ -988,7 +1012,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         attention:tickets.filter(t=>t.attention).map(t=>({ticketId:t.id,title:t.title,...t.attention})),
         datasets:store.list('dataset').slice(0,50).map(datasetMetadata),
         projects:projects.listProjects(),
-        agents:executors.list().map(({id,name,kind,available,capabilities})=>({id,name,kind,status:available?'available':'unavailable',capabilities})),
+        agents:executors.list().map(({id,name,kind,available,capabilities})=>({id,name,kind,status:(id==='model'?(available&&modelReady()?'available':'needs_setup'):(available?'available':'unavailable')),capabilities})),
         tools:[
           {id:'terminal',name:'受控终端',kind:'terminal',status:'connected',permissions:['git','npm','ls','pwd']},
           ...executors.list().filter(agent=>['browser','github'].includes(agent.id)).map(agent=>({id:agent.id,name:agent.name,kind:agent.kind,status:agent.available?'connected':'needs_setup',permissions:agent.capabilities||[]})),
@@ -1213,7 +1237,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const projectWindows=projectChats.filter(chat=>chat.executorId==='window');
       if(project&&!PROJECT_CHAT_EXECUTORS.includes(project.chat.executorId))throw workError('该执行器暂不支持项目拆解',400);
       const requested=Array.isArray(input?.executors)?new Set(input.executors.filter(id=>typeof id==='string'&&id.length<=60)):null;
-      let allowedExecutors=executors.list().filter(agent=>agent.available&&policy.allowedExecutors.includes(agent.id)&&externalExecutorAllowed(agent.id,policy,env)&&(!requested||requested.has(agent.id))).map(agent=>agent.id);
+      let allowedExecutors=executors.list().filter(agent=>agentUsable(agent)&&policy.allowedExecutors.includes(agent.id)&&externalExecutorAllowed(agent.id,policy,env)&&(!requested||requested.has(agent.id))).map(agent=>agent.id);
       if(projectRow){
         const kinds=new Map(executors.list().map(agent=>[agent.id,agent.kind]));
         allowedExecutors=allowedExecutors.filter(id=>{
@@ -1271,7 +1295,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const projectChat=projectContext(input?.projectChatId);
       let projectRow=projectChat?projectChat.project:null;
       if(!projectRow&&typeof input?.projectId==='string'&&input.projectId.trim())projectRow=db.get('project',input.projectId.trim())||null;
-      const available=executors.list().filter(agent=>agent.available&&policy.allowedExecutors.includes(agent.id)&&externalExecutorAllowed(agent.id,policy,env)).map(agent=>agent.id);
+      const available=executors.list().filter(agent=>agentUsable(agent)&&policy.allowedExecutors.includes(agent.id)&&externalExecutorAllowed(agent.id,policy,env)).map(agent=>agent.id);
       const requested=Array.isArray(input?.executors)?input.executors.filter(id=>typeof id==='string'):null;
       const scoped=requested&&requested.length?available.filter(id=>requested.includes(id)):available;
       const pool=scoped.length?scoped:available;
@@ -1315,7 +1339,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const activeId=assignmentExecutorId(ticket,assignment);
       const projectChat=ticket.projectChatId?db.get('project-chat',ticket.projectChatId):null;
       const project=projectChat?db.get('project',projectChat.projectId):null;
-      return {ticket,assignments:assignments(id),reports:related('report',id),team:activeId==='analysis'?projectTeamTask(taskFor(id)):null,...(project?{project:{id:project.id,name:project.name,path:project.path,gitBranch:project.gitBranch||''},projectChat:projectChat?{id:projectChat.id,title:projectChat.title,executorId:projectChat.executorId}:null}:{})};
+      // 模型 Agent 的逐步过程：只有真的走过步骤时才带这个字段，普通工单的投影键集合保持不变。
+      const liveTask=taskFor(id);
+      const activity=Array.isArray(liveTask?.activity)?liveTask.activity.slice(-40):[];
+      return {ticket,assignments:assignments(id),reports:related('report',id),team:activeId==='analysis'?projectTeamTask(taskFor(id)):null,...(activity.length?{activity}:{}),...(project?{project:{id:project.id,name:project.name,path:project.path,gitBranch:project.gitBranch||''},projectChat:projectChat?{id:projectChat.id,title:projectChat.title,executorId:projectChat.executorId}:null}:{})};
     },
     reviewTeamNode(id,nodeId,decision){return mutateTeam(id,task=>reviewTeamNode(task,nodeId,decision));},
     decideTeamProposal(id,nodeId,proposalId,decision){return mutateTeam(id,task=>decideTeamProposal(task,nodeId,proposalId,decision));},

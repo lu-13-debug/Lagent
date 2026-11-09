@@ -61,3 +61,14 @@ test('Work policy 的 acpWrites 默认开启、可关闭且只接受布尔值', 
   const on = engine.updatePolicy({ limits: { acpWrites: true, browserHosts: [], githubRepos: [] } });
   assert.equal(on.limits.acpWrites, true);
 });
+
+test('Work policy 的 modelWrites 默认关闭、可打开且只接受布尔值', t => {
+  const { engine } = fixture(t);
+  assert.equal(engine.policy().limits.modelWrites, false);
+  const on = engine.updatePolicy({ limits: { modelWrites: true } });
+  assert.equal(on.limits.modelWrites, true);
+  assert.equal(engine.policy().limits.modelWrites, true);
+  assert.throws(() => engine.updatePolicy({ limits: { modelWrites: 'yes' } }), { status: 400 });
+  const off = engine.updatePolicy({ limits: { modelWrites: false, browserHosts: [], githubRepos: [] } });
+  assert.equal(off.limits.modelWrites, false);
+});

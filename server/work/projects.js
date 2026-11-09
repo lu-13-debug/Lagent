@@ -12,7 +12,7 @@ export const PROJECT_LIMITS = Object.freeze({
   headBytes: 64 * 1024
 });
 
-export const PROJECT_CHAT_EXECUTORS = Object.freeze(['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi', 'window']);
+export const PROJECT_CHAT_EXECUTORS = Object.freeze(['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi', 'model', 'window']);
 
 export const CHANGE_LIMITS = Object.freeze({
   maxChanges: 300,

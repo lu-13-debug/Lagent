@@ -33,9 +33,9 @@ const reportKindNames: Record<string, string> = { ready: '已就绪', failed: '�
 const proposalNames: Record<string, string> = { proposed: '待决策', needsApproval: '需确认', accepted: '已接受', rejected: '已拒绝' };
 const quickCommands = ['检查 GitHub 仓库状态', '浏览网页并总结', '运行终端命令'];
 const executorIds = ['terminal', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'browser', 'github', 'window'];
-const executorNames: Record<string, string> = { analysis: '数据分析', terminal: '受控终端', codex: 'Codex CLI', 'claude-code': 'Claude Code', 'claude-acp': 'Claude ACP', 'codex-acp': 'Codex ACP', 'dsh-acp': 'DSH ACP', opencode: 'OpenCode', gemini: 'Gemini CLI', qwen: 'Qwen Code', 'cursor-agent': 'Cursor Agent', dsh: 'DSH CLI', codebuddy: 'CodeBuddy', qoder: 'Qoder', iflow: 'iFlow', kimi: 'Kimi CLI', browser: '浏览器', github: 'GitHub', window: '窗口 Agent' };
+const executorNames: Record<string, string> = { analysis: '数据分析', terminal: '受控终端', codex: 'Codex CLI', 'claude-code': 'Claude Code', 'claude-acp': 'Claude ACP', 'codex-acp': 'Codex ACP', 'dsh-acp': 'DSH ACP', opencode: 'OpenCode', gemini: 'Gemini CLI', qwen: 'Qwen Code', 'cursor-agent': 'Cursor Agent', dsh: 'DSH CLI', codebuddy: 'CodeBuddy', qoder: 'Qoder', iflow: 'iFlow', kimi: 'Kimi CLI', model: '模型 Agent', browser: '浏览器', github: 'GitHub', window: '窗口 Agent' };
 // 可在对话/项目里直接派活的执行器（不含終端、浏览器、GitHub 这类内置工具）。
-const conversationExecutorIds = ['analysis', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi'];
+const conversationExecutorIds = ['analysis', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi', 'model'];
 // 项目工作文件夹里能建会话的执行器：数据分析是内置工具，需要在数据集上跑，不能进项目。
 const projectExecutorIds = ['window', ...conversationExecutorIds.filter(id => id !== 'analysis')];
 const terminalStatuses = ['completed', 'failed', 'blocked', 'cancelled'];
@@ -81,6 +81,7 @@ function sliceBytes(text: string, max: number): string {
 }
 
 type CrossCheck = { id: string; prompt: string; agentIds: string[]; ticketIds: string[]; createdAt: string; synthesisTicketId?: string; synthesisAgentId?: string };
+type LiveStep = { kind: string; text: string; detail?: string; at?: string };
 
 function loadCrossChecks(): CrossCheck[] {
   try {
@@ -151,6 +152,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [sending, setSending] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [detail, setDetail] = useState<WorkTicketDetail | null>(null);
+  // 模型 Agent 的实时过程：SSE 推一步就更新一次，按工单 id 存。
+  const [liveActivity, setLiveActivity] = useState<Record<string, LiveStep[]>>({});
   const [projectFocus, setProjectFocus] = useState<string | null>(null);
   const [chatFocus, setChatFocus] = useState<string | null>(null);
   const [importTick, setImportTick] = useState(0);
@@ -225,7 +228,17 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     let timer: ReturnType<typeof setInterval> | null = null;
     try {
       source = new EventSource('/api/work/events');
-      source.onmessage = () => void load();
+      source.onmessage = event => {
+        try {
+          const data = JSON.parse(event.data);
+          // 模型 Agent 的每一步都单独推送一遍，这样思考与工具调用能实时看到。
+          if (data?.type === 'activity' && typeof data.ticketId === 'string') {
+            const activity = Array.isArray(data.payload?.activity) ? data.payload.activity : [];
+            setLiveActivity(previous => ({ ...previous, [data.ticketId]: activity }));
+          }
+        } catch { /* 心跳与格式异常忽略 */ }
+        void load();
+      };
       source.onerror = () => { source?.close(); source = null; if (!timer) timer = setInterval(() => void load(), 15000); };
       eventRef.current = source;
     } catch { timer = setInterval(() => void load(), 15000); }
@@ -945,6 +958,9 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
 
   const activeAttention = activeTicketId ? attention.find(item => item.ticketId === activeTicketId) : undefined;
   const activeReports = activeDetail?.reports || [];
+  // 实时过程优先用 SSE 推送的那份；刷新后从详情里补回来。
+  // result 这一步就是下面的「结果」块，不在这里重复一遍。
+  const liveSteps: LiveStep[] = ((activeTicketId ? liveActivity[activeTicketId] : undefined) || activeDetail?.activity || []).filter(step => step.kind !== 'result');
   const activeResult = activeTicket?.status === 'completed' ? reportText(activeDetail) : '';
   const completedGroupAgents = activeGroup ? activeGroup.agentIds.filter((id, index) => !id.startsWith('win:') && groupDetails[activeGroup.ticketIds[index]]?.ticket.status === 'completed') : [];
   const awaitingGroupAgents = activeGroup ? activeGroup.agentIds.filter((id, index) => groupDetails[activeGroup.ticketIds[index]]?.ticket.status === 'awaiting_review') : [];
@@ -1081,7 +1097,14 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
               const Icon = reportIcon(report);
               return <li key={report.id}><span className={`sa-activity-icon sa-activity-${report.kind}`}><Icon size={13} /></span><div><p>{report.summary || report.kind}</p><time>{time(report.createdAt)}</time></div></li>;
             })}</ol> : <p className="sa-inline-note">{terminalStatuses.includes(activeTicket.status) ? '这条工单没有执行记录。' : 'Agent 正在思考并准备执行…'}</p>}
-            {!terminalStatuses.includes(activeTicket.status) && <div className="sa-thinking"><span className="sa-thinking-dot" /><span className="sa-thinking-dot" /><span className="sa-thinking-dot" /><span>Agent 正在工作，完成后结果会出现在这里</span></div>}
+            {liveSteps.length > 0 && <ol className="sa-live-steps" aria-live="polite" aria-label="执行过程">{liveSteps.map((step, index) => {
+              const Icon = step.kind === 'tool' ? Wrench : step.kind === 'observation' ? Terminal : step.kind === 'error' ? AlertTriangle : Check;
+              return <li key={`${index}-${step.at || ''}`} className={`sa-live-step sa-live-${step.kind}`}>
+                <span className="sa-live-icon"><Icon size={12} /></span>
+                <div><p>{step.text}</p>{step.detail && <span className="sa-live-detail">{step.detail}</span>}</div>
+              </li>;
+            })}</ol>}
+            {!terminalStatuses.includes(activeTicket.status) && liveSteps.length === 0 && <div className="sa-thinking"><span className="sa-thinking-dot" /><span className="sa-thinking-dot" /><span className="sa-thinking-dot" /><span>Agent 正在工作，完成后结果会出现在这里</span></div>}
             {activeResult && <div className="sa-result"><h3><Check size={14} />结果</h3><div className="sa-result-text">{activeResult.slice(0, 12000)}</div></div>}
             <div className="sa-run-actions">
               {activeTicket.status === 'awaiting_review' && <button className="sa-button sa-primary" onClick={() => void act(activeTicket.id, 'approve')}><Check size={15} />确认继续</button>}
@@ -1176,6 +1199,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const sortedProviders = [...providers].sort((left, right) => Number(right.installed) - Number(left.installed));
   const installedProviders = sortedProviders.filter(provider => provider.installed);
   const missingProviders = sortedProviders.filter(provider => !provider.installed);
+  // 内置的模型 Agent 不是本机 CLI，探测列表里永远没有它，单独渲染一行
+  const modelAgentStatus = agents.find(agent => agent.id === 'model')?.status || 'needs_setup';
   const providerRow = (provider: typeof providers[number]) => {
     const executorId = provider.executorId || '';
     const switchable = Boolean(executorId) && provider.installed;
@@ -1205,6 +1230,23 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     <button type="button" className="sa-button" disabled={providersLoading} onClick={() => void loadProviders(true)}>{providersLoading ? '探测中…' : '重新探测'}</button></header>
     <section className="sa-providers">
       <p className="sa-inline-note"><ShieldCheck size={13} />按 PATH / PATHEXT 解析命令并读取版本，探测结果不会保存输出原文；开关写入执行器策略，停用的 Agent 不会出现在新对话的选择里。</p>
+      <div className="sa-agent-group"><h2>内置</h2><span>不用安装，用「规划设置」里的默认模型运行</span></div>
+      <ul className="sa-agent-list">
+        <li className={`sa-agent-row${enabledExecutors.includes('model') ? ' is-on' : ''}${modelAgentStatus === 'available' ? '' : ' is-off'}`}>
+          <span className="sa-agent-glyph"><Brain size={18} /></span>
+          <div className="sa-agent-main">
+            <div className="sa-agent-title"><strong>模型 Agent</strong>{' '}<Status status={modelAgentStatus} /></div>
+            <span className="sa-agent-path">模型 + 工具循环：读文件、搜代码、运行只读命令</span>
+            <span className="sa-agent-note-line">{modelAgentStatus === 'available' ? '已在「规划设置」里选好默认模型，可以直接派任务。' : '还没配置可用的模型：先去「设置 → 规划设置」选一个默认模型。'}</span>
+          </div>
+          <div className="sa-agent-side">
+            <span className="sa-agent-kind">内置</span>
+            {modelAgentStatus === 'available'
+              ? <label className="sa-switch"><input type="checkbox" checked={enabledExecutors.includes('model')} onChange={() => toggleExecutor('model')} /><span /></label>
+              : <button type="button" className="sa-link" onClick={() => setSettingsOpen(true)}>去配置</button>}
+          </div>
+        </li>
+      </ul>
       {installedProviders.length > 0 && <ul className="sa-agent-list">{installedProviders.map(providerRow)}</ul>}
       {!installedProviders.length && !providersLoading && <p className="sa-empty">还没有探测到已安装的 Agent。</p>}
       {missingProviders.length > 0 && <>
@@ -1237,6 +1279,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const settingsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">SETTINGS</p><h1>设置</h1><p>主题、模型与执行权限。</p></div></header><div className="sa-settings-grid"><article className="sa-card"><h2>外观</h2><p>当前仅保留简洁版，主题可切换。</p><button className="sa-button" onClick={() => setAppearanceOpen(true)}><SunMoon size={15} />打开显示设置</button></article><article className="sa-card"><h2>模型与 API</h2><p>配置执行器使用的模型和凭据。</p><button className="sa-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} />打开模型设置</button></article><article className="sa-card sa-policy-card"><h2>执行器策略</h2><p>与「Agent」页的开关同步，这里可批量调整并设置预算；外部执行器还需 <code>DATAAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code>。</p>
     {policy ? <><div className="sa-policy-executors">{executorIds.map(id => <label key={id}><input type="checkbox" checked={(policy.allowedExecutors || []).includes(id)} onChange={() => toggleExecutor(id)} />{executorNames[id]}</label>)}</div>
       <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.acpWrites !== false} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), acpWrites: event.target.checked } } : previous)} /><span>项目内 ACP 可写<em>关闭后 ACP Agent 在项目里只能读文件；终端调用始终拒绝。</em></span></label>
+      <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.modelWrites === true} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), modelWrites: event.target.checked } } : previous)} /><span>模型 Agent 可写项目文件<em>默认只读。打开后它能在工作目录里改文件，仍会走工具白名单与目录限制。</em></span></label>
       <div className="sa-policy-budgets">
         <label>并发<input type="number" min={1} max={8} value={policy.budgets?.maxConcurrent ?? 2} onChange={event => setBudget('maxConcurrent', Number(event.target.value))} /></label>
         <label>每单调用<input type="number" min={1} max={50} value={policy.budgets?.maxCallsPerTicket ?? 12} onChange={event => setBudget('maxCallsPerTicket', Number(event.target.value))} /></label>
