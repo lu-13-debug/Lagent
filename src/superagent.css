@@ -247,6 +247,7 @@ html[data-theme="dark"] .sa-shell {
 
 /* 4. Sidebar --------------------------------------------------------------- */
 .sa-sidebar {
+  position: relative;
   display: flex;
   flex: 0 0 var(--sa-sidebar);
   width: var(--sa-sidebar);
@@ -1149,9 +1150,21 @@ html[data-theme="dark"] .sa-newchat kbd {
 .sa-agent-picks {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 5px;
   padding: 1px 2px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+}
+
+.sa-agent-picks::-webkit-scrollbar {
+  display: none;
+}
+
+.sa-agent-picks > * {
+  flex: none;
 }
 
 .sa-picks-label {
@@ -1283,7 +1296,14 @@ html[data-theme="dark"] .sa-newchat kbd {
   flex: 1;
   min-width: 0;
   flex-wrap: wrap;
+  align-items: center;
   gap: 5px;
+}
+
+.sa-composer-mode {
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+  margin-left: 2px;
 }
 
 .sa-chips button {
@@ -1344,28 +1364,6 @@ html[data-theme="dark"] .sa-newchat kbd {
 }
 
 /* landing: command bar sits under the main column, aligned with the hero */
-@media (min-width: 1181px) {
-  .sa-composer-dock.sa-dock-split {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) var(--sa-rail);
-    column-gap: var(--sa-colgap);
-    width: 100%;
-    max-width: 1116px;
-    margin: 0 auto;
-    padding-inline: var(--sa-gutter);
-  }
-
-  .sa-composer-dock.sa-dock-split .sa-composer,
-  .sa-composer-dock.sa-dock-split .sa-note {
-    grid-column: 1;
-    max-width: none;
-    margin-inline: 0;
-  }
-
-  .sa-composer-dock.sa-dock-split .sa-note {
-    margin-top: 8px;
-  }
-}
 
 .sa-note svg {
   flex: none;
@@ -4342,6 +4340,7 @@ html[data-theme="dark"] .sa-newchat kbd {
 
 /* 侧栏底部用户行不透明，滚动内容不会从它下面透出来。 */
 .sa-sidebar-foot {
+  position: relative;
   background: var(--sa-surface);
 }
 
@@ -5391,3 +5390,409 @@ html[data-theme="dark"] .sa-brand-mono {
 .sa-live-observation .sa-live-icon { background: var(--sa-surface-3); }
 .sa-live-error .sa-live-icon { background: var(--sa-danger-soft); color: var(--sa-danger); }
 .sa-live-result .sa-live-icon { background: var(--sa-success-soft); color: var(--sa-success); }
+
+/* 20. 分栏：可折叠左栏 + 主区 + 右侧工作详情 */
+.sa-shell {
+  display: flex;
+  align-items: stretch;
+}
+
+.sa-rail-toggle {
+  margin-left: auto;
+  flex: none;
+}
+
+/* 折叠后的左栏：只留图标，宽度收到 64px */
+.sa-shell.sa-rail-collapsed {
+  --sa-sidebar: 64px;
+}
+
+.sa-rail-collapsed .sa-brand span,
+.sa-rail-collapsed .sa-newchat-label,
+.sa-rail-collapsed .sa-side-title,
+.sa-rail-collapsed .sa-side-action,
+.sa-rail-collapsed .sa-conv-search,
+.sa-rail-collapsed .sa-conv-title,
+.sa-rail-collapsed .sa-folder-toggle,
+.sa-rail-collapsed .sa-folder-name span,
+.sa-rail-collapsed .sa-folder-pending,
+.sa-rail-collapsed .sa-folder-add,
+.sa-rail-collapsed .sa-folder-more,
+.sa-rail-collapsed .sa-folder-chats,
+.sa-rail-collapsed .sa-user > span:nth-child(2),
+.sa-rail-collapsed .sa-user > svg,
+.sa-rail-collapsed .sa-side-resize {
+  display: none;
+}
+
+.sa-rail-collapsed .sa-brand-row,
+.sa-rail-collapsed .sa-brand,
+.sa-rail-collapsed .sa-newchat,
+.sa-rail-collapsed .sa-folder-row,
+.sa-rail-collapsed .sa-folder-name,
+.sa-rail-collapsed .sa-conv,
+.sa-rail-collapsed .sa-user {
+  justify-content: center;
+}
+
+.sa-rail-collapsed .sa-brand {
+  flex: none;
+  width: 40px;
+  padding: 0;
+}
+
+.sa-rail-collapsed .brand-mark {
+  width: 26px;
+  height: 26px;
+}
+
+.sa-rail-collapsed .sa-conv-group {
+  display: none;
+}
+
+.sa-rail-collapsed .sa-conv-icon {
+  width: 100%;
+  justify-content: center;
+}
+
+.sa-rail-collapsed .sa-brand-row {
+  padding-bottom: 6px;
+}
+
+.sa-rail-collapsed .sa-newchat {
+  width: 40px;
+  padding: 0;
+  margin: 0 auto 6px;
+}
+
+.sa-rail-collapsed .sa-newchat svg {
+  margin: 0;
+}
+
+.sa-rail-collapsed .sa-folder-name {
+  width: 40px;
+  padding: 0;
+}
+
+.sa-rail-collapsed .sa-conv {
+  width: 40px;
+  padding: 0;
+  margin: 0 auto 2px;
+}
+
+.sa-rail-collapsed .sa-conv-icon {
+  margin: 0;
+}
+
+.sa-rail-collapsed .sa-sidebar-foot {
+  padding: 8px 0;
+}
+
+.sa-rail-collapsed .sa-user {
+  width: 40px;
+  margin: 0 auto;
+  padding: 4px;
+}
+
+/* 右侧工作详情 */
+.sa-inspector {
+  flex: none;
+  width: 320px;
+  border-left: 1px solid var(--sa-line);
+  background: var(--sa-surface);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sa-inspector-head {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--sa-line);
+}
+
+.sa-inspector-head h2 {
+  margin: 2px 0 0;
+  font-size: var(--sa-fs-md);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.sa-inspector-head .sa-eyebrow {
+  margin: 0;
+}
+
+.sa-inspector-head .sa-icon svg {
+  transform: rotate(180deg);
+}
+
+.sa-inspector-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sa-inspector-empty {
+  margin: 8px 4px;
+  font-size: var(--sa-fs-xs);
+  line-height: 1.6;
+  color: var(--sa-text-3);
+}
+
+.sa-card2 {
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface);
+  overflow: hidden;
+}
+
+.sa-card2.is-open {
+  box-shadow: var(--sa-shadow-sm);
+}
+
+.sa-card2-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 0;
+  background: none;
+  color: var(--sa-text);
+  font-size: var(--sa-fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sa-card2-head:hover {
+  background: var(--sa-surface-2);
+}
+
+.sa-card2-head .sa-status {
+  margin-left: auto;
+}
+
+.sa-card2-head svg {
+  flex: none;
+  color: var(--sa-text-3);
+  transition: transform var(--sa-fast) var(--sa-ease);
+}
+
+.sa-card2-head svg.open {
+  transform: rotate(90deg);
+}
+
+.sa-card2-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--sa-text-3);
+}
+
+.sa-card2-dot[data-status="working"],
+.sa-card2-dot[data-status="queued"] {
+  background: var(--sa-accent);
+}
+
+.sa-card2-dot[data-status="completed"] {
+  background: var(--sa-success);
+}
+
+.sa-card2-dot[data-status="awaiting_review"] {
+  background: var(--sa-warning);
+}
+
+.sa-card2-dot[data-status="failed"],
+.sa-card2-dot[data-status="blocked"] {
+  background: var(--sa-danger);
+}
+
+.sa-card2-name {
+  font-weight: 560;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-card2-body {
+  border-top: 1px solid var(--sa-line);
+  padding: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.sa-card2-empty {
+  margin: 0;
+  font-size: var(--sa-fs-xs);
+  color: var(--sa-text-3);
+}
+
+.sa-card2-sub {
+  margin: 0;
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.sa-card2-summary {
+  margin: 0;
+  font-size: var(--sa-fs-xs);
+  line-height: 1.65;
+  color: var(--sa-text-2);
+}
+
+.sa-card2-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sa-card2-actions .sa-button {
+  height: 26px;
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-live-compact {
+  padding-left: 10px;
+  margin: 0;
+  gap: 6px;
+}
+
+.sa-live-compact .sa-live-step p {
+  font-size: var(--sa-fs-2xs);
+}
+
+.sa-live-compact .sa-live-icon {
+  width: 17px;
+  height: 17px;
+}
+
+/* 收起后贴在右侧的竖排入口 */
+.sa-inspector-tab {
+  flex: none;
+  width: 28px;
+  border: 0;
+  border-left: 1px solid var(--sa-line);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+  letter-spacing: 0.12em;
+  writing-mode: vertical-rl;
+  cursor: pointer;
+  padding: 10px 0;
+}
+
+.sa-inspector-tab:hover {
+  color: var(--sa-text);
+  background: var(--sa-surface-3);
+}
+
+/* 底部「个人工作区」菜单 */
+.sa-usermenu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface);
+  box-shadow: var(--sa-shadow-lg);
+}
+
+.sa-usermenu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--sa-r-sm);
+  background: none;
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sa-usermenu button:hover {
+  background: var(--sa-surface-2);
+  color: var(--sa-text);
+}
+
+.sa-usermenu button.active {
+  background: var(--sa-surface-2);
+  color: var(--sa-text);
+  font-weight: 560;
+}
+
+.sa-usermenu button em {
+  margin-left: auto;
+  min-width: 18px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-text);
+  color: var(--sa-canvas);
+  font-size: var(--sa-fs-2xs);
+  font-style: normal;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 首页只保留精简入口 */
+.sa-hero-compact {
+  padding: 6px 0 2px;
+}
+
+.sa-hero-compact h1 {
+  font-size: var(--sa-fs-2xl);
+}
+
+.sa-landing {
+  max-width: 760px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sa-landing .sa-starters {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 1180px) {
+  .sa-inspector {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    width: min(88vw, 340px);
+    box-shadow: var(--sa-shadow-lg);
+  }
+}
+
+@media (max-width: 760px) {
+  .sa-inspector-tab {
+    display: none;
+  }
+
+  .sa-usermenu {
+    left: 6px;
+    right: 6px;
+  }
+}

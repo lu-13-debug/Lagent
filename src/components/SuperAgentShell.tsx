@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FolderGit2, GitBranch, Globe, Inbox, Menu, MessageSquare, MoreHorizontal, Pin, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Users, Waypoints, Wrench, X } from 'lucide-react';
+import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FolderGit2, GitBranch, Globe, Inbox, Menu, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Users, Waypoints, Wrench, X } from 'lucide-react';
 import { api } from '../api';
 import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
@@ -104,6 +104,7 @@ const DRAFTS_KEY = 'dataagent.drafts.v1';
 const CHAT_SEEN_KEY = 'dataagent.chatseen.v1';
 const SIDEBAR_WIDTH_KEY = 'dataagent.sidebarw.v1';
 const PINNED_KEY = 'dataagent.pinnedfolders.v1';
+const RAIL_COLLAPSED_KEY = 'dataagent.railcollapsed.v1';
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -215,6 +216,13 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [chatRename, setChatRename] = useState<{ projectId: string; chatId: string; value: string } | null>(null);
   const [folderToDelete, setFolderToDelete] = useState<WorkProject | null>(null);
   const [dropActive, setDropActive] = useState(false);
+  // 侧栏折叠、右侧检查器、底部用户菜单：让主区尽量宽，工作与过程都放在主区
+  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => readJson<boolean>(RAIL_COLLAPSED_KEY, false));
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState<boolean>(() => typeof window === 'undefined' || window.innerWidth >= 1280);
+  const [cardOpen, setCardOpen] = useState<Record<string, boolean>>({});
+  const [cardDetails, setCardDetails] = useState<Record<string, WorkTicketDetail>>({});
+  const autoOpened = useRef(false);
 
   const load = async () => {
     setLoading(true); setError('');
@@ -834,6 +842,45 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     catch (cause) { notify((cause as Error).message, true); }
   };
   const open = async (id: string) => { try { setDetail(await api.workTicket(id)); } catch (cause) { notify((cause as Error).message, true); } };
+
+  useEffect(() => { writeJson(RAIL_COLLAPSED_KEY, railCollapsed); }, [railCollapsed]);
+
+  // 右侧卡片：展开时按需取详情，拿不到就只显示列表里已有的摘要
+  const toggleCard = async (ticketId: string) => {
+    const next = !cardOpen[ticketId];
+    setCardOpen(previous => ({ ...previous, [ticketId]: next }));
+    if (!next || cardDetails[ticketId]) return;
+    try {
+      const full = await api.workTicket(ticketId);
+      setCardDetails(previous => ({ ...previous, [ticketId]: full }));
+    } catch { /* 历史工单可能已被清理，保持摘要即可 */ }
+  };
+
+  // 打开工单时它自己的卡片默认展开
+  useEffect(() => {
+    if (!activeTicketId) return;
+    setCardOpen(previous => previous[activeTicketId] ? previous : { ...previous, [activeTicketId]: true });
+  }, [activeTicketId]);
+
+  // 首次进入直接打开最近一次工作：主页就是 Agent 的操作与思考
+  useEffect(() => {
+    if (autoOpened.current || !work || activeTicketId || activeGroupId) return;
+    if (view !== 'command' || !tickets.length) return;
+    autoOpened.current = true;
+    viewTicket(tickets[0].id);
+  }, [work, activeTicketId, activeGroupId, view, tickets]);
+
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    const close = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('.sa-usermenu') || target?.closest('.sa-user')) return;
+      setUserMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', close, true);
+    return () => document.removeEventListener('pointerdown', close, true);
+  }, [userMenuOpen]);
+
   const handoffTargets = usableAgents.filter(agent => conversationExecutorIds.includes(agent.id) && agent.id !== 'analysis');
   useEffect(() => {
     if (detail?.ticket.status === 'completed' && !handoffTargets.some(agent => agent.id === handoffExecutor)) setHandoffExecutor(handoffTargets[0]?.id || '');
@@ -1009,13 +1056,53 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     { icon: FolderGit2, title: '跟进项目进展', desc: '读取项目简报与最近变更', prompt: '总结当前项目的进展与变更要点' },
   ];
 
+  // 右侧面板：当前这次工作里被分配到的 Agent，各自展开看过程
+  const inspectorRows = activeGroup
+    ? activeGroup.ticketIds.map((id, index) => ({ id, executorId: activeGroup.agentIds[index] || '' }))
+    : activeTicket
+      ? [{ id: activeTicket.id, executorId: activeTicket.executor }]
+      : tickets.slice(0, 8).map(ticket => ({ id: ticket.id, executorId: ticket.executor }));
+
+  const inspectorCard = (row: { id: string; executorId: string }) => {
+    const listed = tickets.find(ticket => ticket.id === row.id);
+    const groupEntry = groupDetails[row.id];
+    const ticket = groupEntry?.ticket || (activeTicketId === row.id ? activeTicket : null) || listed;
+    const detail = cardDetails[row.id] || (activeTicketId === row.id ? activeDetail : null) || groupEntry || null;
+    const steps = (liveActivity[row.id] || detail?.activity || []).filter(step => step.kind !== 'result');
+    const summary = reportText(detail as WorkTicketDetail | null);
+    const open = cardOpen[row.id] === true;
+    const status = ticket?.status || 'waiting';
+    const recent = !activeTicketId && !activeGroup;
+    return <article className={`sa-card2 ${open ? 'is-open' : ''}`} key={row.id}>
+      <button type="button" className="sa-card2-head" aria-expanded={open} onClick={() => void toggleCard(row.id)}>
+        <span className="sa-card2-dot" data-status={status} />
+        <span className="sa-card2-name">{recent ? (ticket?.title || agentLabel(row.executorId)) : agentLabel(row.executorId)}</span>
+        <Status status={status} />
+        <ChevronRight size={13} className={open ? 'open' : ''} />
+      </button>
+      {open && <div className="sa-card2-body">
+        {recent && <p className="sa-card2-sub">{agentLabel(row.executorId)} · {shortTime(ticket?.createdAt)}</p>}
+        {steps.length > 0
+          ? <ol className="sa-live-steps sa-live-compact">{steps.slice(-8).map((step, index) => <li key={`${row.id}-${index}`} className={`sa-live-step sa-live-${step.kind}`}>
+              <span className="sa-live-icon">{step.kind === 'error' ? <AlertTriangle size={11} /> : step.kind === 'observation' ? <Terminal size={11} /> : <Wrench size={11} />}</span>
+              <div><p>{step.text}</p>{step.detail && <span className="sa-live-detail">{step.detail}</span>}</div>
+            </li>)}</ol>
+          : !summary && <p className="sa-card2-empty">{terminalStatuses.includes(status) ? '这条记录没有留下过程。' : status === 'awaiting_review' ? '等待你确认后开始。' : 'Agent 还没有动作。'}</p>}
+        {summary && <p className="sa-card2-summary">{summary.slice(0, 240)}</p>}
+        <div className="sa-card2-actions">
+          {status === 'awaiting_review' && <button type="button" className="sa-button sa-primary" onClick={() => void act(row.id, 'approve')}><Check size={12} />确认</button>}
+          <button type="button" className="sa-link" onClick={() => viewTicket(row.id)}>打开对话</button>
+        </div>
+      </div>}
+    </article>;
+  };
+
   const conversationPage = <div className={`sa-workspace ${isLanding ? 'sa-workspace-landing' : ''}`}>
     {isLanding ? <div className="sa-landing">
       <div className="sa-landing-main">
-        <header className="sa-hero">
-          <p className="sa-eyebrow">PERSONAL AGENT</p>
+        <header className="sa-hero sa-hero-compact">
           <h1>今天想让我做什么？</h1>
-          <p className="sa-hero-sub">选择一个或多个 Agent，描述目标。多选时我会把任务拆成子任务分派下去，进度在「并行」里同屏可见。</p>
+          <p className="sa-hero-sub">选一个 Agent，描述目标；它的操作与思考会显示在这里。</p>
         </header>
         <section className="sa-picker" aria-labelledby="sa-picker-title">
           <div className="sa-picker-head"><span id="sa-picker-title">执行 Agent</span><span className="sa-picker-hint">{crossCapable.length + windows.length} 个可用 · 最多选 4 个</span></div>
@@ -1039,21 +1126,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           </button>)}
         </section>
       </div>
-      <aside className="sa-rail" aria-label="工作台概览">
-        <section className="sa-rail-card">
-          <div className="sa-rail-head"><Inbox size={13} /><span>待你确认</span><em>{attention.length}</em></div>
-          {attention.length ? <div className="sa-rail-list">{attention.slice(0, 3).map(item => <button type="button" key={item.ticketId} className="sa-rail-row" onClick={() => setView('inbox')}><em className="sa-dot sa-dot-awaiting_review" /><span>{item.title}</span><time>{shortTime(item.createdAt)}</time></button>)}</div> : <p className="sa-rail-empty"><Check size={13} />没有需要你处理的事项</p>}
-        </section>
-        <section className="sa-rail-card">
-          <div className="sa-rail-head"><Activity size={13} /><span>最近任务</span><em>{tickets.length}</em></div>
-          {tickets.length ? <div className="sa-rail-list">{tickets.slice(0, 4).map(ticket => <button type="button" key={ticket.id} className="sa-rail-row" onClick={() => viewTicket(ticket.id)}><em className={`sa-dot sa-dot-${ticket.status}`} /><span>{ticket.title}</span><time>{shortTime(ticket.createdAt)}</time></button>)}</div> : <p className="sa-rail-note">还没有任务。描述目标即可开始。</p>}
-        </section>
-        <section className="sa-rail-card">
-          <div className="sa-rail-head"><FolderGit2 size={13} /><span>项目</span><em>{projects?.length ?? 0}</em></div>
-          {projects?.length ? <div className="sa-rail-list">{projects.slice(0, 3).map(item => <button type="button" key={item.id} className="sa-rail-row" onClick={() => setView('projects')}><span>{item.name}</span><time>{item.chatCount} 个对话</time></button>)}</div>
-            : <div className="sa-rail-action"><p className="sa-rail-note">导入本地文件夹后，拆分出的任务会带着项目上下文执行，改动也会自动归档。</p><button type="button" className="sa-rail-cta" onClick={() => setView('projects')}>打开项目<ChevronRight size={13} /></button></div>}
-        </section>
-      </aside>
     </div> : <div className="sa-thread" ref={threadRef}>
       <div className="sa-thread-inner">
         {activeGroup ? <>
@@ -1121,7 +1193,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         </> : null}
       </div>
     </div>}
-    <div className={`sa-composer-dock${isLanding ? ' sa-dock-split' : ''}`}>
+    <div className="sa-composer-dock">
       <form className="sa-composer" onSubmit={event => { event.preventDefault(); void send(); }}>
         {!isLanding && <div className="sa-agent-picks" role="group" aria-label="选择执行 Agent">
           <span className="sa-picks-label">Agent</span>
@@ -1147,7 +1219,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         {singleExecutor === 'terminal' && <div className="sa-executor-fields"><label className="sa-field"><span>程序</span><select value={terminalProgram} onChange={event => setTerminalProgram(event.target.value)}><option value="git">git</option><option value="npm">npm</option><option value="ls">ls</option><option value="pwd">pwd</option></select></label><label className="sa-field"><span>参数</span><input value={terminalArgs} onChange={event => setTerminalArgs(event.target.value)} placeholder="status --short" /></label></div>}
         {singleExecutor === 'browser' && <div className="sa-executor-fields"><label className="sa-field"><span>页面地址</span><input type="url" value={browserUrl} onChange={event => setBrowserUrl(event.target.value)} placeholder="https://example.com/page" /></label></div>}
         {singleExecutor === 'github' && <div className="sa-executor-fields"><label className="sa-field"><span>GitHub 动作</span><select value={githubAction} onChange={event => setGithubAction(event.target.value)}><option value="repo">仓库</option><option value="issues">Issues</option><option value="pulls">Pull Requests</option><option value="checks">CI Checks</option><option value="file">文件</option></select></label><label className="sa-field"><span>owner</span><input value={githubOwner} onChange={event => setGithubOwner(event.target.value)} placeholder="acme" /></label><label className="sa-field"><span>repo</span><input value={githubRepo} onChange={event => setGithubRepo(event.target.value)} placeholder="data-agent" /></label>{['issues', 'pulls', 'checks'].includes(githubAction) && <label className="sa-field"><span>编号</span><input inputMode="numeric" value={githubNumber} onChange={event => setGithubNumber(event.target.value)} placeholder="7" /></label>}{githubAction === 'file' && <label className="sa-field"><span>文件路径</span><input value={githubPath} onChange={event => setGithubPath(event.target.value)} placeholder="docs/readme.md" /></label>}</div>}
-        <div className="sa-composer-foot"><div className="sa-chips">{!isLanding && quickCommands.map(item => <button type="button" key={item} onClick={() => setCommand(item)}>{item}</button>)}<button type="button" onClick={() => setPlanOpen(true)}>多步计划</button></div><button className="sa-send" type="submit" disabled={!command.trim() || sending} aria-label="发送指令">{sending ? <RefreshCw size={16} className="sa-spin" /> : <Send size={16} />}<span>{sending ? '提交中' : composerTitle}</span></button></div>
+        <div className="sa-composer-foot"><div className="sa-chips"><button type="button" onClick={() => setPlanOpen(true)}>多步计划</button>{selectedAgents.length > 1 && <span className="sa-composer-mode">{dispatchMode === 'split' ? '拆成子任务' : '交叉验证'}</span>}</div><button className="sa-send" type="submit" disabled={!command.trim() || sending} aria-label="发送指令">{sending ? <RefreshCw size={16} className="sa-spin" /> : <Send size={16} />}<span>{sending ? '提交中' : composerTitle}</span></button></div>
       </form>
       <p className="sa-note"><ShieldCheck size={14} />{selectedAgents.length > 1 ? (dispatchMode === 'split' ? '任务会先拆成子任务再分派给各 Agent，开工前仍按策略逐单确认。' : '多个 Agent 会并行独立作答，方便对比；会消耗对应执行器的额度。') : '只会执行你明确授权或规则允许的操作；危险动作会先请求确认。'}<span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
     </div>
@@ -1428,16 +1500,18 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
 
   const page = view === 'command' ? conversationPage : view === 'inbox' ? inboxPage : view === 'parallel' ? parallelPage : view === 'projects' ? <ProjectsPanel notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
 
-  return <div className="sa-shell" style={sidebarWidth ? { '--sa-sidebar': `${sidebarWidth}px` } as React.CSSProperties : undefined}>
+  return <div className={`sa-shell ${railCollapsed ? 'sa-rail-collapsed' : ''} ${inspectorOpen ? 'sa-inspector-open' : ''}`} style={sidebarWidth ? { '--sa-sidebar': `${sidebarWidth}px` } as React.CSSProperties : undefined}>
     <a className="skip-link" href="#sa-main">跳到主内容</a>
     {navOpen && <button className="sa-nav-shade" aria-label="关闭导航" onClick={() => setNavOpen(false)} />}
     <aside className={`sa-sidebar ${navOpen ? 'sa-nav-open' : ''}`}>
       <div className="sa-brand-row">
         <button className="sa-brand" onClick={newChat}><Logo /><span>DataAgent<span className="brand-dot">.</span></span></button>
+        <button type="button" className="sa-icon sa-rail-toggle" aria-label={railCollapsed ? '展开侧栏' : '收起侧栏'} title={railCollapsed ? '展开侧栏' : '收起侧栏'} aria-expanded={!railCollapsed} onClick={() => setRailCollapsed(value => !value)}>
+          {railCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        </button>
       </div>
       <button className="sa-icon sa-nav-close" aria-label="关闭导航" onClick={() => setNavOpen(false)}><X size={18} /></button>
       <button className="sa-newchat" onClick={newChat}><span className="sa-newchat-label"><Plus size={16} />新对话</span></button>
-      <nav className="sa-nav" aria-label="功能导航">{navItems.map(item => <button key={item.id} className={`sa-nav-item ${view === item.id ? 'active' : ''}`} aria-current={view === item.id ? 'page' : undefined} onClick={() => { setView(item.id); setNavOpen(false); }}><item.icon size={16} /><span>{item.label}</span>{item.id === 'inbox' && attention.length > 0 && <em>{attention.length}</em>}{item.id === 'parallel' && liveTickets.length > 0 && <em className="sa-nav-live">{liveTickets.length}</em>}</button>)}</nav>
       <div className="sa-side-scroll">
       <section className={`sa-folders ${dropActive ? 'sa-drop-active' : ''}`} aria-label="工作文件夹"
         onDragOver={event => { if (Array.from(event.dataTransfer.types).includes('Files')) { event.preventDefault(); setDropActive(true); } }}
@@ -1482,8 +1556,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
                   const unread = chatUnread(entry);
                   return <button type="button" key={entry.id} className={`sa-conv sa-conv-sub ${active ? 'active' : ''} ${unread ? 'has-unread' : ''}`} title={`${executorNames[entry.executorId] || entry.executorId} · 写入 ${item.path}（双击重命名）`} onClick={() => openFolderChat(item.id, entry.id)} onDoubleClick={event => { event.preventDefault(); setChatRename({ projectId: item.id, chatId: entry.id, value: entry.title }); }}>
                     <span className="sa-conv-body">
-                      <span className="sa-conv-title">{entry.title}</span>
-                      <span className="sa-conv-meta"><span>{executorNames[entry.executorId] || entry.executorId}</span><time>{shortTime(entry.updatedAt || entry.createdAt)}</time>{unread && <em className="sa-unread" aria-label="有新的执行结果" />}</span>
+                      <span className="sa-conv-title">{entry.title}{unread && <em className="sa-unread" aria-label="有新的执行结果" />}</span>
                     </span>
                   </button>;
                 }) : <p className="sa-folder-empty">还没有会话，点右侧 + 新建一个。</p>}
@@ -1502,11 +1575,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             {group.items.map(item => {
               const active = item.kind === 'group' ? item.id === activeGroupId : item.id === activeTicketId && !activeGroupId;
               const status = item.kind === 'group' && item.group ? groupStatusOf(item.group) : item.ticket?.status || 'waiting';
-              return <button type="button" key={item.id} className={`sa-conv ${active ? 'active' : ''}`} aria-current={active ? 'true' : undefined} onClick={() => { setNavOpen(false); if (item.kind === 'group' && item.group) viewGroup(item.group); else if (item.ticket) viewTicket(item.ticket.id); }}>
-                <span className="sa-conv-icon">{item.kind === 'group' ? <Users size={12} /> : <Bot size={12} />}</span>
+              return <button type="button" key={item.id} className={`sa-conv ${active ? 'active' : ''}`} aria-current={active ? 'true' : undefined} title={item.kind === 'group' ? `${item.group?.agentIds.length || 0} 个 Agent 交叉验证` : executorNames[item.ticket?.executor || ''] || item.ticket?.executor} onClick={() => { setNavOpen(false); if (item.kind === 'group' && item.group) viewGroup(item.group); else if (item.ticket) viewTicket(item.ticket.id); }}>
+                <span className="sa-conv-icon">{item.kind === 'group' ? <Users size={12} /> : <em className={`sa-dot sa-dot-${status}`} />}</span>
                 <span className="sa-conv-body">
                   <span className="sa-conv-title">{item.title}</span>
-                  <span className="sa-conv-meta"><em className={`sa-dot sa-dot-${status}`} /><span>{item.kind === 'group' ? `${item.group?.agentIds.length || 0} 个 Agent 交叉验证` : executorNames[item.ticket?.executor || ''] || item.ticket?.executor}</span><time>{shortTime(item.createdAt)}</time></span>
                 </span>
               </button>;
             })}
@@ -1514,12 +1586,36 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         </div>
       </section>
       </div>
-      <div className="sa-sidebar-foot"><div className="sa-user"><span className="sa-avatar">{user?.displayName?.slice(0, 1).toUpperCase() || 'D'}</span><span><strong>{user?.displayName || '个人工作区'}</strong><small>{runtime.mode === 'cloud' ? '云端账号' : '本地运行'}</small></span><Sparkles size={14} /></div></div>
+      <div className="sa-sidebar-foot">
+        {userMenuOpen && <div className="sa-usermenu" role="menu" aria-label="个人工作区">
+          {navItems.map(item => <button type="button" key={item.id} role="menuitem" className={view === item.id ? 'active' : ''} onClick={() => { setView(item.id); setNavOpen(false); setUserMenuOpen(false); }}>
+            <item.icon size={15} /><span>{item.label}</span>
+            {item.id === 'inbox' && attention.length > 0 && <em>{attention.length}</em>}
+            {item.id === 'parallel' && liveTickets.length > 0 && <em>{liveTickets.length}</em>}
+          </button>)}
+        </div>}
+        <button type="button" className="sa-user" aria-haspopup="menu" aria-expanded={userMenuOpen} onClick={() => setUserMenuOpen(value => !value)}>
+          <span className="sa-avatar">{user?.displayName?.slice(0, 1).toUpperCase() || 'D'}</span>
+          <span><strong>{user?.displayName || '个人工作区'}</strong><small>{runtime.mode === 'cloud' ? '云端账号' : '本地运行'}</small></span>
+          <Sparkles size={14} />
+        </button>
+      </div>
     </aside>
     <div className="sa-side-resize" role="separator" aria-orientation="vertical" aria-label="拖动调整侧栏宽度" title="拖动调整侧栏宽度，双击恢复默认" onPointerDown={startSidebarResize} onDoubleClick={() => setSidebarWidth(0)} />
     <div className="sa-main"><header className="sa-topbar"><div className="sa-breadcrumb"><button className="sa-icon sa-menu" aria-label="打开导航" onClick={() => setNavOpen(true)}><Menu size={19} /></button><span>{view === 'command' ? (activeGroup ? '交叉验证' : '个人 Agent') : '个人 Agent'}</span><ChevronRight size={12} /><strong>{view === 'command' ? activeGroup ? activeGroup.prompt : activeTicket?.title || '新对话' : current}</strong>{view === 'command' && activeGroup && <Status status={groupStatusOf(activeGroup)} />}{view === 'command' && activeTicket && <Status status={activeTicket.status} />}</div><div className="sa-topbar-right"><span className="sa-connection" role="status"><span className="online-dot" />{error ? '指挥服务未连接' : runtime.mode === 'cloud' ? '云端已连接' : '本地已连接'}</span><button className="sa-icon" aria-label={appearance.resolvedTheme === 'dark' ? '切换到浅色主题' : '切换到深色主题'} title={appearance.resolvedTheme === 'dark' ? '切换到浅色主题' : '切换到深色主题'} onClick={() => appearance.setTheme(appearance.resolvedTheme === 'dark' ? 'light' : 'dark')}><SunMoon size={17} /></button></div></header>
       <main id="sa-main" className={`sa-content ${view === 'command' ? 'sa-content-chat' : ''}`}>{error && !loading ? <div className="sa-error"><AlertTriangle size={20} /><div><h2>指挥服务尚未连接</h2><p>{error}</p><button className="sa-button" onClick={() => void load()}><RefreshCw size={15} />重试</button></div></div> : loading && !work ? <div className="sa-loading"><RefreshCw size={20} className="sa-spin" /><span>正在载入指挥台…</span></div> : page}</main>
     </div>
+    {view === 'command' && (inspectorOpen
+      ? <aside className="sa-inspector" aria-label="工作详情">
+          <header className="sa-inspector-head">
+            <div><span className="sa-eyebrow">AGENTS</span><h2>{activeGroup ? `${inspectorRows.length} 个 Agent` : activeTicket ? '工作详情' : '最近工作'}</h2></div>
+            <button type="button" className="sa-icon" aria-label="收起工作详情" title="收起工作详情" onClick={() => setInspectorOpen(false)}><ChevronRight size={15} /></button>
+          </header>
+          <div className="sa-inspector-list">
+            {inspectorRows.length ? inspectorRows.map(inspectorCard) : <p className="sa-inspector-empty">还没有工作。在左侧描述一个目标开始。</p>}
+          </div>
+        </aside>
+      : <button type="button" className="sa-inspector-tab" aria-label="展开工作详情" title="展开工作详情" onClick={() => setInspectorOpen(true)}>AGENTS</button>)}
     {planDetail && <Modal title={planDetail.goal} subtitle={`多步计划${planDetail.autoRun ? ' · 自动执行' : ''} · ${planDetail.status === 'active' ? '进行中' : planDetail.status === 'completed' ? '已完成' : planDetail.status === 'cancelled' ? '已取消' : '已失败'} · ${planDetail.totalSteps} 步`} close={() => setPlanDetail(null)}>
       <div className="sa-plan-graph">{planDetail.steps.map(step => <div className="sa-plan-graph-step" key={step.index}>
         <span className="sa-plan-index">{step.index + 1}</span>
