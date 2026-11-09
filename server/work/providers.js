@@ -19,7 +19,13 @@ const PROVIDERS = Object.freeze([
   { id: 'dsh', name: 'DeepSeek Harness', executorId: null, commands: ['dsh', 'deepseek'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
   { id: 'codex-acp', name: 'Codex ACP', executorId: 'codex-acp', commands: ['codex-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
   { id: 'claude-acp', name: 'Claude ACP', executorId: 'claude-acp', commands: ['claude-agent-acp', 'claude-code-acp', 'claude-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
-  { id: 'dsh-acp', name: 'DeepSeek Harness ACP', executorId: 'dsh-acp', commands: ['dsh-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' }
+  { id: 'dsh-acp', name: 'DeepSeek Harness ACP', executorId: 'dsh-acp', commands: ['dsh-acp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  // 只做识别：常见编码 Agent CLI，暂未提供调用适配器（列表里标记为「仅识别」）。
+  { id: 'gemini', name: 'Gemini CLI', executorId: null, commands: ['gemini'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'cursor-agent', name: 'Cursor Agent', executorId: null, commands: ['cursor-agent'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'qwen', name: 'Qwen Code', executorId: null, commands: ['qwen'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'aider', name: 'Aider', executorId: null, commands: ['aider'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' },
+  { id: 'amp', name: 'Amp', executorId: null, commands: ['amp'], versionArgs: ['--version'], authArgs: [], authKind: 'generic' }
 ]);
 
 const pathValue = env => env.PATH ?? env.Path ?? env.path ?? '';

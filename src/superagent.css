@@ -4809,6 +4809,20 @@ html[data-theme="dark"] .sa-newchat kbd {
   outline-offset: 2px;
 }
 
+.sa-agent-more {
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-xs);
+  cursor: pointer;
+}
+
+.sa-agent-more:hover {
+  color: var(--sa-text);
+}
+
 @media (max-width: 760px) {
   .sa-agent-row {
     grid-template-columns: 30px minmax(0, 1fr) auto;

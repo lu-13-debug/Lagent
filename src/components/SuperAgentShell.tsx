@@ -268,6 +268,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [providers, setProviders] = useState<{ id: string; name: string; executorId?: string | null; kind?: string; command: string | null; installed: boolean; version: string | null; status: string; message: string; auth: { loggedIn: boolean | null; method: string | null; message: string } }[]>([]);
   const [providersLoading, setProvidersLoading] = useState(false);
   const [executorBusy, setExecutorBusy] = useState('');
+  const [showMissing, setShowMissing] = useState(false);
   useEffect(() => { if (work?.policy) setPolicy(work.policy); }, [work?.policy]);
   const savePolicy = async () => {
     if (!policy || policySaving) return;
@@ -1100,11 +1101,13 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const providerKind = (provider: { id: string; kind?: string }) => provider.kind === 'desktop' ? '桌面版' : provider.id.endsWith('-acp') ? 'ACP' : 'CLI';
   const enabledExecutors = policy?.allowedExecutors || work?.policy?.allowedExecutors || [];
   const sortedProviders = [...providers].sort((left, right) => Number(right.installed) - Number(left.installed));
+  const missingProviders = sortedProviders.filter(provider => !provider.installed);
+  const visibleProviders = showMissing ? sortedProviders : sortedProviders.filter(provider => provider.installed);
   const agentsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">AGENTS</p><h1>本机 Agent</h1><p>自动识别本机已安装的 Agent 程序，用开关决定它们能否被调度。</p></div>
     <button type="button" className="sa-button" disabled={providersLoading} onClick={() => void loadProviders(true)}>{providersLoading ? '探测中…' : '重新探测'}</button></header>
     <section className="sa-providers">
       <p className="sa-inline-note"><ShieldCheck size={13} />按 PATH / PATHEXT 解析命令并读取版本，探测结果不会保存输出原文；开关写入执行器策略，停用的 Agent 不会出现在新对话的选择里。</p>
-      <ul className="sa-agent-list">{sortedProviders.map(provider => {
+      <ul className="sa-agent-list">{visibleProviders.map(provider => {
         const executorId = provider.executorId || '';
         const switchable = Boolean(executorId) && provider.installed;
         const enabled = switchable && enabledExecutors.includes(executorId);
@@ -1122,6 +1125,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         </li>;
       })}</ul>
       {!providers.length && !providersLoading && <p className="sa-empty">尚未探测到本机 Agent。</p>}
+      {Boolean(missingProviders.length) && <button type="button" className="sa-link sa-agent-more" onClick={() => setShowMissing(value => !value)}>{showMissing ? '收起未安装项' : `还有 ${missingProviders.length} 个未安装的 Agent，展开查看`}</button>}
       <p className="sa-inline-note">可选 ACP 入口：<code>npm i -g @agentclientprotocol/claude-agent-acp</code>（Claude Code）、<code>npm i -g dsh-acp</code>（DeepSeek Harness）。内置工具（数据分析 / 受控终端 / 浏览器 / GitHub）在<button type="button" className="sa-link" onClick={() => setView('tools')}>工具页</button>管理。</p>
     </section>
     <section className="sa-windows"><div className="sa-section-head"><h2>已打开的 Agent 窗口</h2><button type="button" className="sa-link" disabled={windowsLoading} onClick={() => void loadWindows()}>{windowsLoading ? '刷新中…' : '刷新窗口'}</button></div>
