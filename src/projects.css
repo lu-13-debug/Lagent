@@ -156,6 +156,7 @@
 
 .pj-btn {
   height: 32px;
+  min-height: 32px;
   padding: 0 12px;
   gap: 6px;
   border-radius: var(--sa-r-sm);
@@ -165,6 +166,7 @@
 
 .pj-btn.pj-small {
   height: 26px;
+  min-height: 26px;
   padding: 0 9px;
 }
 
@@ -320,6 +322,7 @@
   align-items: center;
   gap: 5px;
   height: 28px;
+  min-height: 28px;
   padding: 0 11px;
   border: 1px solid var(--sa-line-strong);
   border-radius: var(--sa-r-full);
@@ -422,4 +425,267 @@
 .pj-newchat-chips .pj-chip {
   flex: 0 0 auto;
   min-height: 28px;
+}
+
+/* 协作任务：软件拆分 → 分派 → 组装 */
+.pj-teamwork {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface-2);
+}
+
+.pj-teamwork-head {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+}
+
+.pj-teamwork-head svg {
+  margin-top: 2px;
+  color: var(--sa-text-3);
+  flex: none;
+}
+
+.pj-teamwork-head strong {
+  display: block;
+  font-size: var(--sa-fs-sm);
+  font-weight: 600;
+}
+
+.pj-teamwork-head span {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--sa-fs-2xs);
+  line-height: 1.7;
+  color: var(--sa-text-3);
+}
+
+.pj-teamwork-goal,
+.pj-teamwork-agents {
+  display: grid;
+  gap: 6px;
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.pj-teamwork-goal textarea {
+  padding: 9px 10px;
+  border: 1px solid var(--sa-line-strong);
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface);
+  color: var(--sa-text);
+  font: inherit;
+  font-size: var(--sa-fs-sm);
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.pj-teamwork-goal textarea:focus-visible {
+  outline: none;
+  border-color: var(--sa-accent);
+  box-shadow: var(--sa-ring);
+}
+
+.pj-teamwork-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.pj-teamwork-hint {
+  flex: 1 1 220px;
+  font-size: var(--sa-fs-2xs);
+  line-height: 1.6;
+  color: var(--sa-text-3);
+}
+
+.pj-teamworks {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.pj-teamwork-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface);
+}
+
+.pj-teamwork-card.is-assembled {
+  border-color: color-mix(in srgb, var(--sa-success) 32%, var(--sa-line));
+}
+
+.pj-teamwork-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pj-teamwork-card header strong {
+  display: block;
+  font-size: var(--sa-fs-sm);
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+
+.pj-teamwork-card header span {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.pj-tw-status {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-3);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-2xs);
+  font-style: normal;
+}
+
+.pj-tw-status.is-assembled {
+  background: var(--sa-success-soft);
+  color: var(--sa-success);
+}
+
+.pj-tw-status.is-blocked {
+  background: var(--sa-warning-soft);
+  color: var(--sa-warning);
+}
+
+.pj-tw-parts {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 遗留样式 html[data-view="concise"] :where(button) 的 min-height:44px 会把这些小控件撑大，
+   必须用更高特异性压回去。 */
+.pj-page .pj-btn,
+.pj-confirm .pj-btn {
+  min-height: 32px;
+}
+
+.pj-page .pj-btn.pj-small,
+.pj-confirm .pj-btn.pj-small {
+  min-height: 26px;
+}
+
+.pj-page .pj-chip,
+.pj-page .pj-icon,
+.pj-page .pj-tabs button {
+  min-height: 28px;
+}
+
+.pj-page .pj-tabs button {
+  min-height: 26px;
+}
+
+.pj-tw-parts li {
+  display: grid;
+  grid-template-columns: 72px 96px 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--sa-r-sm);
+  font-size: var(--sa-fs-2xs);
+}
+
+.pj-tw-parts li:nth-child(odd) {
+  background: var(--sa-surface-2);
+}
+
+.pj-tw-name {
+  font-weight: 560;
+}
+
+.pj-tw-agent,
+.pj-tw-file {
+  color: var(--sa-text-3);
+}
+
+.pj-tw-file {
+  overflow: hidden;
+  font-family: var(--sa-font-mono);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pj-tw-part {
+  justify-self: start;
+  padding: 1px 7px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-3);
+  color: var(--sa-text-3);
+}
+
+.pj-tw-part.is-completed {
+  background: var(--sa-success-soft);
+  color: var(--sa-success);
+}
+
+.pj-tw-part.is-working,
+.pj-tw-part.is-queued {
+  background: var(--sa-accent-soft);
+  color: var(--sa-accent-ink);
+}
+
+.pj-tw-part.is-awaiting_review {
+  background: var(--sa-warning-soft);
+  color: var(--sa-warning);
+}
+
+.pj-tw-part.is-failed,
+.pj-tw-part.is-blocked,
+.pj-tw-part.is-missing {
+  background: var(--sa-danger-soft);
+  color: var(--sa-danger);
+}
+
+.pj-tw-problems {
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--sa-fs-2xs);
+  line-height: 1.75;
+  color: var(--sa-warning);
+}
+
+.pj-teamwork-card footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.pj-teamwork-card footer > div {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .pj-tw-parts li {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .pj-teamwork-card footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }

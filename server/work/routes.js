@@ -21,6 +21,10 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/projects/:id/sessions',(req,res)=>res.status(201).json(engine.importProjectSession(req.params.id,req.body)));
   app.post('/api/work/projects/:id/chats',(req,res)=>res.status(201).json(engine.createProjectChat(req.params.id,req.body)));
   app.post('/api/work/projects/:id/dispatch',(req,res)=>res.status(201).json(engine.projectDispatch(req.params.id,req.body)));
+  app.post('/api/work/projects/:id/teamwork',(req,res)=>res.status(201).json(engine.teamworkStart(req.params.id,req.body)));
+  app.get('/api/work/projects/:id/teamworks',(req,res)=>res.json({teamworks:engine.teamworkList(req.params.id)}));
+  app.get('/api/work/teamworks/:id',(req,res)=>res.json({teamwork:engine.teamworkGet(req.params.id)}));
+  app.post('/api/work/teamworks/:id/assemble',(req,res)=>res.json(engine.teamworkAssemble(req.params.id)));
   app.delete('/api/work/chats/:id',(req,res)=>res.json(engine.deleteProjectChat(req.params.id)));
   app.patch('/api/work/chats/:id',(req,res)=>res.json({chat:engine.renameProjectChat(req.params.id,req.body)}));
   app.post('/api/work/chats/:id/messages',(req,res)=>res.status(201).json({ticket:engine.projectChatMessage(req.params.id,req.body)}));

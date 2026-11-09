@@ -1,5 +1,5 @@
 import type { ModelUsageReport, Bootstrap, PublicReport, ShareItem, Dataset, ExploreInput, Exploration, Mode, ModelCatalog, ReportMetadata, Runtime, Settings, Task, TaskSnapshot, TaskResponse, Transaction, User, Wallet } from './types';
-import type { WorkAction, WorkBootstrap, WorkPlan, WorkPolicy, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectSession, WorkTeam, WorkTicket, WorkTicketDetail } from './superagent';
+import type { WorkAction, WorkBootstrap, WorkPlan, WorkPolicy, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectSession, WorkTeam, WorkTeamwork, WorkTicket, WorkTicketDetail } from './superagent';
 import { uploadFiles } from './upload.ts';
 import type { UploadOptions } from './upload';
 
@@ -52,6 +52,9 @@ export const api = {
   workRenameProjectChat: (id: string, title: string) => request<{ chat: WorkProjectChat }>(`/work/chats/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   workProjectChatMessage: (id: string, text: string, clientRequestId?: string) => request<{ ticket: WorkTicket }>(`/work/chats/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(clientRequestId ? { clientRequestId } : {}) }) }),
   workProjectChatTickets: (id: string) => request<{ tickets: WorkTicket[] }>(`/work/chats/${encodeURIComponent(id)}/tickets`),
+  workProjectTeamworks: (projectId: string) => request<{ teamworks: WorkTeamwork[] }>(`/work/projects/${encodeURIComponent(projectId)}/teamworks`),
+  workStartTeamwork: (projectId: string, goal: string, executorIds: string[]) => request<{ teamwork: WorkTeamwork; tickets: WorkTicket[] }>(`/work/projects/${encodeURIComponent(projectId)}/teamwork`, { method: 'POST', body: JSON.stringify({ goal, executorIds }) }),
+  workAssembleTeamwork: (id: string) => request<{ ok: boolean; relativePath?: string; outputPath?: string; bytes?: number; problems: { part?: string; message: string }[]; teamwork: WorkTeamwork }>(`/work/teamworks/${encodeURIComponent(id)}/assemble`, { method: 'POST' }),
   workProjectDispatch: (projectId: string, text: string, executorIds: string[], window?: { handle: number; process?: string; title?: string }) => request<{ project: WorkProject; tickets: WorkTicket[] }>(`/work/projects/${encodeURIComponent(projectId)}/dispatch`, { method: 'POST', body: JSON.stringify({ text, executorIds, ...(window ? { window } : {}) }) }),
   workAction: (id: string, action: WorkAction, input?: Record<string, unknown>) => request<{ ticket: WorkTicket }>(`/work/tickets/${encodeURIComponent(id)}/actions`, { method: 'POST', body: JSON.stringify({ action, ...(input ? { input } : {}) }) }),
   workReviewTeam: (id: string, nodeId: string, decision: 'accept' | 'reject') => request<{ team: WorkTeam }>(`/work/tickets/${encodeURIComponent(id)}/team/${encodeURIComponent(nodeId)}/review`, { method: 'POST', body: JSON.stringify({ decision }) }),

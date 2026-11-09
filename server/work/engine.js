@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { assertWorkAction, workError } from './domain.js';
 import { manualTrigger } from './sources/manual.js';
 import { defaultPolicy, externalExecutorAllowed, normalizePolicy, WORK_POLICY_ID } from './policy.js';
@@ -7,6 +9,7 @@ import { executorRegistry } from './executors/index.js';
 import { decideTeamProposal, projectTeamTask, reviewTeamNode, teamEventKey } from './team.js';
 import { cancelTicketEffects, claimDue, complete, enqueue, fail as failOutbox, recoverRunningEffects, sanitizeOutboxError, WORK_EFFECT_KIND } from './outbox.js';
 import { PROJECT_CHAT_EXECUTORS, projectService } from './projects.js';
+import * as teamwork from './teamwork.js';
 
 const now = () => new Date().toISOString();
 const review = question => ({question,createdAt:now(),options:[{id:'approve',label:'批准',action:'approve'},{id:'reject',label:'退回',action:'reject'}]});
@@ -733,6 +736,22 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const task=executorFor(assignment)?.get?.(assignment.sessionId);if(task)sync(privateTicket(ticket.id),assignment,task);
     }
   }
+  // 协作任务：把 record 与工单状态、文件是否落盘拼成前端直接能渲染的视图。
+  const teamworkView=record=>{
+    const project=projects.getProject(record.projectId);
+    const tickets=db.list('ticket');
+    const parts=record.parts.map(part=>{
+      const ticket=tickets.find(item=>item.id===part.ticketId)||null;
+      const file=teamwork.readPart(project.path,part);
+      return {...part,status:ticket?.status||'missing',summary:ticket?.summary||'',fileExists:file.exists,fileSize:file.size};
+    });
+    const terminal=parts.every(part=>['completed','failed','blocked','cancelled','missing'].includes(part.status));
+    return {...record,parts,allSettled:terminal,projectName:project.name,projectPath:project.path};
+  };
+  const teamworkRecords=projectId=>db.list('teamwork')
+    .filter(record=>!projectId||record.projectId===projectId)
+    .sort((left,right)=>String(right.createdAt).localeCompare(String(left.createdAt)));
+
   let closed=false;
   const unsubscribe=store.subscribe(()=>queueMicrotask(()=>{if(!closed)reconcile();}));
   if(outboxEnabled){
@@ -841,6 +860,62 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         tickets.push(api.projectChatMessage(chat.id,{text,clientRequestId:`dispatch-${stamp}-${executorId}`}));
       }
       return {project:projects.getProject(projectId),tickets};
+    },
+    teamworkStart(projectId,input){
+      const project=projects.getProject(projectId);
+      const goal=typeof input?.goal==='string'?input.goal.trim():'';
+      if(!goal||goal.length>600)throw workError('协作目标须为 1–600 字',400);
+      const requested=Array.isArray(input?.executorIds)?input.executorIds:[];
+      const wanted=[...new Set(requested.map(item=>String(item??'').trim()).filter(Boolean))];
+      if(!wanted.length)throw workError('请选择参与协作的 Agent',400);
+      if(wanted.length>3)throw workError('一次最多 3 个 Agent 参与协作',400);
+      const unsupported=wanted.filter(id=>!PROJECT_CHAT_EXECUTORS.includes(id)||id==='window');
+      if(unsupported.length)throw workError(`这些执行器不支持项目内协作：${unsupported.join('、')}`,400);
+      teamwork.writeSkeleton(project.path);
+      const id=`tw-${Date.now().toString(36)}-${randomUUID().slice(0,6)}`;
+      const parts=[];
+      const tickets=[];
+      teamwork.TEAMWORK_PARTS.forEach((part,index)=>{
+        const executorId=wanted[index%wanted.length];
+        const existing=projects.listChats(projectId).find(chat=>chat.executorId===executorId&&chat.source!=='imported'&&/^协作 · /.test(chat.title));
+        const chat=existing||api.createProjectChat(projectId,{executorId,title:`协作 · ${part.name}`}).chat;
+        const ticket=api.projectChatMessage(chat.id,{
+          text:teamwork.teamworkTaskText({part,goal,executorName:executorId}),
+          clientRequestId:`teamwork-${id}-${part.id}`
+        });
+        parts.push({id:part.id,name:part.name,file:part.file,global:part.global,executorId,chatId:chat.id,ticketId:ticket.id});
+        tickets.push(ticket);
+      });
+      const record={id,projectId,goal,parts,status:'running',outputPath:null,bytes:0,assembledAt:null,problems:[],createdAt:now(),updatedAt:now()};
+      db.put('teamwork',record);
+      audit(null,'teamwork-start','engine','accepted',`${parts.length} 个部分`);
+      return {teamwork:teamworkView(record),tickets};
+    },
+    teamworkList(projectId){return teamworkRecords(projectId).slice(0,20).map(teamworkView);},
+    teamworkGet(id){
+      const record=db.get('teamwork',id);
+      if(!record)throw workError('协作任务不存在',404);
+      return teamworkView(record);
+    },
+    teamworkAssemble(id){
+      const record=db.get('teamwork',id);
+      if(!record)throw workError('协作任务不存在',404);
+      const project=projects.getProject(record.projectId);
+      const {files,problems}=teamwork.inspectParts(project.path);
+      if(problems.length){
+        const next={...record,problems,status:'blocked',updatedAt:now()};
+        db.put('teamwork',next);
+        return {ok:false,problems,teamwork:teamworkView(next)};
+      }
+      const title=`协作游戏 · ${record.goal}`;
+      const agents=record.parts.length?new Set(record.parts.map(part=>part.executorId)).size:0;
+      const html=teamwork.buildGameHtml({title,files,agents});
+      const target=path.join(project.path,teamwork.TEAMWORK_DIR,'index.html');
+      fs.writeFileSync(target,html,'utf8');
+      const next={...record,status:'assembled',outputPath:`${teamwork.TEAMWORK_DIR}/index.html`,bytes:Buffer.byteLength(html),assembledAt:now(),problems:[],updatedAt:now()};
+      db.put('teamwork',next);
+      audit(null,'teamwork-assemble','engine','accepted',`${next.bytes} 字节`);
+      return {ok:true,outputPath:target,relativePath:next.outputPath,bytes:next.bytes,teamwork:teamworkView(next)};
     },
     projectChatTickets(chatId){
       const chat=projects.getChat(chatId);

@@ -50,6 +50,16 @@ export interface WorkProjectChange {
   title: string; summary: string; files: string[]; sessionId: string; status: string;
   source: 'auto' | 'manual'; createdAt: string; updatedAt?: string;
 }
+export interface WorkTeamworkPart {
+  id: string; name: string; file: string; global?: string; executorId: string; chatId: string; ticketId: string;
+  status: string; summary?: string; fileExists?: boolean; fileSize?: number;
+}
+export interface WorkTeamwork {
+  id: string; projectId: string; goal: string; status: 'running' | 'assembled' | 'blocked' | string;
+  parts: WorkTeamworkPart[]; outputPath: string | null; bytes: number; assembledAt: string | null;
+  problems: { part?: string; message: string }[]; allSettled?: boolean; projectName?: string; projectPath?: string;
+  createdAt: string; updatedAt: string;
+}
 export interface WorkBootstrap {
   capabilities: { work: boolean };
   tickets: WorkTicket[];

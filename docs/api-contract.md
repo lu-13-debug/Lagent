@@ -153,6 +153,17 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 - `POST /api/work/plans {goal,steps,projectChatId?}`、`POST /api/work/plans/suggest {goal,executors,projectChatId?}`：带 `projectChatId` 时只允许该对话绑定的执行器，规划器输入附带 `{name,path,gitBranch}`，其它执行器步骤返回 400；计划与步骤工单都记录 `projectChatId`。
 - `POST /api/work/plans {goal,steps:[{executorId,text,dependsOn?}],projectId?,autoRun?}`：带 `projectId` 时每一步可指定不同 Agent。项目里已有该 Agent 的对话则复用，没有则自动创建；窗口 Agent 必须先在项目中绑定窗口对话，否则该步 400；执行器须属于 `claude-code`、`codex` 及其 ACP 变体与 `window`。规划器输入附带 `{name,path,gitBranch,chats:[{executorId,title,window}]}`。计划记录 `projectId`，每步工单记录各自的 `projectChatId`，`GET /api/work/plans/:id` 可读取 `plan.projectId` 与 `steps[].projectChatId`。
 - `GET /api/work/projects/:id/brief` → `{brief:ProjectBrief}`；`PUT /api/work/projects/:id/brief {goal?,summary?,keyPoints?,decisions?,constraints?}` → `{brief}`。按 projectId 存储；数组项 trim 去空去重，正文与条目有长度上限。
+
+### 协作任务（软件拆分 → 分派 → 组装）
+
+软件的职责是搭骨架、定契约、验收、组装；Agent 只各写一份文件。
+
+- `POST /api/work/projects/:id/teamwork {goal,executorIds}` → `201 {teamwork,tickets}`。goal 1–600 字；executorIds 去重后 1–3 个，必须属于项目工作区执行器清单且不含 `window`。服务端把目标固定拆成三份——`rules`（`coop/rules.js`，定义 `Coop.rules`）、`view`（`coop/view.js`，定义 `Coop.view`）、`hud`（`coop/hud.js`，定义 `Coop.hud`）——按顺序轮流分给所选执行器，各生成一张 `awaiting_review` 工单；同时写入 `coop/contract.md`（世界与输入形状、绘制顺序）和 `coop/skeleton.js`（画布、主循环、输入、`Coop.util`）。同一执行器复用标题以 `协作 · ` 开头的项目对话。
+- `GET /api/work/projects/:id/teamworks` → `{teamworks:[Teamwork]}`；`GET /api/work/teamworks/:id` → `{teamwork}`。每份 `parts[]` 带 `status`（工单状态）、`summary`、`fileExists`、`fileSize`，供前端判断进度。
+- `POST /api/work/teamworks/:id/assemble` → `{ok:true,outputPath,relativePath,bytes,teamwork}` 或 `400 {ok:false,problems:[{part,message}],teamwork}`。验收规则：三份文件都存在、≥120 字节、定义了约定的全局（`Coop.rules` / `Coop.view` / `Coop.hud`）、不含 `<script` 与 `http(s)://` 外链。通过后把三份内联进 `coop/index.html`（单文件、无外链），记录 `status:'assembled'` 与字节数；不通过则记录 `status:'blocked'` 与逐条问题，不覆盖已有产物。
+- 组装产物每帧按 `rules.update → view.draw → hud.draw` 执行；三份绘制各自在 `save/restore` 与阴影归零的干净状态下进行，一份的状态泄漏不会影响另外两份。
+
+
 - `GET /api/work/projects/:id/brief.md` → `{project,brief,changes,markdown}`，markdown 为 `# 项目简报：<名称>` 的只读汇总，含目标、进展、任务要点、关键决定、约束与变更记录。
 - `GET /api/work/projects/:id/changes` → `{changes:[ProjectChange]}`；`POST /api/work/projects/:id/changes {title?,summary?,files?,executorId?,ticketId?}` → `201 {change}`。工单完成/失败时自动写入 `source:'auto'`，同一 ticketId 幂等对应同一条记录；项目工单创建时会用 `git status --porcelain` 拍一张执行前快照，完成后只把**本次新增**的改动文件写进 `files`（调用方显式传 `files` 时以传入值为准，不再异步覆盖）；非项目工单仍按旧的异步采集回填（最多 100 项），采集失败不影响工单。`DELETE /api/work/projects/:id/changes/:changeId` → `{id}`。
 - 删除项目级联删除其 project-chat、project-change 与 project-brief；MCP 工具 `work_list_projects`、`work_project_brief`（返回 brief.md 文本）、`work_update_project_brief`、`work_record_change` 供外部 Agent 读取档案与回写变更。

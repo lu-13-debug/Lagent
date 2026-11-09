@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AppWindow, Bot, Check, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users } from 'lucide-react';
+import { AppWindow, Bot, Check, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, Hammer, History, Inbox, Layers, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users } from 'lucide-react';
 import { api } from '../api';
 import { Modal } from './ui';
-import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectSession, WorkTicket } from '../superagent';
+import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectSession, WorkTeamwork, WorkTicket } from '../superagent';
 import '../projects.css';
 
 type Props = {
@@ -31,7 +31,7 @@ const EXECUTOR_LABELS: Record<string, string> = {
 };
 
 // 分派优先级：先 CLI（能改文件、能续接会话），再 ACP，最后其它本机 Agent。
-const DISPATCH_ORDER = ['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent'];
+const DISPATCH_ORDER = ['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh'];
 
 const STATUS_LABELS: Record<string, string> = {
   queued: '排队中',
@@ -93,6 +93,12 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [dispatchTargets, setDispatchTargets] = useState<string[]>([]);
   const [dispatchBusy, setDispatchBusy] = useState(false);
+  // 协作任务：软件把目标拆成三份、分派、再组装成一个游戏。
+  const [teamworkOpen, setTeamworkOpen] = useState(false);
+  const [teamworkGoal, setTeamworkGoal] = useState('');
+  const [teamworkAgents, setTeamworkAgents] = useState<string[]>([]);
+  const [teamworkBusy, setTeamworkBusy] = useState('');
+  const [teamworks, setTeamworks] = useState<WorkTeamwork[]>([]);
 
   const project = useMemo(() => projects.find(item => item.id === activeProjectId) || null, [projects, activeProjectId]);
   const dispatchExecutors = useMemo(() => DISPATCH_ORDER.filter(id => allowedExecutors.includes(id)), [allowedExecutors]);
@@ -114,6 +120,20 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     finally { if (!quiet) setLoading(false); }
   };
   useEffect(() => { void loadProjects(); }, []);
+  const loadTeamworks = async (projectId: string | null = activeProjectId) => {
+    if (!projectId) { setTeamworks([]); return; }
+    try {
+      const result = await api.workProjectTeamworks(projectId);
+      setTeamworks(result.teamworks);
+    } catch { /* 轮询失败不打断页面。 */ }
+  };
+  useEffect(() => { void loadTeamworks(activeProjectId); }, [activeProjectId]);
+  // 有协作任务在跑时每 5 秒刷新一次状态，跑完自动停。
+  useEffect(() => {
+    if (!teamworks.some(item => item.status === 'running')) return;
+    const timer = window.setInterval(() => void loadTeamworks(), 5000);
+    return () => window.clearInterval(timer);
+  }, [teamworks, activeProjectId]);
   // 侧栏「添加本地文件夹」：打开导入表单，并把焦点放进路径输入框。
   useEffect(() => {
     if (!requestImport) return;
@@ -332,6 +352,47 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     } catch (cause) { notify((cause as Error).message, true); }
     finally { setDispatchBusy(false); }
   };
+  // 协作任务：拆分 → 分派（软件写骨架与契约，三个 Agent 各写一份）→ 组装。
+  const startTeamwork = async () => {
+    if (!project) return;
+    const goal = teamworkGoal.trim();
+    if (!goal) { notify('先写下想做什么样的游戏。', true); return; }
+    const executors = (teamworkAgents.length ? teamworkAgents : dispatchExecutors.slice(0, 3)).filter(id => dispatchExecutors.includes(id));
+    if (!executors.length) { notify('至少选择一个 Agent。', true); return; }
+    setTeamworkBusy('start');
+    try {
+      const result = await api.workStartTeamwork(project.id, goal, executors);
+      setTeamworks(previous => [result.teamwork, ...previous]);
+      setTeamworkOpen(false);
+      setTeamworkGoal('');
+      await loadProjects(true);
+      const agents = new Set(result.teamwork.parts.map(part => part.executorId)).size;
+      notify(`已拆成 ${result.teamwork.parts.length} 份，分给 ${agents} 个 Agent；确认工单后各自开始。`);
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setTeamworkBusy(''); }
+  };
+  const assembleTeamwork = async (item: WorkTeamwork) => {
+    setTeamworkBusy(item.id);
+    try {
+      const result = await api.workAssembleTeamwork(item.id);
+      setTeamworks(previous => previous.map(entry => entry.id === item.id ? result.teamwork : entry));
+      if (result.ok) notify(`已组装成 ${result.relativePath}（${Math.max(1, Math.round((result.bytes || 0) / 1024))} KB）。`);
+      else notify(`还组装不了：${result.problems[0]?.message || '文件没写齐'}`, true);
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setTeamworkBusy(''); }
+  };
+  const openTeamworkFile = async (item: WorkTeamwork) => {
+    if (!item.outputPath) return;
+    const absolute = `${item.projectPath || project?.path || ''}\\${item.outputPath.replace(/\//g, '\\')}`;
+    const bridge = (window as unknown as { dataagentDesktop?: { openPath?: (target: string) => Promise<unknown> } }).dataagentDesktop;
+    if (bridge?.openPath) {
+      try { await bridge.openPath(absolute); return; } catch { /* 落到复制路径。 */ }
+    }
+    try {
+      await navigator.clipboard.writeText(absolute);
+      notify(`已复制路径：${absolute}`);
+    } catch { notify(absolute); }
+  };
   const loadArchive = async (projectId = activeProjectId) => {
     if (!projectId) return;
     setArchiveBusy('load');
@@ -515,9 +576,54 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
             </div>
             <div className="pj-head-actions">
               <button type="button" className="pj-btn" onClick={() => void openSessions()} disabled={busy === 'sessions'}><Inbox size={14} />导入已有会话</button>
+              <button type="button" className="pj-btn pj-primary" onClick={() => { setTeamworkOpen(value => !value); setTeamworkAgents(previous => previous.length ? previous : dispatchExecutors.slice(0, 3)); }}><Layers size={14} />分工做一个游戏</button>
               <button type="button" className="pj-btn" onClick={() => void openNewChat()}><Plus size={14} />新建对话</button>
             </div>
           </div>
+
+          {teamworkOpen && <div className="pj-teamwork">
+            <div className="pj-teamwork-head"><Layers size={15} /><div><strong>软件先拆分，再分派</strong><span>拆成玩法规则、画面表现、界面状态三份，各写一个文件；写完由软件验收并组装成一个可运行的游戏。</span></div></div>
+            <label className="pj-teamwork-goal"><span>要做什么样的游戏</span>
+              <textarea rows={3} maxLength={600} value={teamworkGoal} onChange={event => setTeamworkGoal(event.target.value)} placeholder="例如：做一个在浏览器里玩的打砖块，分数、生命和开始/结束界面都要有。" />
+            </label>
+            <div className="pj-teamwork-agents"><span>参与协作</span>
+              <div className="pj-newchat-chips">{dispatchExecutors.map(id => <button key={id} type="button" className={`pj-chip${teamworkAgents.includes(id) ? ' on' : ''}`} onClick={() => setTeamworkAgents(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id])}>{teamworkAgents.includes(id) && <Check size={11} />}{EXECUTOR_LABELS[id] || id}</button>)}</div>
+            </div>
+            <div className="pj-teamwork-actions">
+              <span className="pj-teamwork-hint">按「玩法规则 → 画面表现 → 界面状态」的顺序分派；Agent 少于三份时轮流承担。</span>
+              <button type="button" className="pj-btn" onClick={() => setTeamworkOpen(false)}>取消</button>
+              <button type="button" className="pj-btn pj-primary" disabled={teamworkBusy === 'start'} onClick={() => void startTeamwork()}>{teamworkBusy === 'start' ? '拆分中…' : '拆分并分派'}</button>
+            </div>
+          </div>}
+
+          {teamworks.length > 0 && <section className="pj-teamworks">
+            {teamworks.map(item => {
+              const agents = new Set(item.parts.map(part => part.executorId)).size;
+              const label = item.status === 'assembled' ? '已组装' : item.status === 'blocked' ? '待补齐' : '进行中';
+              return <article className={`pj-teamwork-card is-${item.status}`} key={item.id}>
+                <header>
+                  <div><strong>{item.goal}</strong><span>{item.parts.length} 份 · {agents} 个 Agent · {new Date(item.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span></div>
+                  <em className={`pj-tw-status is-${item.status}`}>{label}</em>
+                </header>
+                <ul className="pj-tw-parts">
+                  {item.parts.map(part => <li key={part.id}>
+                    <span className="pj-tw-name">{part.name}</span>
+                    <span className="pj-tw-agent">{EXECUTOR_LABELS[part.executorId] || part.executorId}</span>
+                    <span className={`pj-tw-part is-${part.status}`}>{STATUS_LABELS[part.status] || part.status}</span>
+                    <span className="pj-tw-file" title={part.file}>{part.file}{part.fileExists ? ` · ${part.fileSize} 字节` : ' · 未落盘'}</span>
+                  </li>)}
+                </ul>
+                {item.problems.length > 0 && <ul className="pj-tw-problems">{item.problems.map((problem, index) => <li key={index}>{problem.message}</li>)}</ul>}
+                <footer>
+                  <span>{item.assembledAt ? `组装于 ${new Date(item.assembledAt).toLocaleTimeString('zh-CN')} · ${item.outputPath}` : '三份都写完后，由软件组装成一个 index.html'}</span>
+                  <div>
+                    <button type="button" className="pj-btn" disabled={teamworkBusy === item.id} onClick={() => void assembleTeamwork(item)}><Hammer size={13} />{teamworkBusy === item.id ? '组装中…' : '组装成游戏'}</button>
+                    {item.outputPath && <button type="button" className="pj-btn" onClick={() => void openTeamworkFile(item)}>打开预览</button>}
+                  </div>
+                </footer>
+              </article>;
+            })}
+          </section>}
 
           <div className="pj-tabs">
             <button type="button" className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}><Bot size={13} />对话</button>
