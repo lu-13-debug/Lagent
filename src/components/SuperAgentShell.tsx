@@ -1130,6 +1130,29 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     : '';
   const providerIcon = (id: string) => /desktop|dsh/.test(id) ? <AppWindow size={18} /> : /acp/.test(id) ? <Bot size={18} /> : <Terminal size={18} />;
   const providerKind = (provider: { id: string; kind?: string }) => provider.kind === 'desktop' ? '桌面版' : provider.id.endsWith('-acp') ? 'ACP' : 'CLI';
+  // 各家 Agent 的品牌标：能拿到官方图形就用图形（simple-icons，CC0），否则用品牌色 + 缩写。
+  // 同一个产品的 ACP / 桌面版复用同一枚。
+  const BRAND_MARKS: Record<string, { text: string; bg: string; ink: string; logo?: string }> = {
+    codex: { text: 'CX', bg: '#101014', ink: '#ffffff', logo: 'openai' },
+    'claude-code': { text: 'CL', bg: '#d97757', ink: '#ffffff', logo: 'anthropic' },
+    opencode: { text: 'OC', bg: '#1b1b1f', ink: '#ffffff' },
+    dsh: { text: 'DS', bg: '#4d6bfe', ink: '#ffffff' },
+    gemini: { text: 'GE', bg: '#4285f4', ink: '#ffffff', logo: 'googlegemini' },
+    qwen: { text: 'QW', bg: '#6f42c1', ink: '#ffffff' },
+    'cursor-agent': { text: 'CU', bg: '#0f0f10', ink: '#ffffff', logo: 'cursor' },
+    aider: { text: 'AI', bg: '#16a34a', ink: '#ffffff' },
+    amp: { text: 'AM', bg: '#f97316', ink: '#ffffff', logo: 'amp' },
+    codebuddy: { text: 'CB', bg: '#0052d9', ink: '#ffffff' },
+    qoder: { text: 'QD', bg: '#ff6a00', ink: '#ffffff' },
+    iflow: { text: 'iF', bg: '#2563eb', ink: '#ffffff' },
+    kimi: { text: 'KM', bg: '#111111', ink: '#ffffff' },
+    'trae-agent': { text: 'TR', bg: '#1d4ed8', ink: '#ffffff', logo: 'bytedance' },
+    comate: { text: 'Co', bg: '#2932e1', ink: '#ffffff', logo: 'baidu' },
+    lingma: { text: '通', bg: '#ff6a00', ink: '#ffffff' },
+    codegeex: { text: 'GX', bg: '#3859ff', ink: '#ffffff' },
+    workbuddy: { text: 'WB', bg: '#0ea5a4', ink: '#ffffff' }
+  };
+  const brandOf = (id: string) => BRAND_MARKS[id.replace(/-(acp|desktop)$/, '')] || null;
   const enabledExecutors = policy?.allowedExecutors || work?.policy?.allowedExecutors || [];
   const sortedProviders = [...providers].sort((left, right) => Number(right.installed) - Number(left.installed));
   const installedProviders = sortedProviders.filter(provider => provider.installed);
@@ -1138,14 +1161,16 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     const executorId = provider.executorId || '';
     const switchable = Boolean(executorId) && provider.installed;
     const enabled = switchable && enabledExecutors.includes(executorId);
+    const brand = brandOf(provider.id);
     return <li className={`sa-agent-row${enabled ? ' is-on' : ''}${provider.installed ? '' : ' is-off'}`} key={provider.id}>
-      <span className="sa-agent-glyph">{providerIcon(provider.id)}</span>
+      <span className="sa-agent-glyph">{providerIcon(provider.id)}<i className="sa-agent-term" aria-hidden="true">&gt;_</i></span>
       <div className="sa-agent-main">
         <div className="sa-agent-line"><strong>{provider.name}</strong><span className="sa-agent-kind">{providerKind(provider)}</span>{provider.version ? <span className="sa-agent-ver">{provider.version}</span> : null}</div>
         {provider.command ? <p className="sa-agent-path" title={provider.command}>{provider.command}</p> : null}
         {(provider.status !== 'ready' || provider.kind === 'desktop') && provider.message ? <p className="sa-agent-note-line">{provider.message.replace(/^未找到命令[^；;]*[；;]\s*/, '')}{!/窗口/.test(provider.message) && windowFallbackFor(provider) ? ` ${windowFallbackFor(provider)}` : ''}</p> : null}
       </div>
       <div className="sa-agent-side">
+        {brand ? <span className="sa-agent-brand" style={{ background: brand.bg, color: brand.ink }} title={provider.name}>{brand.logo ? <img src={`/brands/${brand.logo}.svg`} alt="" aria-hidden="true" /> : brand.text}</span> : null}
         <Status status={provider.status} />
         {executorId ? <button type="button" role="switch" aria-checked={enabled} aria-label={`${provider.name} 开关`} className={`sa-switch${enabled ? ' on' : ''}`} disabled={!switchable || executorBusy === executorId} onClick={() => void setExecutorEnabled(executorId, !enabled)}><span /></button> : <span className="sa-agent-tag">仅识别</span>}
       </div>

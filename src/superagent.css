@@ -4687,6 +4687,7 @@ html[data-theme="dark"] .sa-newchat kbd {
 }
 
 .sa-agent-glyph {
+  position: relative;
   width: 34px;
   height: 34px;
   display: grid;
@@ -4694,6 +4695,51 @@ html[data-theme="dark"] .sa-newchat kbd {
   border-radius: var(--sa-r-sm);
   background: var(--sa-surface-2);
   color: var(--sa-text-2);
+}
+
+/* 左下角的小终端标记：说明这一类是「命令行 Agent」。 */
+.sa-agent-term {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  display: grid;
+  place-items: center;
+  min-width: 15px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 4px;
+  background: var(--sa-surface);
+  box-shadow: 0 0 0 1px var(--sa-line);
+  color: var(--sa-text-3);
+  font-family: var(--sa-font-mono);
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.sa-agent-brand {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  flex: none;
+  user-select: none;
+}
+
+.sa-agent-brand img {
+  width: 13px;
+  height: 13px;
+  filter: brightness(0) invert(1);
+}
+
+.sa-agent-row.is-off .sa-agent-brand {
+  opacity: 0.55;
 }
 
 .sa-agent-row.is-on .sa-agent-glyph {
