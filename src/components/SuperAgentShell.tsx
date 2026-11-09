@@ -1597,7 +1597,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         <button type="button" className="sa-user" aria-haspopup="menu" aria-expanded={userMenuOpen} onClick={() => setUserMenuOpen(value => !value)}>
           <span className="sa-avatar">{user?.displayName?.slice(0, 1).toUpperCase() || 'D'}</span>
           <span><strong>{user?.displayName || '个人工作区'}</strong><small>{runtime.mode === 'cloud' ? '云端账号' : '本地运行'}</small></span>
-          <Sparkles size={14} />
+          <ChevronRight size={14} className={userMenuOpen ? 'sa-user-caret open' : 'sa-user-caret'} />
         </button>
       </div>
     </aside>

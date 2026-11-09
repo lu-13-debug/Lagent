@@ -5407,8 +5407,7 @@ html[data-theme="dark"] .sa-brand-mono {
   --sa-sidebar: 64px;
 }
 
-.sa-rail-collapsed .sa-brand span,
-.sa-rail-collapsed .sa-newchat-label,
+.sa-rail-collapsed .sa-brand > span:not(.brand-mark),
 .sa-rail-collapsed .sa-side-title,
 .sa-rail-collapsed .sa-side-action,
 .sa-rail-collapsed .sa-conv-search,
@@ -5457,12 +5456,24 @@ html[data-theme="dark"] .sa-brand-mono {
 
 .sa-rail-collapsed .sa-brand-row {
   padding-bottom: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
 }
 
 .sa-rail-collapsed .sa-newchat {
   width: 40px;
   padding: 0;
   margin: 0 auto 6px;
+  overflow: hidden;
+  gap: 0;
+}
+
+.sa-rail-collapsed .sa-newchat-label {
+  gap: 0;
+  padding: 0;
+  white-space: nowrap;
+  font-size: 0;
 }
 
 .sa-rail-collapsed .sa-newchat svg {
@@ -5696,6 +5707,17 @@ html[data-theme="dark"] .sa-brand-mono {
 .sa-inspector-tab:hover {
   color: var(--sa-text);
   background: var(--sa-surface-3);
+}
+
+.sa-user-caret {
+  flex: none;
+  color: var(--sa-text-3);
+  transform: rotate(-90deg);
+  transition: transform var(--sa-fast) var(--sa-ease);
+}
+
+.sa-user-caret.open {
+  transform: rotate(90deg);
 }
 
 /* 底部「个人工作区」菜单 */
