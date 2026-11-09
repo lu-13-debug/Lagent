@@ -1250,7 +1250,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         <label className="sa-commander-label" htmlFor="sa-commander-goal">目标</label>
         <textarea id="sa-commander-goal" className="sa-commander-input" rows={3} maxLength={300} value={commanderGoal} onChange={event => setCommanderGoal(event.target.value)} placeholder="例如：检查这个项目的测试覆盖，补上缺失的单测，再写一份变更说明。" />
         <div className="sa-commander-foot">
-          <div className="sa-commander-agents"><span>交给</span>
+          <div className="sa-commander-agents"><span>候选</span>
             {crossCapable.map(agent => <button type="button" key={agent.id} className={`sa-chip${commanderAgents.includes(agent.id) ? ' on' : ''}`} title={agent.name} aria-pressed={commanderAgents.includes(agent.id)} onClick={() => setCommanderAgents(previous => previous.includes(agent.id) ? previous.filter(id => id !== agent.id) : [...previous, agent.id])}>{agent.name}</button>)}
           </div>
           <button className="sa-button sa-primary" type="submit" disabled={commanderBusy || !commanderGoal.trim()}>{commanderBusy ? '正在拆解…' : '拆解并分发'}</button>
@@ -1277,7 +1277,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         </article>)}</div>
       </section>}
       {liveTickets.filter(ticket => !commanderSteps.some(row => row.step.ticketId === ticket.id)).length > 0 && <section className="sa-section"><div className="sa-section-head"><h2>实时进度</h2><span className="sa-inline-note">每 2.5 秒刷新 · 计划外的任务</span></div><div className="sa-live-grid">{liveTickets.filter(ticket => !commanderSteps.some(row => row.step.ticketId === ticket.id)).map(ticket => liveCard(ticket))}</div></section>}
-      {!commanderPlan && liveTickets.length === 0 && <div className="sa-empty-card"><span className="sa-empty-icon"><Waypoints size={20} /></span><div><strong>还没有正在执行的步骤</strong><span>写下目标并点「拆解并分发」，软件会把任务拆开、分别交给合适的 Agent。</span></div></div>}
+      {!commanderPlan && liveTickets.length === 0 && <div className="sa-empty-card"><span className="sa-empty-icon"><Waypoints size={20} /></span><div><strong>还没有正在执行的步骤。</strong><span>写下目标并点「拆解并分发」，软件会把任务拆开、分别交给合适的 Agent。</span></div></div>}
       {commanderReport && <Modal title="指挥汇总" subtitle={`${commanderReport.completed}/${commanderReport.total} 步已完成`} close={() => setCommanderReport(null)} wide>
         <pre className="sa-report-pre">{commanderReport.markdown}</pre>
         <div className="sa-confirm-actions"><button className="sa-button" type="button" onClick={() => { void navigator.clipboard.writeText(commanderReport.markdown).then(() => notify('汇总已复制为 Markdown。')).catch(() => notify('复制失败，请手动选中。', true)); }}>复制 Markdown</button><button className="sa-button sa-primary" type="button" onClick={() => setCommanderReport(null)}>关闭</button></div>
