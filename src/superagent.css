@@ -5160,3 +5160,126 @@ html[data-theme="dark"] .sa-brand-mono {
 @media (max-width: 760px) {
   .sa-commander-select { max-width: none; flex: 1 1 140px; }
 }
+
+/* 17. 任务理解：分发前先把“我理解到什么、要谁做、改哪儿、会不会撞车”说清楚 */
+.sa-analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface);
+}
+
+.sa-analysis-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sa-analysis-head h2 {
+  margin: 2px 0 0;
+  font-size: var(--sa-fs-lg);
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+
+.sa-analysis-tag {
+  height: 22px;
+  padding: 0 9px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-2xs);
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.sa-analysis-lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--sa-fs-xs);
+  line-height: 1.7;
+  color: var(--sa-text-2);
+}
+
+.sa-analysis-lines li {
+  position: relative;
+  padding-left: 12px;
+}
+
+.sa-analysis-lines li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--sa-text-3);
+}
+
+.sa-analysis-needs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sa-analysis-need {
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-2xs);
+  line-height: 20px;
+}
+
+.sa-analysis-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sa-analysis-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.sa-analysis-index {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--sa-surface-3);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-2xs);
+  line-height: 18px;
+  text-align: center;
+}
+
+.sa-analysis-steps strong {
+  display: block;
+  font-size: var(--sa-fs-sm);
+  font-weight: 560;
+}
+
+.sa-analysis-steps li > div > span {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--sa-fs-2xs);
+  line-height: 1.6;
+  color: var(--sa-text-3);
+}

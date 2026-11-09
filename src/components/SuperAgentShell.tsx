@@ -5,7 +5,7 @@ import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Cl
 import { api } from '../api';
 import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
-import type { WorkAction, WorkBootstrap, WorkInboxItem, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkTicket, WorkTicketDetail } from '../superagent';
+import type { WorkAction, WorkBootstrap, WorkInboxItem, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkTaskAnalysis, WorkTicket, WorkTicketDetail } from '../superagent';
 import { MemoryPanel } from './MemoryPanel';
 import { ProjectsPanel } from './ProjectsPanel';
 import { AppearanceSettings } from './AppearanceSettings';
@@ -183,6 +183,9 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   // 指挥台绑定的工作文件夹与「一次跑完」开关：绑定后每一步都在该目录内读写。
   const [commanderProject, setCommanderProject] = useState('');
   const [commanderAuto, setCommanderAuto] = useState(false);
+  // 任务理解：写目标时先本地拆一遍（谁做、改哪儿、会不会冲突），再交给规划器。
+  const [commanderAnalysis, setCommanderAnalysis] = useState<WorkTaskAnalysis | null>(null);
+  const [analysisBusy, setAnalysisBusy] = useState(false);
   // 新对话绑定的工作文件夹：选中后指令会作为项目任务分派，Agent 在该目录内读写。
   const [newFolder, setNewFolder] = useState<string>(() => { try { return localStorage.getItem('dataagent.newchatfolder.v1') || ''; } catch { return ''; } });
   useEffect(() => { try { localStorage.setItem('dataagent.newchatfolder.v1', newFolder); } catch { /* 存储禁用时仅当前会话生效。 */ } }, [newFolder]);
@@ -485,6 +488,22 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       return [preferred];
     });
   }, [crossCapable, windows]);
+
+  // 目标写够长就自动理解一次：稍作防抖，失败静默（不影响拆解本身）。
+  useEffect(() => {
+    const goal = commanderGoal.trim();
+    if (view !== 'parallel' || goal.length < 6) { setCommanderAnalysis(null); return; }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setAnalysisBusy(true);
+      const pool = commanderAgents.length ? commanderAgents : (allowedExecutors.length ? allowedExecutors : crossCapable.map(agent => agent.id));
+      api.workAnalyze(goal, pool, commanderProject ? { projectId: commanderProject } : {})
+        .then(result => { if (!cancelled) setCommanderAnalysis(result); })
+        .catch(() => { if (!cancelled) setCommanderAnalysis(null); })
+        .finally(() => { if (!cancelled) setAnalysisBusy(false); });
+    }, 500);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [commanderGoal, commanderProject, commanderAgents, crossCapable, allowedExecutors, view]);
 
   const activeGroup = useMemo(() => crossChecks.find(group => group.id === activeGroupId) || null, [crossChecks, activeGroupId]);
   const groupStatusOf = (group: CrossCheck) => {
@@ -896,6 +915,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       });
       setCommanderPlan(result.plan);
       setCommanderReport(null);
+      if (result.analysis) setCommanderAnalysis(result.analysis);
       setCommanderGoal('');
       notify(`已拆成 ${result.plan.steps.length} 步，分给 ${new Set(result.plan.steps.map(step => step.executorId)).size} 个 Agent。${commanderProject ? '每一步都会在这个工作文件夹里读写。' : '没有绑定工作文件夹，步骤只读。'}`);
       void refresh();
@@ -1301,6 +1321,25 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         </div>
         <p className="sa-inline-note"><Sparkles size={13} />{commanderProject ? '绑定工作文件夹后，每一步都在该目录内读写文件。' : '不绑定工作文件夹时，步骤只读，不会改动任何文件。'}{commanderAuto ? '「一次跑完」会连续执行到结束。' : ''}</p>
       </form>
+      {commanderAnalysis && <section className="sa-analysis" aria-live="polite">
+        <header className="sa-analysis-head">
+          <div><p className="sa-eyebrow">UNDERSTANDING</p><h2>任务理解{analysisBusy ? '（更新中…）' : ''}</h2></div>
+          <span className="sa-analysis-tag">{commanderAnalysis.categoryLabel}</span>
+        </header>
+        <ul className="sa-analysis-lines">{commanderAnalysis.understanding.map(line => <li key={line}>{line}</li>)}</ul>
+        {commanderAnalysis.needs.length > 0 && <div className="sa-analysis-needs">
+          {commanderAnalysis.needs.map(item => <span className="sa-analysis-need" key={item.id} title={item.reason}>{item.label}</span>)}
+        </div>}
+        <ol className="sa-analysis-steps">
+          {commanderAnalysis.steps.map(step => <li key={step.index}>
+            <span className="sa-analysis-index">{step.index + 1}</span>
+            <div><strong>{step.title}</strong><span>{executorNames[step.executorId] || step.executorId} · {step.scope.length ? `写 ${step.scope.join('、')}` : '只读'}{step.dependsOn?.length ? ` · 等第 ${step.dependsOn.map(index => index + 1).join('、')} 步` : ' · 可并行'} · 产出：{step.output}</span></div>
+          </li>)}
+        </ol>
+        {commanderAnalysis.conflicts.length > 0
+          ? <p className="sa-inline-note"><ShieldCheck size={13} />{commanderAnalysis.conflicts.map(item => `${item.reason} → ${item.resolution}`).join('；')}</p>
+          : <p className="sa-inline-note"><ShieldCheck size={13} />{(() => { const writes = commanderAnalysis.steps.filter(step => step.scope.length).length; return writes === 0 ? '全部步骤只读，不会改动任何文件；要真正改代码，请先绑定工作文件夹。' : writes === 1 ? '要改文件的步骤只有一条，其余步骤只读，不会互相覆盖。' : '要改文件的步骤分属不同目录，可以并行，不会互相覆盖。'; })()}</p>}
+      </section>}
       {commanderPlan && <section className="sa-plan-board">
         <header className="sa-plan-board-head">
           <div><strong title={commanderPlan.goal}>{commanderPlan.goal}</strong><span>{commanderSteps.filter(row => row.ticket?.status === 'completed').length}/{commanderSteps.length} 步完成 · {commanderPlan.status === 'active' ? '进行中' : commanderPlan.status === 'completed' ? '已全部完成' : commanderPlan.status === 'failed' ? '有步骤失败' : '已取消'}</span></div>

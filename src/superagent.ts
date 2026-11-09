@@ -18,13 +18,26 @@ export interface WorkPolicy {
   limits?: { browserHosts: string[]; githubRepos: string[]; acpWrites?: boolean };
 }
 export interface WorkInboxItem { ticketId: string; title: string; question: string; options: WorkAttentionOption[]; createdAt: string }
-export interface WorkPlanStep { index: number; ticketId: string; executorId: string; title: string; status?: string; dependsOn?: number[]; projectChatId?: string | null }
+export interface WorkPlanStep { index: number; ticketId: string; executorId: string; title: string; status?: string; dependsOn?: number[]; scope?: string[]; projectChatId?: string | null }
 export interface WorkPlan {
   id: string; goal: string; status: 'active' | 'completed' | 'failed' | 'cancelled'; autoRun?: boolean;
   currentStep: number; totalSteps: number; steps: WorkPlanStep[]; createdAt: string; updatedAt: string;
   projectChatId?: string | null; projectId?: string | null;
 }
 export type WorkPlanSummary = Pick<WorkPlan, 'id' | 'goal' | 'status' | 'autoRun' | 'currentStep' | 'totalSteps' | 'updatedAt'>;
+export interface WorkTaskAnalysisStep {
+  index: number; title: string; executorId: string; scope: string[]; output: string; readOnly: boolean; dependsOn: number[]; needsApproval: boolean;
+}
+export interface WorkTaskAnalysis {
+  goal: string;
+  category: string;
+  categoryLabel: string;
+  project: { name?: string; path?: string; gitBranch?: string } | null;
+  needs: { id: string; label: string; reason: string }[];
+  understanding: string[];
+  conflicts: { between: number[]; reason: string; resolution: string }[];
+  steps: WorkTaskAnalysisStep[];
+}
 export interface WorkProjectChat {
   id: string; projectId: string; executorId: 'claude-code' | 'codex' | 'window' | string; title: string;
   sessionId: string; writable: boolean; source: 'manual' | 'imported' | string;

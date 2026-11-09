@@ -10,6 +10,7 @@ import { executorRegistry } from './executors/index.js';
 import { decideTeamProposal, projectTeamTask, reviewTeamNode, teamEventKey } from './team.js';
 import { cancelTicketEffects, claimDue, complete, enqueue, fail as failOutbox, recoverRunningEffects, sanitizeOutboxError, WORK_EFFECT_KIND } from './outbox.js';
 import { PROJECT_CHAT_EXECUTORS, projectService } from './projects.js';
+import { analyzeTask } from './task-analyzer.js';
 import * as teamwork from './teamwork.js';
 
 const now = () => new Date().toISOString();
@@ -593,7 +594,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     projectId: typeof plan.projectId === 'string' ? plan.projectId : null,
     steps: plan.steps.map(step => {
       const ticket = db.get('ticket', step.ticketId);
-      return { index: step.index, ticketId: step.ticketId, executorId: step.executorId, title: step.title, status: ticket?.status || 'missing', dependsOn: Array.isArray(step.dependsOn) ? [...step.dependsOn] : [], projectChatId: ticket?.projectChatId || step.projectChatId || null };
+      return { index: step.index, ticketId: step.ticketId, executorId: step.executorId, title: step.title, status: ticket?.status || 'missing', dependsOn: Array.isArray(step.dependsOn) ? [...step.dependsOn] : [], ...(Array.isArray(step.scope) && step.scope.length ? { scope: [...step.scope] } : {}), projectChatId: ticket?.projectChatId || step.projectChatId || null };
     }),
     createdAt: plan.createdAt,
     updatedAt: plan.updatedAt
@@ -641,7 +642,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const dependsOn = step.dependsOn === undefined ? [] : step.dependsOn;
       if (!Array.isArray(dependsOn) || dependsOn.length > 3) throw workError(`第 ${index + 1} 步依赖必须是最多 3 项的数组`);
       if (new Set(dependsOn).size !== dependsOn.length || dependsOn.some(item => !Number.isInteger(item) || item < 0 || item >= index)) throw workError(`第 ${index + 1} 步依赖必须引用更早步骤`);
-      return { targetId, target, text, rawInput: step.executorInput, datasetId, dependsOn: [...dependsOn], chat };
+      const scope = Array.isArray(step.scope) ? step.scope.filter(item => typeof item === 'string' && item.trim() && item.length <= 120).slice(0, 6) : [];
+      return { targetId, target, text, rawInput: step.executorInput, datasetId, dependsOn: [...dependsOn], chat, scope };
     });
     for (const step of prepared) {
       if (projectRecord && !step.chat && PROJECT_CHAT_EXECUTORS.includes(step.targetId)) step.chat = ensureProjectChat(projectRecord, step.targetId);
@@ -681,7 +683,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       ...(projectChat ? { projectChatId: projectChat.chat.id } : {}),
       ...(projectRecord ? { projectId: projectRecord.id } : {}),
       currentStep: prepared.findIndex(step => step.dependsOn.length === 0) ?? 0,
-      steps: tickets.map((ticket, index) => ({ index, ticketId: ticket.id, executorId: ticket.executor, title: ticket.title, dependsOn: prepared[index].dependsOn, ...(ticket.projectChatId ? { projectChatId: ticket.projectChatId } : {}) })),
+      steps: tickets.map((ticket, index) => ({ index, ticketId: ticket.id, executorId: ticket.executor, title: ticket.title, dependsOn: prepared[index].dependsOn, ...(prepared[index].scope.length ? { scope: prepared[index].scope } : {}), ...(ticket.projectChatId ? { projectChatId: ticket.projectChatId } : {}) })),
       ...(clientRequestId ? { clientRequestId } : {}),
       createdAt: stamp,
       updatedAt: stamp
@@ -733,6 +735,15 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           continue;
         }
         if (!deps.every(dep => dep?.status === 'completed')) continue;
+        // 冲突控制：要改同一批文件的步骤，等前一个写文件的步骤跑完再上，避免互相覆盖。
+        const scope = Array.isArray(step.scope) ? step.scope : [];
+        if (scope.length) {
+          const busy = stored.steps.find(other => other.index !== step.index
+            && Array.isArray(other.scope) && other.scope.length
+            && ['working', 'awaiting_review', 'queued'].includes(tickets[other.index]?.status)
+            && other.scope.some(one => scope.some(two => one === two || one.startsWith(`${two}/`) || two.startsWith(`${one}/`) || one.split('/')[0] === two.split('/')[0])));
+          if (busy) continue;
+        }
         let target = null;
         try { target = executors.requireAvailable(ticket.executor); } catch { /* 执行器已不可用。 */ }
         const allowed = policy.allowedExecutors.includes(ticket.executor) && externalExecutorAllowed(ticket.executor, policy, env);
@@ -1160,7 +1171,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       if(planSuggestionTimes.length>=5)throw workError('规划请求过于频繁，请稍后再试',429);
       const datasets=store.list('dataset').slice(0,10).map(dataset=>({id:dataset.id,name:typeof dataset.name==='string'?dataset.name.slice(0,120):dataset.id}));
       const windows=windowBridge?await windowBridge.listWindows():[];
-      const result=await options.planner({goal,executors:allowedExecutors,agents:agentDescriptors,datasets,windows,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch,chats:projectChats.map(chat=>({executorId:chat.executorId,title:chat.title,window:chat.window?.process||null}))}}:{})});
+      const analysis=analyzeTask({goal,executors:allowedExecutors,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch}}:{}),hasDataset:datasets.length>0,hasWindow:windows.length>0});
+      const result=await options.planner({goal,executors:allowedExecutors,agents:agentDescriptors,datasets,windows,analysis,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch,chats:projectChats.map(chat=>({executorId:chat.executorId,title:chat.title,window:chat.window?.process||null}))}}:{})});
       const steps=Array.isArray(result?.steps)?result.steps:[];
       if(steps.length<2||steps.length>5)throw workError('规划模型必须返回 2–5 个步骤',502);
       const allowedSet=new Set(allowedExecutors);
@@ -1187,11 +1199,25 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           if(size>2000)throw workError(`规划第 ${index+1} 步的输入过大`,502);
           executorInput={...step.executorInput};
         }
-        return {executorId:executor,text,...(datasetId?{datasetId}:{}),...(executorInput?{executorInput}:{}),...(dependsOn.length?{dependsOn:[...dependsOn]}:{})};
+        // 每一步声明要改哪些目录：写文件的重叠步骤会被串行调度，只读步骤可以并行。
+        const scopeIn=Array.isArray(step?.scope)?step.scope.filter(item=>typeof item==='string'&&item.trim()&&item.length<=120).slice(0,6):[];
+        const scope=scopeIn.length?scopeIn:(analysis.steps.find(item=>item.executorId===executor)?.scope||[]);
+        return {executorId:executor,text,...(datasetId?{datasetId}:{}),...(executorInput?{executorInput}:{}),...(scope.length?{scope}:{}),...(dependsOn.length?{dependsOn:[...dependsOn]}:{})};
       });
       planSuggestionTimes.push(nowMs);
       audit(null,'plan/suggest','planner','suggested',`步骤 ${safeSteps.length}`);
-      return {steps:safeSteps};
+      return {steps:safeSteps,analysis};
+    },
+    analyze(input){
+      const goal=typeof input?.goal==='string'?input.goal.trim():'';
+      if(!goal||goal.length>300)throw workError('任务描述须为 1–300 字');
+      const projectChat=projectContext(input?.projectChatId);
+      let projectRow=projectChat?projectChat.project:null;
+      if(!projectRow&&typeof input?.projectId==='string'&&input.projectId.trim())projectRow=db.get('project',input.projectId.trim())||null;
+      const available=executors.list().filter(agent=>agent.available&&policy.allowedExecutors.includes(agent.id)&&externalExecutorAllowed(agent.id,policy,env)).map(agent=>agent.id);
+      const requested=Array.isArray(input?.executors)?input.executors.filter(id=>typeof id==='string'):null;
+      const scoped=requested&&requested.length?available.filter(id=>requested.includes(id)):available;
+      return analyzeTask({goal,executors:scoped.length?scoped:available,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch}}:{}),hasDataset:store.list('dataset').length>0,hasWindow:input?.hasWindow===true});
     },
     plan(input){return startPlan(input);},
     getPlan(id){return readPlan(id);},
@@ -1204,7 +1230,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const scope={...(projectChatId?{projectChatId}:{}),...(projectId&&!projectChatId?{projectId}:{})};
       const suggestion=await api.suggestPlan({goal,...scope,...(Array.isArray(input?.executors)?{executors:input.executors}:{})});
       const plan=startPlan({goal,steps:suggestion.steps,...scope,autoRun:input?.autoRun===true,clientRequestId:typeof input?.clientRequestId==='string'?input.clientRequestId:''});
-      return {plan,steps:plan.steps};
+      return {plan,steps:plan.steps,analysis:suggestion.analysis||null};
     },
     commanderReport(id){return commanderReport(id);},
     detail(id){

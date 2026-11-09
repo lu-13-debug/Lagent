@@ -70,13 +70,23 @@ export function createAgentPlanner({ env = process.env, timeoutMs = 180000 } = {
   return async function agentPlanner(input) {
     const executors = Array.isArray(input?.executors) ? input.executors : [];
     const agents = Array.isArray(input?.agents) ? input.agents : [];
+    const analysis = input?.analysis;
+    const analysisLines = analysis && Array.isArray(analysis.steps) && analysis.steps.length
+      ? [
+          '预设理解（供参考，可调整）：',
+          ...(Array.isArray(analysis.understanding) ? analysis.understanding.map(line => `- ${line}`) : []),
+          `- 建议分工：${analysis.steps.map((step, index) => `${index + 1}. ${step.executorId} → ${step.title}${Array.isArray(step.scope) && step.scope.length ? `（写 ${step.scope.join('、')}）` : '（只读）'}`).join('；')}`,
+          analysis.conflicts && analysis.conflicts.length ? `- 已知冲突：${analysis.conflicts.map(item => item.reason).join('；')}，请串行安排` : '- 写文件的步骤互不重叠，可以并行'
+        ]
+      : [];
     const prompt = [
       SYSTEM,
       '',
       `目标：${String(input?.goal || '').slice(0, 300)}`,
       `可用执行器：${agents.map(agent => `${agent.id}（${agent.name}${Array.isArray(agent.capabilities) && agent.capabilities.length ? `：${agent.capabilities.join('、')}` : ''}）`).join('；')}`,
       Array.isArray(input?.datasets) && input.datasets.length ? `可用数据集：${input.datasets.map(dataset => `${dataset.id}（${dataset.name}）`).join('；')}` : '',
-      input?.project ? `项目：${input.project.name}（${input.project.path}${input.project.gitBranch ? `，分支 ${input.project.gitBranch}` : ''}）` : ''
+      input?.project ? `项目：${input.project.name}（${input.project.path}${input.project.gitBranch ? `，分支 ${input.project.gitBranch}` : ''}）` : '',
+      ...analysisLines
     ].filter(Boolean).join('\n');
     const failures = [];
     for (const planner of ordered(executors)) {

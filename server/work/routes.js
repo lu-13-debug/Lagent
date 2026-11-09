@@ -41,6 +41,7 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/plans',(req,res)=>res.status(201).json({plan:engine.plan(req.body)}));
   app.post('/api/work/plans/suggest',async(req,res)=>res.json(await engine.suggestPlan(req.body)));
   app.post('/api/work/commander',async(req,res)=>res.status(201).json(await engine.commander(req.body)));
+  app.post('/api/work/analyze',(req,res)=>res.json(engine.analyze(req.body)));
   app.get('/api/work/commander/:id/report',(req,res)=>res.json(engine.commanderReport(req.params.id)));
   app.get('/api/work/plans/:id',(req,res)=>res.json({plan:engine.getPlan(req.params.id)}));
   app.post('/api/work/plans/:id/cancel',(req,res)=>res.json({plan:engine.cancelPlan(req.params.id)}));
