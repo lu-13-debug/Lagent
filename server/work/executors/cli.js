@@ -319,6 +319,8 @@ export function createCliExecutor({
     requiresDataset: false,
     capabilities,
     validateInput,
+    // 计划/指挥里只给一句话时，按「只读提问」补成结构化输入。
+    defaultInput: text => validateInput({ prompt: text }),
     start(ticket, assignment, input) {
       if (!binaryInfo.available) throw statusError(`${name} 未配置可用的可执行文件`, 503);
       const normalized = validateInput(input?.executorInput ?? input);

@@ -381,6 +381,15 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     } catch (cause) { notify((cause as Error).message, true); }
     finally { setTeamworkBusy(''); }
   };
+  const retryTeamworkPart = async (item: WorkTeamwork, partId: string) => {
+    setTeamworkBusy(`${item.id}:${partId}`);
+    try {
+      const result = await api.workRetryTeamworkPart(item.id, partId);
+      setTeamworks(previous => previous.map(entry => entry.id === item.id ? result.teamwork : entry));
+      notify('已重新派这一段；确认新工单后它会接着写。');
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setTeamworkBusy(''); }
+  };
   const openTeamworkFile = async (item: WorkTeamwork) => {
     if (!item.outputPath) return;
     const absolute = `${item.projectPath || project?.path || ''}\\${item.outputPath.replace(/\//g, '\\')}`;
@@ -611,6 +620,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
                     <span className="pj-tw-agent">{EXECUTOR_LABELS[part.executorId] || part.executorId}</span>
                     <span className={`pj-tw-part is-${part.status}`}>{STATUS_LABELS[part.status] || part.status}</span>
                     <span className="pj-tw-file" title={part.file}>{part.file}{part.fileExists ? ` · ${part.fileSize} 字节` : ' · 未落盘'}</span>
+                    {(!part.fileExists || part.status === 'failed') && <button type="button" className="pj-link pj-tw-retry" disabled={teamworkBusy === `${item.id}:${part.id}`} onClick={() => void retryTeamworkPart(item, part.id)}>{teamworkBusy === `${item.id}:${part.id}` ? '重派中…' : '重派这一段'}</button>}
                   </li>)}
                 </ul>
                 {item.problems.length > 0 && <ul className="pj-tw-problems">{item.problems.map((problem, index) => <li key={index}>{problem.message}</li>)}</ul>}

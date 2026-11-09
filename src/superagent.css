@@ -4839,3 +4839,176 @@ html[data-theme="dark"] .sa-newchat kbd {
     display: none;
   }
 }
+
+/* 18. 指挥台：一句话目标 → 拆解 → 分派 → 汇总 */
+.sa-commander {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface);
+  box-shadow: var(--sa-shadow-sm);
+}
+
+.sa-commander-label {
+  font-size: var(--sa-fs-2xs);
+  font-weight: 560;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sa-text-3);
+}
+
+.sa-commander-input {
+  width: 100%;
+  padding: 8px 0;
+  border: 0;
+  background: none;
+  color: var(--sa-text);
+  font: inherit;
+  font-size: var(--sa-fs-md);
+  line-height: 1.7;
+  resize: vertical;
+}
+
+.sa-commander-input:focus-visible {
+  outline: none;
+}
+
+.sa-commander-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+  padding-top: 10px;
+  border-top: 1px solid var(--sa-line);
+}
+
+.sa-commander-agents {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.sa-plan-board {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface-2);
+}
+
+.sa-plan-board-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.sa-plan-board-head > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sa-plan-board-head strong {
+  font-size: var(--sa-fs-md);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.sa-plan-board-head span {
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.sa-plan-board-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sa-steps {
+  display: grid;
+  gap: 6px;
+}
+
+.sa-step {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface);
+}
+
+.sa-step-index {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--sa-surface-3);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.sa-step-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sa-step-main strong {
+  overflow: hidden;
+  font-size: var(--sa-fs-sm);
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-step-main span {
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.sa-step-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sa-report-pre {
+  max-height: min(56vh, 520px);
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-2);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-xs);
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 760px) {
+  .sa-step {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+  }
+
+  .sa-step-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}

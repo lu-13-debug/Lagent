@@ -596,12 +596,17 @@
 
 .pj-tw-parts li {
   display: grid;
-  grid-template-columns: 72px 96px 64px minmax(0, 1fr);
+  grid-template-columns: 72px 96px 64px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
   border-radius: var(--sa-r-sm);
   font-size: var(--sa-fs-2xs);
+}
+
+.pj-tw-retry {
+  justify-self: end;
+  white-space: nowrap;
 }
 
 .pj-tw-parts li:nth-child(odd) {

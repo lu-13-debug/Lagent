@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FolderGit2, GitBranch, Globe, Inbox, Menu, MessageSquare, MoreHorizontal, Pin, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Users, Wrench, X } from 'lucide-react';
+import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FolderGit2, GitBranch, Globe, Inbox, Menu, MessageSquare, MoreHorizontal, Pin, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Users, Waypoints, Wrench, X } from 'lucide-react';
 import { api } from '../api';
 import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
@@ -16,7 +16,7 @@ import '../superagent.css';
 type ShellView = 'command' | 'inbox' | 'parallel' | 'projects' | 'agents' | 'tools' | 'memory' | 'settings';
 const navItems: { id: ShellView; label: string; icon: typeof Terminal }[] = [
   { id: 'inbox', label: '收件箱', icon: Inbox },
-  { id: 'parallel', label: '并行', icon: Activity },
+  { id: 'parallel', label: '指挥', icon: Waypoints },
   { id: 'agents', label: 'Agent', icon: Bot },
   { id: 'tools', label: '工具', icon: Wrench },
   { id: 'memory', label: '记忆', icon: Brain },
@@ -133,7 +133,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [view, setView] = useState<ShellView>(() => {
     const params = new URLSearchParams(window.location.search);
     const raw = params.get('view');
-    const known: ShellView[] = ['command', 'inbox', 'projects', 'agents', 'tools', 'memory', 'settings'];
+    const known: ShellView[] = ['command', 'inbox', 'parallel', 'projects', 'agents', 'tools', 'memory', 'settings'];
     if (known.includes(raw as ShellView)) return raw as ShellView;
     return params.get('project') ? 'projects' : 'command';
   });
@@ -174,6 +174,12 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   // 多 Agent 的两种用法：拆分分发（先拆成子任务再分派）与并行对比（同一问题各自作答）。
   const [dispatchMode, setDispatchMode] = useState<'split' | 'compare'>('split');
   const [parallelDetails, setParallelDetails] = useState<Record<string, WorkTicketDetail>>({});
+  // 指挥台：一句话目标 → 软件拆解 → 分给 Agent → 汇总。
+  const [commanderGoal, setCommanderGoal] = useState('');
+  const [commanderAgents, setCommanderAgents] = useState<string[]>([]);
+  const [commanderBusy, setCommanderBusy] = useState(false);
+  const [commanderPlan, setCommanderPlan] = useState<WorkPlan | null>(null);
+  const [commanderReport, setCommanderReport] = useState<{ markdown: string; completed: number; total: number } | null>(null);
   // 新对话绑定的工作文件夹：选中后指令会作为项目任务分派，Agent 在该目录内读写。
   const [newFolder, setNewFolder] = useState<string>(() => { try { return localStorage.getItem('dataagent.newchatfolder.v1') || ''; } catch { return ''; } });
   useEffect(() => { try { localStorage.setItem('dataagent.newchatfolder.v1', newFolder); } catch { /* 存储禁用时仅当前会话生效。 */ } }, [newFolder]);
@@ -503,6 +509,15 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
 
   // 并行面板：把每个在跑的工单的最新输出都拉回来，同屏刷新，不必逐个点开。
   const liveTickets = useMemo(() => tickets.filter(ticket => !terminalStatuses.includes(ticket.status)), [tickets]);
+  const commanderSteps = useMemo(() => commanderPlan ? commanderPlan.steps.map(step => ({ step, ticket: tickets.find(item => item.id === step.ticketId) || null })) : [], [commanderPlan, tickets]);
+  // 指挥台默认展示最近一个进行中的计划，刷新页面也不会丢。
+  const commanderLatest = (work?.plans || []).find(plan => plan.status === 'active') || (work?.plans || [])[0] || null;
+  useEffect(() => {
+    if (view !== 'parallel' || commanderPlan || !commanderLatest) return;
+    let cancelled = false;
+    void api.workPlan(commanderLatest.id).then(result => { if (!cancelled) setCommanderPlan(result.plan); }).catch(() => { /* 计划读不到就不展示。 */ });
+    return () => { cancelled = true; };
+  }, [view, commanderPlan, commanderLatest]);
   const liveKey = liveTickets.map(ticket => `${ticket.id}:${ticket.status}`).join(',');
   useEffect(() => {
     if (view !== 'parallel' || !liveKey) return;
@@ -883,6 +898,31 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     return [...groups.entries()].map(([label, items]) => ({ label, items }));
   }, [inboxRows, inboxFilter]);
 
+  const startCommander = async () => {
+    const goal = commanderGoal.trim();
+    if (!goal) { notify('先写下这次要完成的目标。', true); return; }
+    const pool = crossCapable.map(agent => agent.id);
+    const chosen = (commanderAgents.length ? commanderAgents.filter(id => pool.includes(id)) : pool.slice(0, 3));
+    if (!chosen.length) { notify('没有可用的 Agent 可以分派。', true); return; }
+    setCommanderBusy(true);
+    try {
+      const result = await api.workCommander(goal, chosen);
+      setCommanderPlan(result.plan);
+      setCommanderReport(null);
+      setCommanderGoal('');
+      notify(`已拆成 ${result.plan.steps.length} 步，分给 ${new Set(result.plan.steps.map(step => step.executorId)).size} 个 Agent。确认某一步后它才开始执行。`);
+      void refresh();
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setCommanderBusy(false); }
+  };
+  const openCommanderReport = async () => {
+    if (!commanderPlan) return;
+    try {
+      const result = await api.workCommanderReport(commanderPlan.id);
+      setCommanderReport({ markdown: result.markdown, completed: result.completed, total: result.total });
+    } catch (cause) { notify((cause as Error).message, true); }
+  };
+
   const renderAttention = (items: WorkInboxItem[]) => <div className="sa-attention-list">{items.map(item => {
     const ticket = tickets.find(candidate => candidate.id === item.ticketId);
     const needsDataset = !ticket?.executor || ticket.executor === 'analysis';
@@ -1182,23 +1222,21 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       const min = Math.floor(sec / 60);
       return min < 60 ? `${min} 分 ${sec % 60} 秒` : `${Math.floor(min / 60)} 小时 ${min % 60} 分`;
     };
-    const done = tickets.filter(ticket => terminalStatuses.includes(ticket.status)).slice(0, 6);
-    const card = (ticket: WorkTicket, live: boolean) => {
+    const liveCard = (ticket: WorkTicket) => {
       const detail = parallelDetails[ticket.id];
       const text = reportText(detail).trim();
       const stopped = ['completed', 'failed', 'blocked', 'cancelled'].includes(ticket.status);
-      return <article className={`sa-live-card${live ? ' is-live' : ''}`} key={ticket.id}>
+      return <article className="sa-live-card is-live" key={ticket.id}>
         <header className="sa-live-head">
           <span className="sa-agent-avatar">{agentIcon(ticket.executor, 15)}</span>
           <div className="sa-live-title"><strong>{executorNames[ticket.executor] || ticket.executor}</strong><span title={ticket.title}>{ticket.title}</span></div>
           <Status status={ticket.status} />
         </header>
-        {(text || live) && <pre className="sa-live-body">{text ? text.slice(-1200) : '正在等待第一个输出…'}</pre>}
+        {text && <pre className="sa-live-body">{text.slice(-1200)}</pre>}
         <footer className="sa-live-foot">
-          <span>{elapsedOf(ticket.createdAt)}{ticket.planId ? ` · 第 ${(ticket.planStep ?? 0) + 1}/${ticket.planTotal ?? 0} 步` : ''}{ticket.projectChatId ? ' · 项目任务' : ''}</span>
+          <span>{elapsedOf(ticket.createdAt)}{ticket.projectChatId ? ' · 项目任务' : ''}</span>
           <div>
             {ticket.status === 'awaiting_review' && <button type="button" className="sa-link" onClick={() => void act(ticket.id, 'approve')}>批准</button>}
-            {ticket.status === 'awaiting_review' && <button type="button" className="sa-link" onClick={() => void act(ticket.id, 'reject')}>要求修改</button>}
             <button type="button" className="sa-link" onClick={() => viewTicket(ticket.id)}>打开</button>
             {!stopped && <button type="button" className="sa-link sa-link-danger" onClick={() => void act(ticket.id, 'stop')}>停止</button>}
             {['failed', 'blocked', 'cancelled'].includes(ticket.status) && <button type="button" className="sa-link" onClick={() => void act(ticket.id, 'retry')}>重试</button>}
@@ -1206,11 +1244,44 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         </footer>
       </article>;
     };
-    return <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">PARALLEL</p><h1>并行执行<span className="sa-count">{liveTickets.length}</span></h1><p>所有 Agent 的实时进度同屏显示，每 2.5 秒自动刷新，不用逐个点开。</p></div><button className="sa-button" onClick={() => void refresh()}><RefreshCw size={14} />刷新</button></header>
-      {liveTickets.length
-        ? <div className="sa-live-grid">{liveTickets.map(ticket => card(ticket, true))}</div>
-        : <div className="sa-empty-card"><span className="sa-empty-icon"><Activity size={20} /></span><div><strong>现在没有正在执行的 Agent</strong><span>选择两个以上 Agent 后发送指令，任务会先被拆成子任务再分派，结果在这里同时出现。</span></div><button className="sa-button" onClick={() => setView('command')}>去下达指令</button></div>}
-      {done.length > 0 && <section className="sa-section"><div className="sa-section-head"><h2>刚结束</h2><span className="sa-inline-note">最多显示 6 个</span></div><div className="sa-live-grid">{done.map(ticket => card(ticket, false))}</div></section>}
+    return <section className="sa-page">
+      <header className="sa-page-head"><div><p className="sa-eyebrow">COMMANDER</p><h1>指挥台</h1><p>写下目标，软件先拆成几步、分给最合适的 Agent；每一步确认后执行，最后把各步结果汇总成一份结论。</p></div><button className="sa-button" onClick={() => void refresh()}><RefreshCw size={14} />刷新</button></header>
+      <form className="sa-commander" onSubmit={event => { event.preventDefault(); void startCommander(); }}>
+        <label className="sa-commander-label" htmlFor="sa-commander-goal">目标</label>
+        <textarea id="sa-commander-goal" className="sa-commander-input" rows={3} maxLength={300} value={commanderGoal} onChange={event => setCommanderGoal(event.target.value)} placeholder="例如：检查这个项目的测试覆盖，补上缺失的单测，再写一份变更说明。" />
+        <div className="sa-commander-foot">
+          <div className="sa-commander-agents"><span>交给</span>
+            {crossCapable.map(agent => <button type="button" key={agent.id} className={`sa-chip${commanderAgents.includes(agent.id) ? ' on' : ''}`} title={agent.name} aria-pressed={commanderAgents.includes(agent.id)} onClick={() => setCommanderAgents(previous => previous.includes(agent.id) ? previous.filter(id => id !== agent.id) : [...previous, agent.id])}>{agent.name}</button>)}
+          </div>
+          <button className="sa-button sa-primary" type="submit" disabled={commanderBusy || !commanderGoal.trim()}>{commanderBusy ? '正在拆解…' : '拆解并分发'}</button>
+        </div>
+        <p className="sa-inline-note"><Sparkles size={13} />不选 Agent 时由软件从前三个可用 Agent 里分配；拆解后的每一步仍需要你确认才会执行。</p>
+      </form>
+      {commanderPlan && <section className="sa-plan-board">
+        <header className="sa-plan-board-head">
+          <div><strong>{commanderPlan.goal}</strong><span>{commanderSteps.filter(row => row.ticket?.status === 'completed').length}/{commanderSteps.length} 步完成 · {commanderPlan.status === 'active' ? '进行中' : commanderPlan.status === 'completed' ? '已全部完成' : commanderPlan.status === 'failed' ? '有步骤失败' : '已取消'}</span></div>
+          <div className="sa-plan-board-actions">
+            <button className="sa-button" type="button" onClick={() => void openCommanderReport()}>汇总结果</button>
+            {commanderPlan.status === 'active' && <button className="sa-button" type="button" onClick={() => void api.cancelWorkPlan(commanderPlan.id).then(() => { setCommanderPlan(null); void refresh(); notify('计划已取消。'); }).catch((cause: Error) => notify(cause.message, true))}>取消计划</button>}
+            <button className="sa-link" type="button" onClick={() => setCommanderPlan(null)}>收起</button>
+          </div>
+        </header>
+        <div className="sa-steps">{commanderSteps.map(({ step, ticket }) => <article className="sa-step" key={step.ticketId}>
+          <span className="sa-step-index">{step.index + 1}</span>
+          <div className="sa-step-main"><strong>{step.title}</strong><span>{executorNames[step.executorId] || step.executorId}{step.dependsOn?.length ? ` · 依赖第 ${step.dependsOn.map(index => index + 1).join('、')} 步` : ''}</span></div>
+          <Status status={ticket?.status || 'waiting'} />
+          <div className="sa-step-actions">
+            {ticket?.status === 'awaiting_review' && <button type="button" className="sa-link" onClick={() => void act(ticket.id, 'approve')}>批准</button>}
+            <button type="button" className="sa-link" onClick={() => viewTicket(step.ticketId)}>打开</button>
+          </div>
+        </article>)}</div>
+      </section>}
+      {liveTickets.filter(ticket => !commanderSteps.some(row => row.step.ticketId === ticket.id)).length > 0 && <section className="sa-section"><div className="sa-section-head"><h2>实时进度</h2><span className="sa-inline-note">每 2.5 秒刷新 · 计划外的任务</span></div><div className="sa-live-grid">{liveTickets.filter(ticket => !commanderSteps.some(row => row.step.ticketId === ticket.id)).map(ticket => liveCard(ticket))}</div></section>}
+      {!commanderPlan && liveTickets.length === 0 && <div className="sa-empty-card"><span className="sa-empty-icon"><Waypoints size={20} /></span><div><strong>还没有正在执行的步骤</strong><span>写下目标并点「拆解并分发」，软件会把任务拆开、分别交给合适的 Agent。</span></div></div>}
+      {commanderReport && <Modal title="指挥汇总" subtitle={`${commanderReport.completed}/${commanderReport.total} 步已完成`} close={() => setCommanderReport(null)} wide>
+        <pre className="sa-report-pre">{commanderReport.markdown}</pre>
+        <div className="sa-confirm-actions"><button className="sa-button" type="button" onClick={() => { void navigator.clipboard.writeText(commanderReport.markdown).then(() => notify('汇总已复制为 Markdown。')).catch(() => notify('复制失败，请手动选中。', true)); }}>复制 Markdown</button><button className="sa-button sa-primary" type="button" onClick={() => setCommanderReport(null)}>关闭</button></div>
+      </Modal>}
     </section>;
   })();
 

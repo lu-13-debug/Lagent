@@ -25,6 +25,7 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.get('/api/work/projects/:id/teamworks',(req,res)=>res.json({teamworks:engine.teamworkList(req.params.id)}));
   app.get('/api/work/teamworks/:id',(req,res)=>res.json({teamwork:engine.teamworkGet(req.params.id)}));
   app.post('/api/work/teamworks/:id/assemble',(req,res)=>res.json(engine.teamworkAssemble(req.params.id)));
+  app.post('/api/work/teamworks/:id/retry',(req,res)=>res.status(201).json(engine.teamworkRetry(req.params.id,req.body?.partId)));
   app.delete('/api/work/chats/:id',(req,res)=>res.json(engine.deleteProjectChat(req.params.id)));
   app.patch('/api/work/chats/:id',(req,res)=>res.json({chat:engine.renameProjectChat(req.params.id,req.body)}));
   app.post('/api/work/chats/:id/messages',(req,res)=>res.status(201).json({ticket:engine.projectChatMessage(req.params.id,req.body)}));
@@ -39,6 +40,8 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.put('/api/work/policy',(req,res)=>res.json({policy:engine.updatePolicy(req.body)}));
   app.post('/api/work/plans',(req,res)=>res.status(201).json({plan:engine.plan(req.body)}));
   app.post('/api/work/plans/suggest',async(req,res)=>res.json(await engine.suggestPlan(req.body)));
+  app.post('/api/work/commander',async(req,res)=>res.status(201).json(await engine.commander(req.body)));
+  app.get('/api/work/commander/:id/report',(req,res)=>res.json(engine.commanderReport(req.params.id)));
   app.get('/api/work/plans/:id',(req,res)=>res.json({plan:engine.getPlan(req.params.id)}));
   app.post('/api/work/plans/:id/cancel',(req,res)=>res.json({plan:engine.cancelPlan(req.params.id)}));
   app.post('/api/work/command',(req,res)=>res.status(201).json({ticket:engine.command(req.body)}));

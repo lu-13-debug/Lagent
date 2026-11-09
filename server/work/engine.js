@@ -752,6 +752,41 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     .filter(record=>!projectId||record.projectId===projectId)
     .sort((left,right)=>String(right.createdAt).localeCompare(String(left.createdAt)));
 
+  const COMMANDER_STATUS={awaiting_review:'待确认',working:'执行中',queued:'排队中',waiting:'等待依赖',completed:'已完成',failed:'失败',blocked:'受阻',cancelled:'已停止',missing:'缺失'};
+  function commanderReport(planId){
+    const plan=db.get('plan',planId);
+    if(!plan)throw workError('计划不存在',404);
+    const names=new Map(executors.list().map(agent=>[agent.id,agent.name]));
+    const rows=plan.steps.map(step=>{
+      const ticket=db.get('ticket',step.ticketId);
+      const reports=related('report',step.ticketId);
+      const latest=reports.length?reports[reports.length-1]:null;
+      return {
+        index:step.index,
+        title:step.title,
+        executorId:step.executorId,
+        executorName:names.get(step.executorId)||step.executorId,
+        status:ticket?.status||'missing',
+        ticketId:step.ticketId,
+        summary:String(latest?.summary||ticket?.summary||'').trim().slice(0,1500)
+      };
+    });
+    const completed=rows.filter(row=>row.status==='completed').length;
+    const open=rows.filter(row=>!['completed','cancelled'].includes(row.status));
+    const lines=[`# 指挥汇总：${plan.goal}`,'',`- 进度：${completed}/${rows.length} 步已完成`,`- 计划：${plan.id}`,`- 生成时间：${now()}`,''];
+    if(open.length)lines.push(`- 待处理：${open.map(row=>`第 ${row.index+1} 步`).join('、')}`,'');
+    lines.push('## 各步结果');
+    for(const row of rows){
+      lines.push('',`### ${row.index+1}. ${row.title}`,'',`- 执行：${row.executorName}`,`- 状态：${COMMANDER_STATUS[row.status]||row.status}`,'');
+      lines.push(row.summary||'_没有产出说明_');
+    }
+    if(open.length){
+      lines.push('','## 需要你处理');
+      for(const row of open)lines.push(`- 第 ${row.index+1} 步（${row.executorName}）：${COMMANDER_STATUS[row.status]||row.status}`);
+    }
+    return {plan:{id:plan.id,goal:plan.goal,status:plan.status},rows,completed,total:rows.length,markdown:lines.join('\n')};
+  }
+
   let closed=false;
   const unsubscribe=store.subscribe(()=>queueMicrotask(()=>{if(!closed)reconcile();}));
   if(outboxEnabled){
@@ -917,6 +952,29 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       audit(null,'teamwork-assemble','engine','accepted',`${next.bytes} 字节`);
       return {ok:true,outputPath:target,relativePath:next.outputPath,bytes:next.bytes,teamwork:teamworkView(next)};
     },
+    teamworkRetry(id,partId){
+      const record=db.get('teamwork',id);
+      if(!record)throw workError('协作任务不存在',404);
+      const index=record.parts.findIndex(part=>part.id===partId);
+      if(index<0)throw workError('没有这一份',404);
+      const part=record.parts[index];
+      const def=teamwork.TEAMWORK_PARTS.find(item=>item.id===part.id);
+      if(!def)throw workError('这份职责已不在契约里',400);
+      const project=projects.getProject(record.projectId);
+      const chat=projects.listChats(record.projectId).find(item=>item.id===part.chatId)
+        || projects.listChats(record.projectId).find(item=>item.executorId===part.executorId&&/^协作 · /.test(item.title))
+        || api.createProjectChat(record.projectId,{executorId:part.executorId,title:`协作 · ${def.name}`}).chat;
+      const attempt=Number(part.attempts||1)+1;
+      const ticket=api.projectChatMessage(chat.id,{
+        text:teamwork.teamworkTaskText({part:def,goal:record.goal,executorName:part.executorId}),
+        clientRequestId:`teamwork-${id}-${def.id}-r${attempt}`
+      });
+      const parts=record.parts.map(item=>item.id===part.id?{...item,chatId:chat.id,ticketId:ticket.id,attempts:attempt}:item);
+      const next={...record,parts,status:'running',problems:[],updatedAt:now()};
+      db.put('teamwork',next);
+      audit(null,'teamwork-retry','engine','accepted',`${def.name} 第 ${attempt} 次`);
+      return {teamwork:teamworkView(next),ticket};
+    },
     projectChatTickets(chatId){
       const chat=projects.getChat(chatId);
       return db.list('ticket')
@@ -1001,6 +1059,15 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     plan(input){return startPlan(input);},
     getPlan(id){return readPlan(id);},
     cancelPlan(id){return stopPlan(id);},
+    async commander(input){
+      const goal=typeof input?.goal==='string'?input.goal.trim():'';
+      if(!goal||goal.length>300)throw workError('指挥目标须为 1–300 字');
+      const projectChatId=typeof input?.projectChatId==='string'?input.projectChatId.trim():'';
+      const suggestion=await api.suggestPlan({goal,...(projectChatId?{projectChatId}:{}),...(Array.isArray(input?.executors)?{executors:input.executors}:{})});
+      const plan=startPlan({goal,steps:suggestion.steps,...(projectChatId?{projectChatId}:{}),autoRun:input?.autoRun===true,clientRequestId:typeof input?.clientRequestId==='string'?input.clientRequestId:''});
+      return {plan,steps:suggestion.steps};
+    },
+    commanderReport(id){return commanderReport(id);},
     detail(id){
       const ticket=get(id);
       const assignment=latest(id);

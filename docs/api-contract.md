@@ -163,6 +163,14 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 - `POST /api/work/teamworks/:id/assemble` → `{ok:true,outputPath,relativePath,bytes,teamwork}` 或 `400 {ok:false,problems:[{part,message}],teamwork}`。验收规则：三份文件都存在、≥120 字节、定义了约定的全局（`Coop.rules` / `Coop.view` / `Coop.hud`）、不含 `<script` 与 `http(s)://` 外链。通过后把三份内联进 `coop/index.html`（单文件、无外链），记录 `status:'assembled'` 与字节数；不通过则记录 `status:'blocked'` 与逐条问题，不覆盖已有产物。
 - 组装产物每帧按 `rules.update → view.draw → hud.draw` 执行；三份绘制各自在 `save/restore` 与阴影归零的干净状态下进行，一份的状态泄漏不会影响另外两份。
 
+### 指挥台（软件自己拆解并分配任务）
+
+软件在这里是「指挥官」：把一句话目标拆成带依赖的步骤，按能力分给不同 Agent，执行后把各步结果汇总成一份结论。
+
+- `POST /api/work/commander {goal,executors,projectChatId?,autoRun?}` → `201 {plan,steps}`。goal 1–300 字；executors 必须在可用执行器里（缺省时由服务端取可用的）。拆解优先走已配置的规划模型；没有配置或调用失败时，回退到**用本机已安装的 Agent 自己拆**（依次尝试 `dsh --profile headless`、`claude -p`、`codex exec`，只取它返回的 JSON 步骤）。规划必须给出 2–5 步，每步含 `executorId`、`text`（1–500 字）、可选 `dependsOn`。生成的工单按依赖放行：无依赖步骤为 `awaiting_review`（`autoRun:true` 时为 `queued`），有依赖步骤为 `waiting`，由 `advancePlan` 在依赖完成后自动放行。
+- `GET /api/work/commander/:id/report` → `{plan,rows,completed,total,markdown}`。markdown 为 `# 指挥汇总：<目标>`，逐条列出「执行 / 状态 / 产出说明」，未完成步骤单列在「需要你处理」下；只读拼装，不写文件、不改工单状态。
+- 步骤失败只影响依赖它的后续步骤（`advancePlan` 会把这些步骤标为 `blocked` 并写明依赖未完成），其余步骤照常推进。
+
 
 - `GET /api/work/projects/:id/brief.md` → `{project,brief,changes,markdown}`，markdown 为 `# 项目简报：<名称>` 的只读汇总，含目标、进展、任务要点、关键决定、约束与变更记录。
 - `GET /api/work/projects/:id/changes` → `{changes:[ProjectChange]}`；`POST /api/work/projects/:id/changes {title?,summary?,files?,executorId?,ticketId?}` → `201 {change}`。工单完成/失败时自动写入 `source:'auto'`，同一 ticketId 幂等对应同一条记录；项目工单创建时会用 `git status --porcelain` 拍一张执行前快照，完成后只把**本次新增**的改动文件写进 `files`（调用方显式传 `files` 时以传入值为准，不再异步覆盖）；非项目工单仍按旧的异步采集回填（最多 100 项），采集失败不影响工单。`DELETE /api/work/projects/:id/changes/:changeId` → `{id}`。

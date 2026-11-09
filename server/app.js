@@ -7,6 +7,7 @@ import { terminalExecutor } from './work/executors/terminal.js';
 import { windowExecutor } from './work/executors/window.js';
 import { acpExecutors } from './work/executors/acp.js';
 import { createProviderRegistry } from './work/providers.js';
+import { createAgentPlanner } from './work/agent-planner.js';
 import { codexExecutor } from './work/executors/codex.js';
 import { claudeCodeExecutor } from './work/executors/claude-code.js';
 import { localAgentExecutors } from './work/executors/local-agent.js';
@@ -172,6 +173,7 @@ export function createApp(options = {}) {
   });
   registerMemory(app, store, options.userId || 'local');
   modelHub = registerModelHub(app, { store, ownerId: options.userId || 'local', masterKey: options.credentialMasterKey ?? process.env.DATAAGENT_CREDENTIAL_MASTER_KEY, assertModelSettings: options.assertModelSettings, fetchImpl: options.fetchImpl });
+  const agentPlanner = createAgentPlanner({ env: process.env });
   workflow.modelHub = modelHub;
   app.locals.modelHub = modelHub;
   if(enableWork) {
@@ -202,7 +204,7 @@ export function createApp(options = {}) {
     mobileGateway=options.mobileGateway||new MobileGateway({dataDir:path.join(storeDir,'mobile'),now:options.now});
     ownsMobileGateway=!options.mobileGateway;
     registerMobilePairingRoutes(app,mobileGateway,{desktopOwner:options.mobileDesktopOwner||(()=>mobileOwnerId)});
-    closeWork=registerWork(app,store,executors,{isSessionValid:options.isSessionValid,onConnect:options.onTaskEventConnect,mobileGateway,mobileOwnerId,onMobileEventConnect:options.onMobileEventConnect,planner:options.workPlanner??(input=>modelHub.suggestWorkPlan(input)),windowBridge,providerRegistry,allowFilesystemBrowser:!options.cloud});
+    closeWork=registerWork(app,store,executors,{isSessionValid:options.isSessionValid,onConnect:options.onTaskEventConnect,mobileGateway,mobileOwnerId,onMobileEventConnect:options.onMobileEventConnect,planner:options.workPlanner??(async input=>{try{return await modelHub.suggestWorkPlan(input);}catch(error){try{return await agentPlanner(input);}catch(fallbackError){throw fallbackError?.message?Object.assign(error,{message:`${error.message}；本机 Agent 也无法拆解：${fallbackError.message}`}):error;}}}),windowBridge,providerRegistry,allowFilesystemBrowser:!options.cloud});
   }
   app.get('/api/runtime', (_req, res) => res.json({ mode: 'local', authRequired: false, serviceName: 'DataAgent', version: '1.1.0', capabilities: taskCapabilities(enableWork) }));
   app.get('/api/model-usage', (req, res) => {

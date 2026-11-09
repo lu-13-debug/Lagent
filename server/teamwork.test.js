@@ -98,6 +98,25 @@ test('协作任务：三份都合格时组装成单文件游戏', t => {
   assert.ok(view.parts.every(part => part.fileExists && part.fileSize > 100));
 });
 
+test('协作任务：某份没写完时可以只重派这一段', t => {
+  const { engine, project } = harness(t);
+  const { teamwork, tickets } = engine.teamworkStart(project.id, { goal: '做一个打砖块', executorIds: ['claude-code', 'codex'] });
+  const target = teamwork.parts.find(part => part.id === 'hud');
+  assert.ok(target);
+  const retried = engine.teamworkRetry(teamwork.id, 'hud');
+  assert.notEqual(retried.ticket.id, target.ticketId);
+  assert.equal(retried.ticket.status, 'awaiting_review');
+  assert.equal(retried.ticket.projectChatId, target.chatId);
+  const after = engine.teamworkGet(teamwork.id).parts.find(part => part.id === 'hud');
+  assert.equal(after.ticketId, retried.ticket.id);
+  assert.equal(after.attempts, 2);
+  assert.equal(after.executorId, target.executorId);
+  assert.equal(engine.teamworkGet(teamwork.id).status, 'running');
+  assert.equal(tickets.length, 3);
+  assert.throws(() => engine.teamworkRetry(teamwork.id, 'nope'), /没有这一份/);
+  assert.throws(() => engine.teamworkRetry('tw-missing', 'hud'), /协作任务不存在/);
+});
+
 test('协作任务：某份文件没定义约定的全局时点名拒绝', t => {
   const { engine, project, projectDir } = harness(t);
   const { teamwork } = engine.teamworkStart(project.id, { goal: '做一个打砖块', executorIds: ['codex'] });
