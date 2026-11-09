@@ -511,7 +511,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const liveTickets = useMemo(() => tickets.filter(ticket => !terminalStatuses.includes(ticket.status)), [tickets]);
   const commanderSteps = useMemo(() => commanderPlan ? commanderPlan.steps.map(step => ({ step, ticket: tickets.find(item => item.id === step.ticketId) || null })) : [], [commanderPlan, tickets]);
   // 指挥台默认展示最近一个进行中的计划，刷新页面也不会丢。
-  const commanderLatest = (work?.plans || []).find(plan => plan.status === 'active') || (work?.plans || [])[0] || null;
+  const commanderLatest = (work?.plans || []).find(plan => plan.status === 'active') || null;
   useEffect(() => {
     if (view !== 'parallel' || commanderPlan || !commanderLatest) return;
     let cancelled = false;

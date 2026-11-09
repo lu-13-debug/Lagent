@@ -4894,6 +4894,14 @@ html[data-theme="dark"] .sa-newchat kbd {
   color: var(--sa-text-3);
 }
 
+/* 目标为空时按钮要一眼看出按不了，不要只靠降低透明度。 */
+.sa-commander-foot .sa-button:disabled {
+  background: var(--sa-surface-3);
+  border-color: transparent;
+  color: var(--sa-text-3);
+  cursor: not-allowed;
+}
+
 .sa-plan-board {
   display: grid;
   gap: 10px;
