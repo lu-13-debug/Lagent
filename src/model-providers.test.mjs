@@ -61,3 +61,17 @@ test('可选字段格式正确', () => {
     if (preset.note) assert.ok(preset.note.length <= 120, `备注过长：${preset.id}`);
   }
 });
+
+test('兜底型号可以直接填进模型名，且首项是该供应商的主力对话模型', () => {
+  for (const preset of providers) {
+    for (const model of preset.models) {
+      assert.match(model, /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/, `${preset.id} 的型号 ${model} 含非法字符，不能直接填入`);
+    }
+  }
+  const first = id => providers.find(preset => preset.id === id).models[0];
+  assert.equal(first('deepseek'), 'deepseek-chat');
+  assert.match(first('openai'), /^gpt-/);
+  assert.match(first('anthropic'), /^claude-/);
+  assert.match(first('moonshot'), /kimi/);
+  assert.match(first('zhipu'), /^glm-/);
+});

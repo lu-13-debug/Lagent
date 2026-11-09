@@ -58,3 +58,9 @@ export function groupedProviders(query = ''): { region: ModelProviderRegion; lab
 }
 
 export const protocolLabel = (protocol: ModelProviderProtocol) => (protocol === 'anthropic' ? 'Messages · 文本对话' : 'Chat Completions · 文本对话');
+
+// 不少供应商不实现 /models（或要更高权限），这时用目录里的常见型号兜底：
+// 只作为可点的候选，是否可用仍以供应商控制台为准。
+export function suggestedModels(baseUrl: string): string[] {
+  return providerByUrl(baseUrl)?.models.slice(0, 12) ?? [];
+}

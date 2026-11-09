@@ -5,7 +5,7 @@ import { useAuth } from '../auth-context';
 import type { ModelOption, Settings } from '../types';
 import { Modal, Spinner } from './ui';
 import { profileKey, readProfiles, writeProfiles, modelDiagnosis } from '../model-profiles';
-import { providerByUrl, protocolLabel } from '../model-providers';
+import { providerByUrl, protocolLabel, suggestedModels } from '../model-providers';
 import { ProviderCatalog } from './ProviderCatalog';
 import type { ModelProfile } from '../model-profiles';
 import './model-settings.css';
@@ -60,6 +60,9 @@ export function SettingsModal({ settings, close, onSaved, notify }: {
     ? '请选择管理员允许的 HTTPS 模型主机。' : '';
   const canReuseKey = hasKey && canonical === endpoint(savedBaseUrl)?.baseUrl;
   const keyReady = Boolean(key.trim()) || canReuseKey;
+  // 供应商没实现 /models 时，用目录里的常见型号兜底，至少让人有得选。
+  const fallbackModels = suggestedModels(canonical);
+  const showingFallback = keyReady && !addressError && models.length === 0 && fallbackModels.length > 0 && catalogStatus !== 'loading';
 
   useEffect(() => {
     let active = true;
@@ -144,9 +147,9 @@ export function SettingsModal({ settings, close, onSaved, notify }: {
       <div className="field">
         <div className="model-picker-heading"><label htmlFor="model-name">模型名称</label><button type="button" className="text-button" disabled={!aiAllowed || !!addressError || !keyReady || !!busy || catalogStatus === 'loading'} onClick={() => setRefresh(value => value + 1)} aria-label="重新检测模型">{catalogStatus === 'loading' ? <Spinner size={13} /> : <RefreshCw size={13} />}重新检测</button></div>
         {manual ? <input id="model-name" value={model} onChange={e => { setModel(e.target.value); setTestResult(''); }} maxLength={200} placeholder="填写供应商提供的完整模型 ID" disabled={!!busy} />
-          : <ModelPicker id="model-name" models={canReuseKey && model === settings.model && !models.some(item => item.id === model) ? [{ id: model, name: '当前已保存' }, ...models] : models} value={model} onChange={next => { setModel(next); setTestResult(''); }} disabled={!!busy} loading={catalogStatus === 'loading'} />}
+          : <ModelPicker id="model-name" models={showingFallback ? fallbackModels.map(id => ({ id, name: '目录常见型号' })) : canReuseKey && model === settings.model && !models.some(item => item.id === model) ? [{ id: model, name: '当前已保存' }, ...models] : models} value={model} onChange={next => { setModel(next); setTestResult(''); }} disabled={!!busy} loading={catalogStatus === 'loading'} />}
         <div className={`model-catalog-status ${catalogStatus === 'error' ? 'catalog-error' : ''}`} role={catalogStatus === 'error' ? 'alert' : 'status'}>
-          {addressError || (!keyReady ? '填写当前地址对应的 API Key 后，自动获取可用模型。' : catalogStatus === 'loading' ? '正在向供应商获取模型列表…' : catalogStatus === 'error' ? catalogError : catalogStatus === 'ready' ? models.length ? `已检测到 ${models.length} 个模型${partial ? '（部分列表，可手动填写其他模型）' : ''}。` : '供应商未返回可用模型，请检查 Key 权限或手动填写。' : '准备检测模型。')}
+          {addressError || (!keyReady ? '填写当前地址对应的 API Key 后，自动获取可用模型。' : catalogStatus === 'loading' ? '正在向供应商获取模型列表…' : catalogStatus === 'error' ? catalogError : catalogStatus === 'ready' ? models.length ? `已检测到 ${models.length} 个模型${partial ? '（部分列表，可手动填写其他模型）' : ''}。` : '供应商未返回模型列表，已列出目录里的常见型号，请确认 Key 对它们的权限。' : '准备检测模型。')}
         </div>
         <div className="model-picker-footer"><small className="field-help">选择支持文本对话的模型；模型权限以供应商为准。</small><button type="button" className="text-button" disabled={!!busy} onClick={toggleManual}>{manual ? '从列表选择' : '手动填写'}</button></div>
       </div>

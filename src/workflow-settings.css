@@ -54,6 +54,8 @@
 .hub-save-bar > span { font-size: var(--text-sm); color: var(--muted); }
 .hub-catalog { padding-top: 10px; border-top: 1px solid var(--border); }
 .hub-catalog > div { display: flex; gap: 6px; flex-wrap: wrap; max-height: 160px; overflow: auto; margin-top: 8px; }
+.hub-catalog-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.hub-catalog-row .hub-field-hint { margin: 0; }
 .hub-catalog code { font-size: var(--text-xs); padding: 4px 6px; background: var(--surface-2, var(--bg)); border: 1px solid var(--border); border-radius: 4px; overflow-wrap: anywhere; }
 .hub-checkbox { display: flex; align-items: center; gap: 9px; font-size: var(--text-base); min-height: 32px; }
 .hub-checkbox input { accent-color: var(--accent); width: 16px; height: 16px; }

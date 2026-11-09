@@ -167,7 +167,9 @@ npm.cmd run cloud
 - **国外模型（13）**：OpenAI、Claude（Anthropic Messages）、Google Gemini（OpenAI 兼容端点）、xAI Grok、Mistral、Groq、OpenRouter、Together、Fireworks、Cerebras、DeepInfra、OpenCode Go / Zen 套餐。
 - **本地服务（3）**：Ollama、LM Studio、vLLM 或自建 OpenAI 兼容服务（本机地址允许 http）。
 
-目录只是「填表助手」，不限制你能填什么：任何 OpenAI 兼容地址都可以手动填写。示例模型名仅用于预填，实际可用的模型以「重新检测」结果为准；检测不到时可以手动填写完整模型 ID。推理类模型（`deepseek-reasoner`、`gpt-5.x`、`o3`、`*-thinking` 等）会自动省略 `temperature` 等采样参数，避免第三方兼容接口报错。目录数据在 `src/model-providers.json`，新增供应商只需加一条。
+目录只是「填表助手」，不限制你能填什么：任何 OpenAI 兼容地址都可以手动填写。示例模型名仅用于预填，实际可用的模型以「重新检测」结果为准；检测不到时会退回到目录里的常见型号供你挑选，也可以手动填写完整模型 ID。推理类模型（`deepseek-reasoner`、`gpt-5.x`、`o3`、`*-thinking` 等）会自动省略 `temperature` 等采样参数，避免第三方兼容接口报错。目录数据在 `src/model-providers.json`，新增供应商只需加一条。
+
+保存凭据后会自动用这条 Key 读一次模型列表（只读 `/models`，不产生模型调用费用），结果直接显示在凭据卡片上；到「模型配置」里选中这条凭据时也会自动再识别一次，识别到的模型可以直接从下拉框选，不必手抄模型 ID。供应商没实现 `/models` 或 Key 权限不足时，会提示原因并列出目录里的常见型号。
 
 云端账号版仍然受服务端主机白名单限制（`DATAAGENT_MODEL_HOSTS`）：目录里未被管理员允许的主机会显示「未开放」，此时需要先调整白名单再重启服务。本地单用户入口不受此限制。
 

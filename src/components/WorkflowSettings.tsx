@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { BookOpen, Check, FileUp, KeyRound, Layers3, Plus, RefreshCw, Save, Settings2, X, Zap } from 'lucide-react';
+import { suggestedModels } from '../model-providers';
 import { completeWorkflow, EFFORT_LABELS, effortOptions, normalizeEffort, validateSkillFile, validateWorkflow, WORKFLOW_STAGES } from '../workflow-types';
 import type { CredentialInput, HubModelCatalog, HubModelProfile, ModelHubState, ModelProfileInput, WorkflowConfig, WorkflowSkill, WorkflowSkillInput, WorkflowStageConfig } from '../workflow-types';
 import { CredentialManager } from './CredentialManager';
@@ -139,10 +140,33 @@ function ProfileManager({ hub, onSave, onDelete, onDetect }: { hub: ModelHubStat
   const [draft, setDraft] = useState<ModelProfileInput>({ name: '', credentialId: '', model: '' });
   const [catalog, setCatalog] = useState<HubModelCatalog>();
   const [busy, setBusy] = useState('');
+  const [detecting, setDetecting] = useState(false);
+  const [detectError, setDetectError] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [deleting, setDeleting] = useState('');
-  function edit(profile?: HubModelProfile) { setId(profile?.id); setDraft(profile ? { name: profile.name, credentialId: profile.credentialId, model: profile.model } : { name: '', credentialId: hub.credentials[0]?.id || '', model: '' }); setCatalog(undefined); setError(''); setMessage(''); setEditing(true); setDeleting(''); }
+  const [detected, setDetected] = useState(0);
+  const detectRef = useRef(onDetect);
+  detectRef.current = onDetect;
+  const credential = hub.credentials.find(item => item.id === draft.credentialId);
+  const suggestions = credential ? suggestedModels(credential.baseUrl) : [];
+  // 选好凭据就自动识别可用模型，不用再点「检测」。
+  useEffect(() => {
+    if (!editing || !draft.credentialId || !hub.vault.available) return;
+    let active = true;
+    setDetecting(true); setDetectError(''); setCatalog(undefined);
+    detectRef.current(draft.credentialId)
+      .then(result => {
+        if (!active) return;
+        setCatalog(result);
+        if (result.models.length === 1) setDraft(previous => (previous.model ? previous : { ...previous, model: result.models[0].id }));
+        if (!result.models.length) setDetectError('供应商没有返回模型列表，可以从下面的常见型号里挑一个。');
+      })
+      .catch(error => { if (active) setDetectError((error as Error).message || '未能读取模型列表。'); })
+      .finally(() => { if (active) setDetecting(false); });
+    return () => { active = false; };
+  }, [editing, draft.credentialId, hub.vault.available, detected]);
+  function edit(profile?: HubModelProfile) { setId(profile?.id); setDraft(profile ? { name: profile.name, credentialId: profile.credentialId, model: profile.model } : { name: '', credentialId: hub.credentials[0]?.id || '', model: '' }); setCatalog(undefined); setDetectError(''); setError(''); setMessage(''); setEditing(true); setDeleting(''); setDetected(value => value + 1); }
   async function act(name: string, action: () => Promise<void>) { setBusy(name); setError(''); setMessage(''); try { await action(); } catch (e) { setError((e as Error).message); } finally { setBusy(''); } }
   async function save() {
     if (!draft.name.trim() || !draft.model.trim() || !draft.credentialId) { setError('请填写名称、选择凭据和完整模型 ID。'); return; }
@@ -153,10 +177,14 @@ function ProfileManager({ hub, onSave, onDelete, onDetect }: { hub: ModelHubStat
     {!hub.credentials.length && <p className="hub-empty">请先在「凭据库」添加模型供应商凭据。</p>}
     {editing && <form className="hub-editor" onSubmit={event => { event.preventDefault(); void save(); }}><div className="hub-editor-heading"><h4>{id ? '编辑模型配置' : '新增模型配置'}</h4><button type="button" className="hub-icon-button" aria-label="取消编辑模型" disabled={!!busy} onClick={() => setEditing(false)}><X size={17} /></button></div>
       <label className="field">配置名称<input required maxLength={80} value={draft.name} disabled={!!busy} placeholder="例如：报告撰写模型" onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
-      <label className="field">使用凭据<select required value={draft.credentialId} disabled={!!busy} onChange={event => { setDraft({ ...draft, credentialId: event.target.value, model: '' }); setCatalog(undefined); }}><option value="">请选择凭据</option>{hub.credentials.map(item => <option key={item.id} value={item.id}>{item.name} · {item.provider} · {item.keyHint || '已保存'}</option>)}</select></label>
+      <label className="field">使用凭据<select required value={draft.credentialId} disabled={!!busy} onChange={event => { setDraft({ ...draft, credentialId: event.target.value, model: '' }); setCatalog(undefined); setDetectError(''); setDetected(value => value + 1); }}><option value="">请选择凭据</option>{hub.credentials.map(item => <option key={item.id} value={item.id}>{item.name} · {item.provider} · {item.keyHint || '已保存'}</option>)}</select></label>
+      {catalog && catalog.models.length > 0 && <label className="field">识别到 {catalog.models.length} 个模型<select aria-label="从检测结果填入" value="" disabled={!!busy} onChange={event => { if (event.target.value) setDraft({ ...draft, model: event.target.value }); }}><option value="">选择模型（{catalog.models.length} 个）</option>{catalog.models.map(item => <option key={item.id} value={item.id}>{item.name && item.name !== item.id ? `${item.name} · ` : ''}{item.id}</option>)}</select><small>{catalog.partial ? '供应商仅返回部分列表，仍可手动填写其他模型。' : '模型目录不代表当前 Key 已获全部调用权限。'}</small></label>}
+      {(!catalog || !catalog.models.length) && suggestions.length > 0 && <label className="field">目录里的常见型号<select aria-label="从供应商目录填入" value="" disabled={!!busy} onChange={event => { if (event.target.value) setDraft({ ...draft, model: event.target.value }); }}><option value="">选择常见型号（{suggestions.length} 个）</option>{suggestions.map(model => <option key={model} value={model}>{model}</option>)}</select><small>{detectError ? `${detectError.replace(/[。；;]\s*$/, '')}；下面这些型号来自供应商目录，权限仍以供应商控制台为准。` : '这些型号来自供应商目录，是否可用仍以供应商控制台为准。'}</small></label>}
       <label className="field">完整模型 ID<input required maxLength={200} value={draft.model} disabled={!!busy} placeholder="填写供应商提供的完整模型 ID" onChange={event => setDraft({ ...draft, model: event.target.value })} /></label>
-      <button type="button" className="text-button" disabled={!!busy || !draft.credentialId || !hub.vault.available} onClick={() => void act('detect', async () => { setCatalog(await onDetect(draft.credentialId)); })}>{busy === 'detect' ? <Spinner size={14} /> : <RefreshCw size={14} />}检测此凭据的可用模型</button>
-      {catalog && <label className="field">从检测结果填入<select aria-label="从检测结果填入" value="" disabled={!!busy} onChange={event => { if (event.target.value) setDraft({ ...draft, model: event.target.value }); }}><option value="">{catalog.models.length ? `选择模型（${catalog.models.length} 个）` : '未返回模型，可手动填写'}</option>{catalog.models.map(item => <option key={item.id} value={item.id}>{item.name && item.name !== item.id ? `${item.name} · ` : ''}{item.id}</option>)}</select><small>{catalog.partial ? '供应商仅返回部分列表，仍可手动填写其他模型。' : '模型目录不代表当前 Key 已获全部调用权限。'}</small></label>}
+      <div className="hub-catalog-row">
+        <button type="button" className="text-button" disabled={!!busy || detecting || !draft.credentialId || !hub.vault.available} onClick={() => setDetected(value => value + 1)}>{busy === 'detect' || detecting ? <Spinner size={14} /> : <RefreshCw size={14} />}{detecting ? '正在识别可用模型…' : '重新识别模型'}</button>
+        {detecting && <span className="hub-field-hint" role="status">正在用这条凭据读取供应商的模型列表…</span>}
+      </div>
       <p className="hub-field-hint">未知模型仅开放默认强度。保存不会自动发起付费连接测试。</p><div className="hub-actions"><button className="button primary" type="submit" disabled={!!busy || !hub.vault.available}>{busy === 'save' ? <Spinner size={15} /> : <Save size={15} />}保存模型</button><button className="button secondary" type="button" disabled={!!busy} onClick={() => setEditing(false)}>取消</button></div>
     </form>}
     <div className="hub-card-list">{hub.profiles.map(profile => {
