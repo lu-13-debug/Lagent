@@ -1147,8 +1147,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           <span className="sa-agent-glyph">{providerIcon(provider.id)}</span>
           <div className="sa-agent-main">
             <div className="sa-agent-line"><strong>{provider.name}</strong><span className="sa-agent-kind">{providerKind(provider)}</span>{provider.version ? <span className="sa-agent-ver">{provider.version}</span> : null}</div>
-            <p className="sa-agent-path" title={provider.command || ''}>{provider.command || '未找到命令'}{provider.installed ? '' : ' · 未安装或不在 PATH'}</p>
-            {(provider.status !== 'ready' || provider.kind === 'desktop') && provider.message ? <p className="sa-agent-note-line">{provider.message}{!/窗口/.test(provider.message) && windowFallbackFor(provider) ? ` ${windowFallbackFor(provider)}` : ''}</p> : null}
+            {provider.command ? <p className="sa-agent-path" title={provider.command}>{provider.command}</p> : null}
+            {(provider.status !== 'ready' || provider.kind === 'desktop') && provider.message ? <p className="sa-agent-note-line">{provider.message.replace(/^未找到命令[^；;]*[；;]\s*/, '')}{!/窗口/.test(provider.message) && windowFallbackFor(provider) ? ` ${windowFallbackFor(provider)}` : ''}</p> : null}
           </div>
           <div className="sa-agent-side">
             <Status status={provider.status} />
