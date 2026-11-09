@@ -6,14 +6,14 @@ const profile = { id: 'p1', name: '分析模型', credentialId: 'c1', model: 'kn
 const stages = ['quality', 'plan', 'preprocess', 'activity', 'retention', 'monetization', 'channel', 'seasonality', 'charts', 'insights', 'report', 'verify', 'pdf'];
 const skills = stages.map(stageId => ({ id: 'skill-' + stageId, name: stageId, stageId, enabled: true, builtin: true }));
 
-test('工作流补齐13阶段、保留预算与阶段覆盖，PDF标记工具节点', () => {
+test('工作流只补齐任务规划阶段，保留预算与模型覆盖', () => {
   assert.equal(typeof workflow.completeWorkflow, 'function');
   const value = workflow.completeWorkflow({ version: 1, defaultProfileId: 'p1', stages: { plan: { profileId: 'p2', skillId: 'mine', effort: 'mid', maxTokens: 1234, timeoutMs: 60000 } } }, skills);
-  assert.deepEqual(Object.keys(value.stages), stages);
+  assert.deepEqual(Object.keys(value.stages), ['plan']);
   assert.deepEqual(value.stages.plan, { profileId: 'p2', skillId: 'mine', effort: 'medium', maxTokens: 1234, timeoutMs: 60000 });
-  assert.equal(value.stages.quality.skillId, 'skill-quality');
-  assert.equal(value.stages.quality.profileId, null);
-  assert.equal(workflow.WORKFLOW_STAGES.at(-1).tool, true);
+  const blank = workflow.completeWorkflow(null, skills);
+  assert.equal(blank.stages.plan.skillId, 'skill-plan');
+  assert.equal(blank.stages.plan.profileId, null);
 });
 
 test('mid只映射medium，未知档位不会静默降级', () => {
@@ -31,34 +31,36 @@ test('可选强度取模型能力，未知模型只开放默认，明确显示�
   assert.deepEqual(workflow.effortOptions(null).filter(item => item.supported).map(item => item.value), ['default']);
 });
 
-test('校验继承模型、显式覆盖、Skill阶段和预算，不对PDF要求模型', () => {
+test('只保留任务规划阶段，并校验继承模型、思考强度与预算', () => {
   assert.equal(typeof workflow.validateWorkflow, 'function');
+  assert.deepEqual(workflow.WORKFLOW_STAGES.map(stage => stage.id), ['plan']);
   const value = workflow.completeWorkflow({ version: 1, defaultProfileId: 'p1', stages: {} }, skills);
+  assert.deepEqual(Object.keys(value.stages), ['plan']);
   assert.deepEqual(workflow.validateWorkflow(value, [profile], skills), []);
-  value.stages.report.effort = 'max';
+  value.stages.plan.effort = 'max';
   value.stages.plan.maxTokens = 255;
-  value.stages.activity.timeoutMs = 600001;
-  value.stages.charts.skillId = 'skill-plan';
+  value.stages.plan.timeoutMs = 600001;
+  value.stages.plan.skillId = 'skill-quality';
   const errors = workflow.validateWorkflow(value, [profile], skills).join(' ');
-  assert.match(errors, /报告撰写.*强度/);
+  assert.match(errors, /任务规划.*强度/);
   assert.match(errors, /任务规划.*Token/);
-  assert.match(errors, /活跃.*超时/);
-  assert.match(errors, /图表.*Skill/);
+  assert.match(errors, /任务规划.*超时/);
+  assert.match(errors, /任务规划.*Skill/);
 });
 
 test('未开启工作流仍校验预算和Skill，但允许未分配模型', () => {
   const value = workflow.completeWorkflow(null, skills);
   assert.deepEqual(workflow.validateWorkflow(value, [], skills), []);
-  value.stages.report.maxTokens = NaN;
+  value.stages.plan.maxTokens = NaN;
   assert.match(workflow.validateWorkflow(value, [], skills).join(' '), /Token/);
 });
 
 test('关闭工作流保留继承阶段的强度偏好，重新启用时再检查模型能力', () => {
   const value = workflow.completeWorkflow(null, skills);
-  value.stages.report.effort = 'max';
+  value.stages.plan.effort = 'max';
   assert.deepEqual(workflow.validateWorkflow(value, [], skills), []);
   value.defaultProfileId = 'p1';
-  assert.match(workflow.validateWorkflow(value, [profile], skills).join(' '), /报告撰写.*强度/);
+  assert.match(workflow.validateWorkflow(value, [profile], skills).join(' '), /任务规划.*强度/);
 });
 
 test('凭据写入只含允许字段，地址或协议变更必须重填Key', () => {
@@ -78,14 +80,9 @@ test('私人Skill导入只接受64KB以内Markdown文本', () => {
   assert.match(workflow.validateSkillFile({ name: 'script.js', size: 10 }), /Markdown/);
 });
 
-test('洞察评审默认关闭并校验阶段、数量、引用和强度', () => {
- const profiles=[profile,{...profile,id:'p2'},{...profile,id:'p3',capabilities:{efforts:['default'],tools:false}}];
+test('任务规划阶段不接受多模型评审配置', () => {
+ const profiles=[profile,{...profile,id:'p2'}];
  const config=workflow.completeWorkflow({defaultProfileId:'p1'},skills);
- assert.deepEqual(config.stages.insights.review,{reviewerProfileIds:[]});
- const errors=(ids,stage='insights')=>workflow.validateWorkflow({...config,stages:{...config.stages,[stage]:{...config.stages[stage],review:{reviewerProfileIds:ids}}}},profiles,skills).join('；');
- assert.equal(errors(['p2']),'');
- for(const ids of [['p1'],['missing'],['p2','p2'],['p2','p3','p1','missing']]) assert.match(errors(ids),/评审/);
- assert.match(errors(['p2'],'activity'),/洞察/);
- config.stages.insights.effort='high';assert.match(errors(['p3']),/强度/);
- config.stages.insights.effort='default'; profiles[1].unavailable=true;assert.match(errors(['p2']),/评审/);
+ const staged={...config,stages:{...config.stages,plan:{...config.stages.plan,review:{reviewerProfileIds:['p2']}}}};
+ assert.match(workflow.validateWorkflow(staged,profiles,skills).join('；'),/任务规划.*评审/);
 });

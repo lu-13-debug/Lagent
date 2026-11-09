@@ -22,20 +22,10 @@ export interface ModelHubState {
 }
 export interface HubModelCatalog { models: { id: string; name?: string }[]; baseUrl: string; partial: boolean }
 
+// 当前产品只使用「任务规划」一个阶段；旧数据分析流水线的 12 个阶段已归档，
+// 不再出现在设置界面，历史 Skill 只能在「归档模板」里查看与删除。
 export const WORKFLOW_STAGES: { id: string; name: string; description: string; tool?: boolean }[] = [
-  { id: 'quality', name: '数据理解与质量检查', description: '字段、覆盖范围与口径风险' },
   { id: 'plan', name: '任务规划', description: '理解目标、决定步骤与分工' },
-  { id: 'preprocess', name: '数据处理', description: '标准化与可检查的处理计划' },
-  { id: 'activity', name: '活跃分析', description: '新增、活跃与行为趋势' },
-  { id: 'retention', name: '留存分析', description: '同期群与留存变化' },
-  { id: 'monetization', name: '商业化分析', description: '收入、付费与客单价' },
-  { id: 'channel', name: '渠道分析', description: '渠道贡献与质量对比' },
-  { id: 'seasonality', name: '周内分析', description: '周期与工作日差异' },
-  { id: 'charts', name: '图表设计与绘制', description: '真实数据图表与图注' },
-  { id: 'insights', name: '洞察与建议', description: '证据引用、限制与行动' },
-  { id: 'report', name: '报告撰写', description: '整合背景、方法与分析结果' },
-  { id: 'verify', name: '结果核验', description: '数字、单位与图文一致性' },
-  { id: 'pdf', name: 'PDF 排版与输出', description: '服务器排版工具，不调用模型', tool: true },
 ];
 export const EFFORTS = ['default', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export const EFFORT_LABELS: Record<string, string> = { default: '模型默认', low: '低', medium: '中', high: '高', xhigh: '更高', max: '最高' };
@@ -50,7 +40,8 @@ export function completeWorkflow(value?: Partial<WorkflowConfig> | null, skills:
     stages: Object.fromEntries(WORKFLOW_STAGES.map(stage => {
       const saved = value?.stages?.[stage.id];
       const skill = skills.find(item => item.stageId === stage.id && item.enabled && item.builtin) || skills.find(item => item.stageId === stage.id && item.enabled);
-      return [stage.id, { ...(stage.id === 'insights' ? {review: saved?.review ?? {reviewerProfileIds:[]}} : saved?.review ? {review:saved.review} : {}), ...(saved?.team ? {team:saved.team}:{}), ...(saved?.subagents ? {subagents:saved.subagents}:{}), profileId: saved?.profileId || null, skillId: saved?.skillId || skill?.id || '', effort: normalizeEffort(saved?.effort), maxTokens: saved?.maxTokens ?? 8192, timeoutMs: saved?.timeoutMs ?? 300000 }];
+      // 归档阶段的团队模式 / 多模型评审 / 子智能体配置不再保留，避免旧配置阻断保存。
+      return [stage.id, { profileId: saved?.profileId || null, skillId: saved?.skillId || skill?.id || '', effort: normalizeEffort(saved?.effort), maxTokens: saved?.maxTokens ?? 8192, timeoutMs: saved?.timeoutMs ?? 300000 }];
     })),
   };
 }

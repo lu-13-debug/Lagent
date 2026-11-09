@@ -15,6 +15,10 @@ test('评审模型沿用裁判强度且无评审字段时旧配置保持不变',
   assert.throws(()=>module.validateWorkflow({defaultProfileId:'judge',stages:{insights:{effort:'high',review:{reviewerProfileIds:['reviewer']}}}},options),/评审员.*不支持/);
   assert.deepEqual(module.validateWorkflow({defaultProfileId:'judge',stages:{insights:{review:{reviewerProfileIds:[]}}}},options).stages.insights.review,{reviewerProfileIds:[]});
 });
+test('产品侧只启用任务规划阶段，归档阶段定义仍保留', () => {
+  assert.deepEqual(module.ACTIVE_STAGES, ['plan']);
+  assert.equal(module.STAGE_DEFINITIONS.length, 13);
+});
 test('固定13阶段均有实际内置Skill和版本，PDF是工具节点', () => {
   assert.equal(typeof module.defaultWorkflow, 'function', '必须提供工作流配置');
   assert.deepEqual(module.STAGE_DEFINITIONS.map(stage => stage[0]), ['quality','plan','preprocess','activity','retention','monetization','channel','seasonality','charts','insights','report','verify','pdf']);

@@ -95,7 +95,6 @@ export function WorkflowSettings({ workflow, profiles, skills, onSave }: { workf
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [showErrors, setShowErrors] = useState(false);
-  const [showLegacy, setShowLegacy] = useState(false);
   const persisted = JSON.stringify(workflow);
   useEffect(() => { setDraft(completeWorkflow(workflow, skills)); setShowErrors(false); }, [persisted]); // 仅工作流保存改变时更新草稿，其他分区操作保留未保存编辑。
   const errors = validateWorkflow(draft, profiles, skills);
@@ -113,7 +112,7 @@ export function WorkflowSettings({ workflow, profiles, skills, onSave }: { workf
     <div className="hub-section-heading"><div><h3>规划设置</h3><p>指挥台理解任务、拆解步骤时使用这里的模型；执行任务本身仍由各 Agent 负责。</p></div><span className="hub-badge">{draft.defaultProfileId ? '模型规划已启用' : '按本地规则拆分'}</span></div>
     <label className="field">规划模型<select aria-label="工作流默认模型" value={draft.defaultProfileId || ''} disabled={busy} onChange={event => { setDraft({ ...draft, defaultProfileId: event.target.value || null }); setMessage(''); }}><option value="">不指定（按本地规则拆分任务）</option>{draft.defaultProfileId && !profiles.some(item => item.id === draft.defaultProfileId) && <option value={draft.defaultProfileId}>模型已删除，请重新选择</option>}{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model}</option>)}</select><small>{profiles.length ? '指定后，任务会先由这个模型理解目标、决定步骤与分工；不指定则使用本地规则。' : '先在凭据库保存 Key，再到模型配置添加模型。'}</small></label>
     <p className="hub-notice">{draft.defaultProfileId ? '规划时会把项目记忆与可用 Agent 一起交给模型，由它决定每步交给谁。' : '当前按本地规则拆分：只依据目标文本与目录结构决定分工。'} 思考强度越高，耗时和供应商费用可能增加。</p>
-    <div className="hub-stage-list">{WORKFLOW_STAGES.filter(stage => stage.id === 'plan' || showLegacy).map((stage, index) => {
+    <div className="hub-stage-list">{WORKFLOW_STAGES.map((stage, index) => {
       const config = draft.stages[stage.id];
       const profile = profiles.find(item => item.id === (config.profileId || draft.defaultProfileId));
       const options = effortOptions(profile);
@@ -130,7 +129,6 @@ export function WorkflowSettings({ workflow, profiles, skills, onSave }: { workf
         <details className="hub-budget"><summary>{stage.tool ? '工具超时' : '输出预算与超时'}<span>{stage.tool ? '' : `${config.maxTokens.toLocaleString()} Token · `}{config.timeoutMs / 1000} 秒</span></summary><div className="hub-form-grid">{!stage.tool && <label className="field">最多输出 Token<input type="number" min={256} max={32768} step={1} value={Number.isNaN(config.maxTokens) ? '' : config.maxTokens} disabled={busy} onChange={event => update(stage.id, { maxTokens: event.target.valueAsNumber })} /></label>}<label className="field">超时（秒）<input type="number" min={1} max={600} step={1} value={Number.isNaN(config.timeoutMs) ? '' : config.timeoutMs / 1000} disabled={busy} onChange={event => update(stage.id, { timeoutMs: event.target.valueAsNumber * 1000 })} /></label></div></details>
       </article>;
     })}</div>
-    <button type="button" className="text-button hub-legacy-toggle" aria-expanded={showLegacy} onClick={() => setShowLegacy(value => !value)}>{showLegacy ? '收起旧分析流水线的 12 个阶段' : '显示旧分析流水线的 12 个阶段（当前版本不使用）'}</button>
     {showErrors && errors.length > 0 && <div className="hub-validation" role="alert"><p>请先修正以下配置：</p><ul>{errors.map(item => <li key={item}>{item}</li>)}</ul></div>}
     {error && <p className="form-error" role="alert">{error}</p>}{message && <p className="hub-feedback" role="status"><Check size={15} />{message}</p>}
     <div className="hub-save-bar"><span>{dirty ? '有未保存的工作流修改' : '当前配置已保存'}</span><button type="button" className="button primary" disabled={busy || !dirty} onClick={() => void save()}>{busy ? <Spinner size={15} /> : <Save size={15} />}保存工作流</button></div>
@@ -219,6 +217,8 @@ function SkillManager({ skills, workflow, onSave, onDelete }: { skills: Workflow
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [deleting, setDeleting] = useState('');
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const archived = skills.filter(skill => skill.stageId !== 'plan');
   const contentBytes = new TextEncoder().encode(draft.content).byteLength;
   function edit(skill?: WorkflowSkill, copy = false) {
     setId(copy ? undefined : skill?.id); setDraft(skill ? { name: skill.name + (copy ? '（私人副本）' : ''), description: skill.description, category: 'private', enabled: skill.enabled, stageId: skill.stageId, content: skill.content } : { name: '', description: '', category: 'private', enabled: true, stageId: 'plan', content: '' });
@@ -252,9 +252,16 @@ function SkillManager({ skills, workflow, onSave, onDelete }: { skills: Workflow
       <label className="field">Markdown 指令<textarea aria-label="Markdown 指令" rows={14} spellCheck={false} value={draft.content} disabled={busy} onChange={event => setDraft({ ...draft, content: event.target.value })} placeholder={'# 阶段目标\n说明输入、允许的分析步骤、输出格式与核验要求。'} /><small className={contentBytes > 65536 ? 'hub-field-error' : ''}>{(contentBytes / 1024).toFixed(1)} / 64KB。内容作为模型指令使用；工具权限仍由服务器控制。</small></label>
       <div className="hub-actions"><button className="button primary" type="submit" disabled={busy || contentBytes > 65536}>{busy ? <Spinner size={15} /> : <Save size={15} />}保存 Skill</button><button className="button secondary" type="button" disabled={busy} onClick={() => setEditor(false)}>取消</button></div>
     </form>}
-    <div className="hub-card-list">{[...skills].sort((a, b) => Number(b.stageId === 'plan') - Number(a.stageId === 'plan')).map(skill => {
+    <div className="hub-card-list">{skills.filter(skill => skill.stageId === 'plan').map(skill => {
       const used = Object.values(workflow.stages).some(stage => stage.skillId === skill.id);
       return <article className="hub-card" key={skill.id}><div className="hub-card-heading"><div><h4>{skill.name}</h4><p>{WORKFLOW_STAGES.find(stage => stage.id === skill.stageId)?.name || skill.stageId} · v{skill.version}</p></div><span className="hub-badge">{skill.builtin ? '内置' : '私人'} · {skill.enabled ? '已启用' : '已停用'}{skill.stageId !== 'plan' && ' · 旧流水线'}</span></div><p>{skill.description}</p><details className="hub-skill-content"><summary>查看 Markdown 指令</summary><pre>{skill.content}</pre></details><div className="hub-actions"><button type="button" className="text-button" disabled={busy} onClick={() => edit(skill, true)}>创建私人副本</button>{!skill.builtin && <><button type="button" className="text-button" disabled={busy} onClick={() => edit(skill)}>编辑</button><button type="button" className="text-button danger-text" disabled={busy} onClick={() => setDeleting(skill.id)}>删除</button></>}</div>{deleting === skill.id && <div className="hub-delete-confirm"><p>{used ? '此 Skill 正在用于工作流，请先更换阶段 Skill 并保存。' : `确认删除私人 Skill「${skill.name}」？已有任务保留冻结版本。`}</p><div className="hub-actions"><button className="button secondary" type="button" disabled={busy || used} onClick={() => { setBusy(true); setError(''); void onDelete(skill.id).then(() => { setDeleting(''); setMessage('私人 Skill 已删除。'); }).catch((e: Error) => setError(e.message)).finally(() => setBusy(false)); }}>确认删除</button><button className="text-button" type="button" disabled={busy} onClick={() => setDeleting('')}>取消</button></div></div>}</article>;
-    })}</div>{error && <p className="form-error" role="alert">{error}</p>}{message && <p className="hub-feedback" role="status">{message}</p>}
+    })}</div>
+    {archived.length > 0 && <div className="hub-archive">
+      <button type="button" className="text-button hub-legacy-toggle" aria-expanded={archiveOpen} onClick={() => setArchiveOpen(value => !value)}>{archiveOpen ? '收起' : '显示'}归档的旧流水线 Skill（{archived.length}）</button>
+      {archiveOpen && <>
+        <p className="hub-field-hint">这些 Skill 属于已归档的数据分析报告流水线，当前版本不再使用，只保留查看与删除。</p>
+        {archived.map(skill => <div className="hub-archive-row" key={skill.id}><span className="hub-archive-name">{skill.name}</span><span className="hub-badge">{skill.builtin ? '内置' : '私人'}</span>{!skill.builtin && <button type="button" className="text-button danger-text" disabled={busy} onClick={() => { setBusy(true); setError(''); void onDelete(skill.id).then(() => setMessage('归档 Skill 已删除。')).catch((e: Error) => setError(e.message)).finally(() => setBusy(false)); }}>删除</button>}</div>)}
+      </>}
+    </div>}{error && <p className="form-error" role="alert">{error}</p>}{message && <p className="hub-feedback" role="status">{message}</p>}
   </section>;
 }

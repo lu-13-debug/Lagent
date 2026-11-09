@@ -3,12 +3,12 @@ import { createHash } from 'node:crypto';
 import { vaultError } from './credential-vault.js';
 import { STAGE_FIELDS } from './stage-contracts.js';
 
-import { STAGE_DEFINITIONS } from './stage-definitions.js';
-export { STAGE_DEFINITIONS } from './stage-definitions.js';
+import { ACTIVE_STAGES, STAGE_DEFINITIONS } from './stage-definitions.js';
+export { ACTIVE_STAGES, STAGE_DEFINITIONS } from './stage-definitions.js';
 
 const instructions = {
   quality: '优先调用profile检查表结构、缺失、类型、时间覆盖与重复风险。识别尚未确认的业务口径、时区与完整性。只使用聚合证据，不把原始ID、明细或私有字段写进提示词或报告。缺表与覆盖不足必须明确记录，不能虚构可用数据。',
-  plan: '根据分析目标与上游质量产物，生成结构化计划：所需表、指标、分析分支、图表和证据依赖。缺表或用户跳过的分支应明确排除。将需用户确认的处理方案写入计划，不假定业务含义。后续实际操作必须可对应到此计划。',
+  plan: '先用自己的话复述目标，判断这属于改代码、查资料、还是只做判断；需要外部资料时先规划调研步骤，再决定由哪些 Agent 执行。把任务拆成 1 到 5 步，写清每步交给谁、要产出什么、改哪些目录；两个步骤会动同一批文件时排成先后，不要并行。不要编造不存在的文件、函数或结论。',
   preprocess: '仅执行已注册clean工具提供的不改变业务口径的标准化，并记录派生版本及前后差异。删行、填补缺失、改变时间或币种口径等操作只提出待确认方案，标记needsApproval与影响，不自行执行。保留原始数据，不执行任意代码、SQL或命令。',
   activity: '使用已计算的活跃、新增及日期聚合表解释变化；必要时调用describe、group。明确完整天与排除当日的口径。区分规模变化与结构变化，不把登录记录数当作去重用户数。结论必须附已有证据ID，缺少注册表时不推断新增用户。',
   retention: '核对队列起点、分母、观察窗口和时区；仅解释已完整观察的留存。未成熟队列显示未知，不填0。调用既有留存指标及受限统计工具核验趋势，明确样本量与局限；缺注册或活跃表时跳过并说明原因，禁止用想象数字补齐。',

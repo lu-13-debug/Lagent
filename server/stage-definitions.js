@@ -1,6 +1,6 @@
 export const STAGE_DEFINITIONS = Object.freeze([
   ['quality', '数据理解与质量检查', '检查字段、覆盖范围与质量风险', 'skill-quality'],
-  ['plan', '分析计划', '依据目标安排指标、依赖与图表', 'skill-plan'],
+  ['plan', '任务规划', '理解目标、决定步骤与分工', 'skill-plan'],
   ['preprocess', '数据处理', '生成可核验的派生数据处理记录', 'skill-preprocess'],
   ['activity', '活跃与新增分析', '核查活跃、新增及变化', 'skill-activity'],
   ['retention', '留存分析', '依据完整观察窗口分析留存', 'skill-retention'],
@@ -13,3 +13,7 @@ export const STAGE_DEFINITIONS = Object.freeze([
   ['verify', '结果核验', '复核数值、单位、图文及证据', 'skill-verify'],
   ['pdf', 'PDF排版与输出', '导出已核验报告及本地图表', 'skill-pdf'],
 ].map(stage => Object.freeze(stage)));
+
+// 产品配置只保留「任务规划」：其余 12 个阶段属于已归档的数据分析报告流水线，
+// 保留定义是为了让历史任务快照与归档代码仍能读取，但设置界面与工作流配置不再暴露。
+export const ACTIVE_STAGES = Object.freeze(['plan']);
