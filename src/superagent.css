@@ -4819,6 +4819,28 @@ html[data-theme="dark"] .sa-newchat kbd {
   cursor: pointer;
 }
 
+.sa-agent-group {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 18px 0 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--sa-line);
+}
+
+.sa-agent-group h2 {
+  margin: 0;
+  font-size: var(--sa-fs-sm);
+  font-weight: 600;
+  color: var(--sa-text-2);
+  letter-spacing: -0.01em;
+}
+
+.sa-agent-group span {
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+}
+
 .sa-agent-more:hover {
   color: var(--sa-text);
 }
