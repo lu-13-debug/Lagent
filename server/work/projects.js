@@ -284,11 +284,19 @@ export function projectService(db, { environment = process.env, home = os.homedi
     const executorId = typeof input.executorId === 'string' ? input.executorId.trim() : '';
     if (!PROJECT_CHAT_EXECUTORS.includes(executorId)) throw workError('该执行器暂不支持项目对话', 400);
     if (listChats(project.id).length >= PROJECT_LIMITS.maxChatsPerProject) throw workError('每个项目最多 50 个项目对话', 400);
+    // 团队协作的从属会话挂在主会话下面：侧栏只列主会话，右栏再展开各个 Agent。
+    const parentChatId = typeof input.parentChatId === 'string' ? input.parentChatId.trim() : '';
+    if (parentChatId) {
+      const parent = db.get('project-chat', parentChatId);
+      if (!parent || parent.projectId !== project.id) throw workError('上级对话不存在', 404);
+      if (parent.parentChatId) throw workError('只支持两级对话：从属会话不能再挂子会话', 400);
+    }
     const stamp = now();
     const chat = {
       id: randomUUID(),
       projectId: project.id,
       executorId,
+      ...(parentChatId ? { parentChatId } : {}),
       title: typeof input.title === 'string' && input.title.trim() ? cleanTitle(input.title) : `${project.name} · ${executorId === 'window' ? '窗口 Agent' : executorId === 'codex' ? 'Codex' : 'Claude Code'}`,
       // 没有显式标题时先放一个占位标题，等第一条消息到了再用消息内容替换。
       autoTitle: !(typeof input.title === 'string' && input.title.trim()),

@@ -155,11 +155,18 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [detail, setDetail] = useState<WorkTicketDetail | null>(null);
   // 模型 Agent 的实时过程：SSE 推一步就更新一次，按工单 id 存。
   const [liveActivity, setLiveActivity] = useState<Record<string, LiveStep[]>>({});
-  const [projectFocus, setProjectFocus] = useState<string | null>(null);
-  const [chatFocus, setChatFocus] = useState<string | null>(null);
+  const [projectFocus, setProjectFocus] = useState<string | null>(() => new URLSearchParams(window.location.search).get('project'));
+  const [chatFocus, setChatFocus] = useState<string | null>(() => new URLSearchParams(window.location.search).get('chat'));
   const [importTick, setImportTick] = useState(0);
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
   const [folderState, setFolderState] = useState<{ projects: WorkProject[]; projectId: string | null; chatId: string | null }>({ projects: [], projectId: null, chatId: null });
+  // 对话页把 chat 写进地址栏：刷新、分享都能落到同一条对话。
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (view === 'chat' && folderState.chatId) url.searchParams.set('chat', folderState.chatId);
+    else url.searchParams.delete('chat');
+    window.history.replaceState(null, '', url);
+  }, [view, folderState.chatId]);
   const [planDetail, setPlanDetail] = useState<WorkPlan | null>(null);
   const [handoffExecutor, setHandoffExecutor] = useState('');
   const [handoffText, setHandoffText] = useState('');
@@ -1124,6 +1131,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const chatTickets = view === 'chat' && folderState.chatId
     ? tickets.filter(ticket => ticket.projectChatId === folderState.chatId)
     : [];
+  // 团队协作：主对话下面挂着的从属会话，就是被分派到的那些 Agent。
+  const chatChildren = view === 'chat' && folderState.chatId
+    ? (folderState.projects.find(project => project.id === folderState.projectId)?.chats || []).filter(chat => chat.parentChatId === folderState.chatId)
+    : [];
   const inspectorRows = chatTickets.length
     ? chatTickets.slice(0, 8).map(ticket => ({ id: ticket.id, executorId: ticket.executor }))
     : activeGroup
@@ -1634,7 +1645,11 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
                 <button type="button" role="menuitem" className="danger" onClick={() => { setFolderMenu(null); setFolderToDelete(item); }}>移除文件夹</button>
               </div>}
               {!collapsed && <div className="sa-folder-chats">
-                {item.chats.length ? item.chats.map(entry => {
+                {(() => {
+                  // 团队协作的从属会话不在侧栏单列，避免一次协作刷出三四条对话。
+                  const roots = item.chats.filter(entry => !entry.parentChatId);
+                  if (!roots.length) return <p className="sa-folder-empty">还没有会话，点右侧 + 新建一个。</p>;
+                  return roots.map(entry => {
                   const active = activeProject && folderState.chatId === entry.id;
                   if (chatRename?.chatId === entry.id) {
                     return <input key={entry.id} className="sa-chat-rename" autoFocus value={chatRename.value} aria-label="会话标题"
@@ -1643,15 +1658,17 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
                       onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void commitChatRename(); } if (event.key === 'Escape') setChatRename(null); }} />;
                   }
                   const unread = chatUnread(entry);
+                  const subs = item.chats.filter(chat => chat.parentChatId === entry.id).length;
                   return <div className="sa-folder-chat-row" key={entry.id}>
                     <button type="button" className={`sa-conv sa-conv-sub ${active ? 'active' : ''} ${unread ? 'has-unread' : ''}`} title={`${executorNames[entry.executorId] || entry.executorId} · 写入 ${item.path}（双击重命名）`} onClick={() => openFolderChat(item.id, entry.id)} onDoubleClick={event => { event.preventDefault(); setChatRename({ projectId: item.id, chatId: entry.id, value: entry.title }); }}>
                       <span className="sa-conv-body">
-                        <span className="sa-conv-title">{entry.title}{unread && <em className="sa-unread" aria-label="有新的执行结果" />}</span>
+                        <span className="sa-conv-title">{entry.title}{subs > 0 && <em className="sa-chat-sub">{subs} 个 Agent</em>}{unread && <em className="sa-unread" aria-label="有新的执行结果" />}</span>
                       </span>
                     </button>
                     <button type="button" className="sa-folder-chat-del" aria-label={`删除对话 ${entry.title}`} title="删除对话" onClick={() => setChatToDelete({ projectId: item.id, chat: entry })}><X size={11} /></button>
                   </div>;
-                }) : <p className="sa-folder-empty">还没有会话，点右侧 + 新建一个。</p>}
+                  });
+                })()}
               </div>}
             </div>;
           }) : <p className="sa-folder-empty">还没有工作文件夹。添加或拖入一个目录，Agent 就在里面读写文件。</p>}
@@ -1704,7 +1721,22 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             <button type="button" className="sa-icon" aria-label="收起工作详情" title="收起工作详情" onClick={() => setInspectorOpen(false)}><ChevronRight size={15} /></button>
           </header>
           <div className="sa-inspector-list">
-            {inspectorRows.length ? inspectorRows.map(inspectorCard) : <p className="sa-inspector-empty">还没有工作。在左侧描述一个目标开始。</p>}
+            {chatChildren.length > 0 && <div className="sa-inspector-agents">
+              {chatChildren.map(chat => {
+                const label = executorNames[chat.executorId] || chat.executorId;
+                const childStatus = chat.lastTicketStatus || 'waiting';
+                return <article className="sa-card2 sa-card2-link" key={chat.id}>
+                  <button type="button" className="sa-card2-head" onClick={() => openFolderChat(chat.projectId, chat.id)} title="查看这个 Agent 的工作对话">
+                    <span className="sa-card2-dot" data-status={childStatus} />
+                    <span className="sa-card2-name">{label}</span>
+                    <Status status={childStatus} />
+                    <ChevronRight size={13} />
+                  </button>
+                  <p className="sa-card2-summary">{chat.lastSummary || chat.title}</p>
+                </article>;
+              })}
+            </div>}
+            {inspectorRows.length ? inspectorRows.map(inspectorCard) : chatChildren.length ? null : <p className="sa-inspector-empty">还没有工作。在左侧描述一个目标开始。</p>}
           </div>
         </aside>
       : <button type="button" className="sa-inspector-tab" aria-label="展开工作详情" title="展开工作详情" onClick={() => setInspectorOpen(true)}>AGENTS</button>)}

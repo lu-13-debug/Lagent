@@ -572,18 +572,24 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   };
 
   const chatHeader = <header className="pj-chat-head">
-    <button type="button" className="pj-btn pj-small" onClick={() => onExitChat?.()}><ChevronLeft size={14} />返回项目</button>
+    <button type="button" className="pj-btn pj-small" onClick={() => { if (chat?.parentChatId && onOpenChat && project) onOpenChat(project.id, chat.parentChatId); else onExitChat?.(); }}><ChevronLeft size={14} />{chat?.parentChatId ? '返回主对话' : '返回项目'}</button>
     <div className="pj-chat-head-main">
       <strong>{chat?.title || '对话'}</strong>
-      <span>{project ? `${project.name} · ${project.path}` : '工作文件夹'}{chat ? ` · ${EXECUTOR_LABELS[chat.executorId] || chat.executorId}` : ''}</span>
+      <span>{project ? `${project.name} · ${project.path}` : '工作文件夹'}{chat ? ` · ${EXECUTOR_LABELS[chat.executorId] || chat.executorId}` : ''}{chat?.parentChatId ? ' · 团队协作分派' : ''}</span>
     </div>
     {chat && <span className={`pj-source ${chat.executorId !== 'window' && chat.writable ? 'write' : ''}`}>{chat.executorId === 'window' ? '不写文件' : chat.writable ? '可修改项目' : '只读'}</span>}
   </header>;
 
   // 独立对话页：只渲染这一个对话的消息与输入框。
+  // 对话页按时间正序排列：这是「一次对话」，先说的在上面；同批计划步按 planStep 排。
+  const threadTickets = tickets.slice().sort((left, right) => {
+    const stepDelta = (left.planStep ?? -1) - (right.planStep ?? -1);
+    if (left.planId && right.planId && stepDelta !== 0) return stepDelta;
+    return String(left.createdAt).localeCompare(String(right.createdAt));
+  });
   const thread = project && chat ? <div className="pj-thread pj-thread-full">
     <div className="pj-messages">
-      {tickets.length ? tickets.map(ticket => <button type="button" className="pj-message" key={ticket.id} onClick={() => onOpenTicket(ticket.id)}>
+      {threadTickets.length ? threadTickets.map(ticket => <button type="button" className="pj-message" key={ticket.id} onClick={() => onOpenTicket(ticket.id)}>
         <span className="pj-message-head"><span>{STATUS_LABELS[ticket.status] || ticket.status}</span><time>{new Date(ticket.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></span>
         <span className="pj-message-text">{ticket.title}</span>
         {ticket.summary && <span className="pj-message-summary">{ticket.summary}</span>}
@@ -779,16 +785,18 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
             </div>
           </div> : <div className="pj-work">
             <div className="pj-chats">
-              <div className="pj-side-title"><span>项目对话</span><span>{project.chats.length}</span></div>
-              {project.chats.length ? <ul>
-                {project.chats.map(item => <li key={item.id} className={item.id === activeChatId ? 'active' : ''}>
+              <div className="pj-side-title"><span>项目对话</span><span>{project.chats.filter(item => !item.parentChatId).length}</span></div>
+              {project.chats.filter(item => !item.parentChatId).length ? <ul>
+                {project.chats.filter(item => !item.parentChatId).map(item => {
+                  const subs = project.chats.filter(entry => entry.parentChatId === item.id).length;
+                  return <li key={item.id} className={item.id === activeChatId ? 'active' : ''}>
                   <button type="button" className="pj-chat" onClick={() => onOpenChat ? onOpenChat(project.id, item.id) : setActiveChatId(item.id)}>
-                    <span className="pj-chat-title"><Bot size={12} />{item.title}<ChevronRight size={12} className="pj-chat-open" /></span>
+                    <span className="pj-chat-title"><Bot size={12} />{item.title}{subs > 0 && <em className="pj-chat-sub">{subs} 个 Agent</em>}<ChevronRight size={12} className="pj-chat-open" /></span>
                     <span className="pj-chat-meta">{EXECUTOR_LABELS[item.executorId] || item.executorId} · {item.source === 'imported' ? '已导入会话' : item.executorId === 'window' ? '发送到窗口' : item.writable ? '可修改项目' : '只读'}</span>
                     {item.lastSummary && <span className="pj-chat-summary">{item.lastSummary}</span>}
                   </button>
                   <button type="button" className="pj-icon" aria-label="删除对话" disabled={busy === `delete-chat-${item.id}`} onClick={() => void removeChat(item)}><Trash2 size={13} /></button>
-                </li>)}
+                </li>;})}
               </ul> : <p className="pj-empty">还没有项目对话。可导入已有会话，或新建一个。</p>}
             </div>
 

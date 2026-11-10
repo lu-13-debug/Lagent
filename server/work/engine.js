@@ -267,14 +267,19 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     }
     return lines.length ? `【前序步骤材料 · 由 DataAgent 汇总，供你直接使用】\n${lines.join('\n\n')}\n\n` : '';
   };
-  const ensureProjectChat = (project, executorId) => {
-    const existing = projects.listChats(project.id).find(chat => chat.executorId === executorId);
+  const ensureProjectChat = (project, executorId, options = {}) => {
+    const parentChatId = typeof options.parentChatId === 'string' ? options.parentChatId : '';
+    const existing = projects.listChats(project.id).find(chat => chat.executorId === executorId && (chat.parentChatId || '') === parentChatId);
     if (existing) return existing;
     if (!PROJECT_CHAT_EXECUTORS.includes(executorId)) throw workError('该执行器暂不支持项目工作区', 400);
     if (executorId === 'window') throw workError('窗口 Agent 需要先在项目中创建并绑定窗口对话');
     const target = executors.requireAvailable(executorId);
     if (target.kind !== 'cli') throw workError('该执行器暂不支持项目工作区', 400);
-    return projects.createChat(project.id, { executorId });
+    return projects.createChat(project.id, {
+      executorId,
+      ...(parentChatId ? { parentChatId } : {}),
+      ...(typeof options.title === 'string' && options.title.trim() ? { title: options.title.trim().slice(0, 60) } : {})
+    });
   };
   const scopedTicket = ticket => {
     if (!ticket || !ticket.projectChatId) return ticket;
@@ -694,6 +699,13 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       if (!fs.existsSync(projectRecord.path)) throw workError('工作文件夹已不在本机，请重新导入', 409);
     }
     if (clientRequestId.length > 120) throw workError('clientRequestId 最长 120 字');
+    // 团队协作：所有步骤共用一个上级对话，其它执行器作为从属会话挂上去，侧栏只显示这一条。
+    const parentChatId = typeof input.parentChatId === 'string' ? input.parentChatId.trim() : '';
+    const parentChat = parentChatId ? db.get('project-chat', parentChatId) : null;
+    if (parentChatId) {
+      if (!parentChat) throw workError('上级对话不存在', 404);
+      if (!projectRecord) projectRecord = db.get('project', parentChat.projectId);
+    }
     if (clientRequestId) {
       const prior = store.list('plan').find(plan => plan.clientRequestId === clientRequestId);
       if (prior) return publicPlan(prior);
@@ -707,9 +719,17 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       let chat = null;
       if (projectChat || projectRecord) {
         const holder = projectChat ? projectChat.chat : null;
-        chat = holder && targetId === holder.executorId
-          ? holder
-          : projects.listChats((projectRecord || projectChat.project).id).find(row => row.executorId === targetId) || null;
+        const owner = (projectRecord || projectChat.project);
+        if (parentChat) {
+          // 主会话自己的执行器直接复用主会话，其余执行器挂一条从属会话。
+          chat = targetId === parentChat.executorId
+            ? parentChat
+            : projects.listChats(owner.id).find(row => row.executorId === targetId && row.parentChatId === parentChat.id) || null;
+        } else {
+          chat = holder && targetId === holder.executorId
+            ? holder
+            : projects.listChats(owner.id).find(row => row.executorId === targetId && !row.parentChatId) || null;
+        }
         if (!chat && targetId === 'window') throw workError(`第 ${index + 1} 步的窗口 Agent 需要先在项目中绑定窗口对话`);
         if (!chat && target.kind === 'cli' && !PROJECT_CHAT_EXECUTORS.includes(targetId)) throw workError(`第 ${index + 1} 步的执行器不支持项目工作区`);
       }
@@ -724,7 +744,12 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       return { targetId, target, text, rawInput: step.executorInput, datasetId, dependsOn: [...dependsOn], chat, scope };
     });
     for (const step of prepared) {
-      if (projectRecord && !step.chat && PROJECT_CHAT_EXECUTORS.includes(step.targetId)) step.chat = ensureProjectChat(projectRecord, step.targetId);
+      if (projectRecord && !step.chat && PROJECT_CHAT_EXECUTORS.includes(step.targetId)) {
+        step.chat = ensureProjectChat(projectRecord, step.targetId, {
+          ...(parentChat ? { parentChatId: parentChat.id } : {}),
+          title: parentChat ? step.text : ''
+        });
+      }
       step.executorInput = step.chat
         ? normalizeExecutorInput(step.targetId, step.target, projectExecutorInput(step.chat, projectRecord, step.text, step.rawInput, step.target), step.text)
         : normalizeExecutorInput(step.targetId, step.target, step.rawInput, step.text);
@@ -1345,6 +1370,17 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       if(!requested.length)throw workError('团队协作至少选择一个 Agent',400);
       const models=input?.models&&typeof input.models==='object'&&!Array.isArray(input.models)?input.models:{};
       const analysis=await api.analyze({goal,executors:requested.length?requested:undefined,...scope});
+      // 一次协作只开一条主对话：内置 Agent 的思考与汇总留在主对话里，其他 Agent 挂成从属会话。
+      let projectRecord=null;
+      if(projectChatId){const source=db.get('project-chat',projectChatId);if(source)projectRecord=db.get('project',source.projectId);}
+      else if(projectId)projectRecord=db.get('project',projectId);
+      let parentChatId='';
+      if(projectRecord){
+        const source=projectChatId?db.get('project-chat',projectChatId):null;
+        parentChatId=source&&!source.parentChatId&&source.executorId==='model'
+          ? source.id
+          : projects.createChat(projectRecord.id,{executorId:'model',title:goal}).id;
+      }
       const planned=(analysis.steps||[]).filter(step=>step.executorId&&step.executorId!=='model').slice(0,3);
       const chosen=planned.length?planned:[{executorId:requested[0]||'claude-code',title:'执行任务',scope:[]}];
       const brief=[goal,...(analysis.understanding||[]).slice(0,4)].join('\n');
@@ -1379,8 +1415,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           '并明确「下一步建议交给谁、做什么」，方便继续分派。只依据给定材料，不要编造。',
         ].join('\n'),...(profileId?{profileId}:{})}
       });
-      const plan=startPlan({goal,steps,...scope,autoRun:input?.autoRun===true,clientRequestId:typeof input?.clientRequestId==='string'?input.clientRequestId:''});
-      return {plan,steps:plan.steps,analysis};
+      const plan=startPlan({goal,steps,...scope,...(parentChatId?{parentChatId}:{}),autoRun:input?.autoRun===true,clientRequestId:typeof input?.clientRequestId==='string'?input.clientRequestId:''});
+      return {plan,steps:plan.steps,analysis,mainChatId:parentChatId||null};
     },
     commanderReport(id){return commanderReport(id);},    detail(id){
       const ticket=get(id);

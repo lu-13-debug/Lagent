@@ -6000,3 +6000,26 @@ html[data-theme="dark"] .sa-brand-mono {
   color: var(--sa-danger);
   background: var(--sa-danger-soft);
 }
+
+.sa-chat-sub,
+.pj-chat-sub {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--sa-surface-2, #f1f1f3);
+  color: var(--sa-text-3, #86868b);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.sa-card2-link .sa-card2-head {
+  cursor: pointer;
+}
+
+.sa-inspector-agents {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}

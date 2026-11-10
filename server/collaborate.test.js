@@ -71,3 +71,25 @@ test('团队协作：没有可用的外部 Agent 时拒绝执行', async t => {
     /至少选择一个 Agent/
   );
 });
+
+test('团队协作：只在项目里开一条主对话，其他 Agent 挂成从属会话', async t => {
+  const { engine } = harness(t);
+  const project = engine.importProject({ path: process.cwd(), name: 'demo' }).project;
+  const result = await engine.collaborate({
+    goal: '给播放器补一个音量记忆功能',
+    projectId: project.id,
+    agentIds: ['claude-code', 'codex']
+  });
+  const chats = engine.getProject(project.id).chats;
+  const roots = chats.filter(chat => !chat.parentChatId);
+  const children = chats.filter(chat => chat.parentChatId);
+  assert.equal(roots.length, 1, '一次协作只开一条主对话');
+  assert.equal(roots[0].executorId, 'model', '主对话是内置模型 Agent');
+  assert.equal(roots[0].title, '给播放器补一个音量记忆功能', '主对话标题用协作目标');
+  assert.ok(result.mainChatId === roots[0].id, '返回值告诉前端主对话是哪条');
+  assert.ok(children.length >= 1, '外部 Agent 各自挂一条从属会话');
+  for (const child of children) {
+    assert.equal(child.parentChatId, roots[0].id, '从属会话指向主对话');
+    assert.notEqual(child.executorId, 'model');
+  }
+});
