@@ -268,3 +268,26 @@ test('运行：项目里每个执行器各有一个子对话，工单挂在对�
   created.push(run.id);
   assert.ok(created.length === 1);
 });
+
+test('能力路由：没人能接的一步标成跳过，并说清缺哪种能力', async t => {
+  // 只有内置模型可用：调研模板里「补外部信息」要浏览器，model 没有这个能力。
+  const { orchestrator, store } = harness(t, { agents: [{ id: 'model', status: 'available' }] });
+  const run = await orchestrator.start({ goal: '调研一下这个项目该用哪个构建工具' });
+  for (let i = 0; i < 100; i++) {
+    if (orchestrator.get(run.id).status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  const planned = orchestrator.get(run.id);
+  const browserStep = planned.steps.find(step => step.need && step.need.browser);
+  assert.ok(browserStep, '调研模板要有一步需要浏览器');
+  assert.equal(browserStep.executorId, null, '没有浏览器执行器时不硬派给别人');
+
+  await orchestrator.approve(run.id);
+  const done = await settle(orchestrator, run.id);
+  const skipped = done.steps.find(step => step.index === browserStep.index);
+  assert.equal(skipped.status, 'skipped', '挑不出人的步骤要标成跳过，不能一直显示待执行');
+  assert.ok(/browser/.test(skipped.summary || ''), '跳过原因要写清缺哪种能力');
+  assert.ok(done.board.some(item => /找不到具备 browser 能力/.test(item.text)));
+  // 其它步骤照常有人接，工单也照常派。
+  assert.ok(store.list('work-ticket').length >= 2);
+});

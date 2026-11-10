@@ -796,7 +796,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
               const inner = <>
                 <span className="pj-run-step-index">{step.index + 1}</span>
                 <span className="pj-run-step-role">{step.role}</span>
-                <span className="pj-run-step-exec">{step.executorId ? (EXECUTOR_LABELS[step.executorId] || step.executorId) : '待分配'}</span>
+                <span className="pj-run-step-exec">{step.executorId ? (EXECUTOR_LABELS[step.executorId] || step.executorId) : '无可用 Agent'}</span>
                 <span className="pj-run-step-status">{RUN_STEP_LABELS[step.status] || step.status}</span>
               </>;
               const ticketId = step.ticketId;

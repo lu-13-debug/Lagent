@@ -118,7 +118,11 @@ export function createOrchestrator({
   async function dispatch(run, step) {
     const executorId = step.executorId;
     if (!executorId) {
-      runs.note(run, 'decision', `「${step.role}」找不到具备 ${Object.keys(step.need).filter(k => step.need[k]).join('/')} 能力的 Agent，已跳过。`);
+      // 挑不出人时不能装作在跑：把这一步标成「跳过」，并在黑板上写清缺哪种能力。
+      const missing = Object.keys(step.need || {}).filter(key => step.need[key]).join('/');
+      runs.note(run, 'decision', `「${step.role}」找不到具备 ${missing} 能力的 Agent，已跳过。`);
+      runs.updateStep(run, step.index, { status: 'skipped', summary: `没有 Agent 具备 ${missing} 能力`, endedAt: now() });
+      publish({ type: 'run-step', runId: run.id, payload: { index: step.index, status: 'skipped' } });
       return { status: 'skipped', summary: '没有可用 Agent' };
     }
     const chatId = chatFor(run, executorId, step.need?.writes === true);
