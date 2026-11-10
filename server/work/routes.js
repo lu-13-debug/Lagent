@@ -51,6 +51,62 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/command',(req,res)=>res.status(201).json({ticket:engine.command(req.body)}));
   app.get('/api/work/tickets/:id',(req,res)=>res.json(engine.detail(req.params.id)));
   app.delete('/api/work/tickets/:id',(req,res)=>res.json(engine.deleteTicket(req.params.id)));
+  // 编排器：默认开启；DATAAGENT_ORCHESTRATOR=legacy 退回单工单流程。
+  // 关闭时这些路由返回 503，前端据此隐藏入口，而不是报错。
+  const orchestratorOn = () => (process.env.DATAAGENT_ORCHESTRATOR || '').trim().toLowerCase() !== 'legacy';
+  let orchestratorPromise = null;
+  const orchestrator = async () => {
+    if (!orchestratorOn()) {
+      const error = new Error('编排器未启用：去掉 DATAAGENT_ORCHESTRATOR=legacy 并重启服务');
+      error.status = 503;
+      throw error;
+    }
+    if (!orchestratorPromise) {
+      orchestratorPromise = import('./orchestrator/index.js')
+        .then(module => {
+          const created = module.createOrchestrator({ engine, store, emit: publish });
+          created.markInterrupted();
+          return created;
+        })
+        .catch(error => { orchestratorPromise = null; throw error; });
+    }
+    return orchestratorPromise;
+  };
+  const runRoute = handler => async (req, res) => {
+    try {
+      res.json(await handler(req, res));
+    } catch (error) {
+      res.status(error?.status || 500).json({ error: error?.message || '编排器出错了' });
+    }
+  };
+  app.get('/api/work/orchestrator', (_req, res) => res.json({ enabled: orchestratorOn() }));
+  app.get('/api/work/runs', runRoute(async req => {
+    const started = await orchestrator();
+    return { runs: started.list(Number(req.query?.limit) || 20) };
+  }));
+  app.post('/api/work/runs', runRoute(async req => {
+    const started = await orchestrator();
+    const goal = typeof req.body?.goal === 'string' ? req.body.goal.trim() : '';
+    if (!goal || goal.length > 300) {
+      const error = new Error('目标须为 1–300 字');
+      error.status = 400;
+      throw error;
+    }
+    return { run: await started.start({ goal, projectId: req.body?.projectId || null, chatId: req.body?.chatId || null }) };
+  }));
+  app.get('/api/work/runs/:id', runRoute(async req => {
+    const started = await orchestrator();
+    return { run: started.get(req.params.id) };
+  }));
+  app.post('/api/work/runs/:id/approve', runRoute(async req => {
+    const started = await orchestrator();
+    const decision = req.body?.decision === 'reject' ? 'reject' : 'approve';
+    return { run: await started.approve(req.params.id, decision) };
+  }));
+  app.post('/api/work/runs/:id/cancel', runRoute(async req => {
+    const started = await orchestrator();
+    return { run: await started.cancel(req.params.id) };
+  }));
   app.post('/api/work/tickets/:id/actions',(req,res)=>{
     if(req.body?.action==='handoff'){
       const result=engine.handoff(req.params.id,req.body?.input);

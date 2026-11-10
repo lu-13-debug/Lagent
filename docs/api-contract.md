@@ -229,6 +229,20 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 - 计划与工单复用指挥台机制：`autoRun:false`（默认）时全部停在 `awaiting_review` 等你确认；步骤产出照常落盘到 `<项目>/.dataagent/runs/<planId>/`，并在放行下一步时注入 `executorInput.prompt`。
 - 内置 Agent 的模型来自 `profileId`（缺省用工作流默认模型）；未配置模型时 `model` 执行器不可用，接口按执行器校验返回 400/503，不会产生假运行。
 
+### 深度编排（/api/work/runs）
+
+编排器把一句话目标变成一条可追踪的执行链：分析 → 拆解 → 等批准 → 逐步分发 → 验证（不过则返工，最多 2 轮）→ 汇总。设计说明见 [orchestrator.md](orchestrator.md)。
+
+- `GET /api/work/orchestrator` → `{enabled}`。默认开启；`DATAAGENT_ORCHESTRATOR=legacy` 时 `enabled:false`，下面四个写入接口返回 503。
+- `GET /api/work/runs?limit=20` → `{runs:[Run]}`；`GET /api/work/runs/:id` → `{run}`。
+- `POST /api/work/runs {goal,projectId?,chatId?}` → `201 {run}`。goal 1–300 字；带 `projectId` 时在该目录里干活，每个执行器一条子对话（`parentChatId` 指向 `chatId`）。
+- `POST /api/work/runs/:id/approve {decision:'approve'|'reject'}` → `{run}`。批准的是一次运行的全部步骤，逐步执行不再问；执行器内部的越权访问、递归删除、白名单外命令仍各自弹窗。
+- `POST /api/work/runs/:id/cancel` → `{run}`。已派出去的工单不回收，只是不再往下推。
+
+Run `{id,goal,projectId,chatId,templateId,templateLabel,confidence,status,createdAt,updatedAt,endedAt,rounds,maxRounds,steps,board,digest,error}`；
+`status` ∈ `drafting|awaiting_approval|running|verifying|repairing|completed|failed|cancelled|interrupted`；
+`steps[]` 为 `{index,role,need?,executorId,ticketId,status,summary?,error?}`；`board[]` 为 `{at,kind,text}`（上限 200 条，前端展示最近 3 条）。
+
 
 - `GET /api/work/projects/:id/brief.md` → `{project,brief,changes,markdown}`，markdown 为 `# 项目简报：<名称>` 的只读汇总，含目标、进展、任务要点、关键决定、约束与变更记录。
 - `GET /api/work/projects/:id/changes` → `{changes:[ProjectChange]}`；`POST /api/work/projects/:id/changes {title?,summary?,files?,executorId?,ticketId?}` → `201 {change}`。工单完成/失败时自动写入 `source:'auto'`，同一 ticketId 幂等对应同一条记录；项目工单创建时会用 `git status --porcelain` 拍一张执行前快照，完成后只把**本次新增**的改动文件写进 `files`（调用方显式传 `files` 时以传入值为准，不再异步覆盖）；非项目工单仍按旧的异步采集回填（最多 100 项），采集失败不影响工单。`DELETE /api/work/projects/:id/changes/:changeId` → `{id}`。

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AppWindow, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users } from 'lucide-react';
+import { AppWindow, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users, X } from 'lucide-react';
 import { api } from '../api';
 import { Modal } from './ui';
 import { ChatModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
-import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkTeamwork, WorkTicket } from '../superagent';
+import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkRun, WorkTeamwork, WorkTicket } from '../superagent';
 import '../projects.css';
 
 type Props = {
@@ -63,6 +63,27 @@ const STATUS_LABELS: Record<string, string> = {
   recorded: '已记录'
 };
 
+// 编排运行的状态文案；步骤状态复用执行器的那套，避免多一套词。
+const RUN_STATUS_LABELS: Record<string, string> = {
+  drafting: '分析中',
+  awaiting_approval: '等你批准',
+  running: '执行中',
+  verifying: '验证中',
+  repairing: '返工中',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+  interrupted: '已中断'
+};
+const RUN_STEP_LABELS: Record<string, string> = {
+  pending: '待执行',
+  running: '执行中',
+  completed: '完成',
+  failed: '失败',
+  skipped: '跳过',
+  waiting: '等待'
+};
+
 export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onExitChat, onBackToProjects, onApprove, onTicketsChanged }: Props) {
   const chatMode = mode === 'chat';
   const projectMode = mode === 'project';
@@ -89,6 +110,14 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const [sessions, setSessions] = useState<WorkProjectSession[] | null>(null);
   const [chatDraft, setChatDraft] = useState('');
   const [chatModel, setChatModel] = useState<ChatModelChoice>({ profileId: '', effort: 'default' });
+  // 深度编排：开=一次运行里分析/拆解/分发/验证；关=沿用现在的单条工单。
+  const [orchestrate, setOrchestrate] = useState(() => {
+    try { return localStorage.getItem('dataagent.orchestrate.v1') !== 'off'; } catch { return true; }
+  });
+  const [runs, setRuns] = useState<WorkRun[]>([]);
+  const [runBusy, setRunBusy] = useState('');
+  // 服务端关掉编排器（DATAAGENT_ORCHESTRATOR=legacy）时不显示开关，免得点了报 503。
+  const [orchestratorOn, setOrchestratorOn] = useState(true);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [newExecutors, setNewExecutors] = useState<string[]>([]);
   const [newTitle, setNewTitle] = useState('');
@@ -207,6 +236,43 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       .catch(() => { if (!cancelled) setTickets([]); });
     return () => { cancelled = true; };
   }, [chat?.id, chat?.lastTicketId]);
+
+  // 编排器是否启用：只有启用时才显示「深度编排」开关。
+  useEffect(() => {
+    let cancelled = false;
+    api.workOrchestrator()
+      .then(result => {
+        if (cancelled) return;
+        setOrchestratorOn(result.enabled);
+        if (!result.enabled) setOrchestrate(false);
+      })
+      .catch(() => { if (!cancelled) setOrchestratorOn(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // 深度编排的运行记录：只取当前对话的。有活在跑时 3 秒刷一次，空闲时 12 秒兜底
+  // （之前只在「本次加载到活运行」时才续期，刚发起的运行永远刷不到新状态）。
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (!chat) { setRuns([]); return () => { cancelled = true; }; }
+    const chatId = chat.id;
+    const tick = async () => {
+      let delay = 12000;
+      try {
+        const result = await api.workRuns(20);
+        if (cancelled) return;
+        const mine = result.runs.filter(run => run.chatId === chatId);
+        setRuns(mine);
+        if (mine.some(run => ['drafting', 'awaiting_approval', 'running', 'verifying', 'repairing'].includes(run.status))) delay = 3000;
+      } catch {
+        if (!cancelled) setRuns([]);
+      }
+      if (!cancelled) timer = setTimeout(() => void tick(), delay);
+    };
+    void tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [chat?.id]);
 
   // 进对话就停在最新一条上（和常见聊天软件一致），否则新消息会藏在输入框下面。
   useEffect(() => {
@@ -356,6 +422,14 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     if (!chat || !text) return;
     setBusy('send');
     try {
+      // 深度编排：把整句话交给编排器，它自己拆解、分发、验证。
+      if (orchestrate) {
+        const started = await api.workStartRun({ goal: text, projectId: project?.id || null, chatId: chat.id });
+        setChatDraft('');
+        setRuns(current => [started.run, ...current.filter(run => run.id !== started.run.id)]);
+        notify('已开始分析任务；拆完的计划会先给你过一遍，批准后才动手。');
+        return;
+      }
       const result = await api.workProjectChatMessage(chat.id, text, undefined, chat.executorId === 'model' ? chatModel : undefined);
       setChatDraft('');
       setTickets(current => [...current.filter(item => item.id !== result.ticket.id), result.ticket]);
@@ -363,6 +437,31 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       notify(chat.executorId === 'window' ? '已提交，确认后会发送到该窗口的 Agent 会话。' : '已提交，确认后会在项目目录续接该 Agent 会话并修改文件。');
     } catch (cause) { notify((cause as Error).message, true); }
     finally { setBusy(''); }
+  };
+  const toggleOrchestrate = () => {
+    setOrchestrate(current => {
+      const next = !current;
+      try { localStorage.setItem('dataagent.orchestrate.v1', next ? 'on' : 'off'); } catch { /* 隐私模式下忽略 */ }
+      return next;
+    });
+  };
+  const decideRun = async (run: WorkRun, decision: 'approve' | 'reject') => {
+    setRunBusy(`${run.id}:${decision}`);
+    try {
+      const result = await api.workApproveRun(run.id, decision);
+      setRuns(current => current.map(item => item.id === result.run.id ? result.run : item));
+      notify(decision === 'approve' ? '已批准，编排器开始分发执行。' : '已退回，这次运行不会执行。');
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setRunBusy(''); }
+  };
+  const cancelRun = async (run: WorkRun) => {
+    setRunBusy(`${run.id}:cancel`);
+    try {
+      const result = await api.workCancelRun(run.id);
+      setRuns(current => current.map(item => item.id === result.run.id ? result.run : item));
+      notify('已取消这次运行。');
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setRunBusy(''); }
   };
   const toggleDispatchTarget = (id: string) => {
     setDispatchTargets(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
@@ -670,6 +769,38 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
 
   const thread = project && chat ? <div className="pj-thread pj-thread-full">
     <div className="pj-messages pj-conv">
+      {runs.length > 0 && <div className="pj-runs">
+        {runs.map(run => <div className={`pj-run is-${run.status}`} key={run.id}>
+          <div className="pj-run-head">
+            <span className="pj-run-icon"><Sparkles size={13} /></span>
+            <span className="pj-run-title">深度编排</span>
+            {run.templateLabel && <span className="pj-run-tag">{run.templateLabel}</span>}
+            <span className={`pj-run-status is-${run.status}`}>{RUN_STATUS_LABELS[run.status] || run.status}</span>
+            <span className="pj-run-time">{new Date(run.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+          </div>
+          <p className="pj-run-goal">{run.goal}</p>
+          {run.steps.length > 0 && <ol className="pj-run-steps">
+            {run.steps.map(step => <li key={`${run.id}-${step.index}`} className={`pj-run-step is-${step.status}`}>
+              <span className="pj-run-step-index">{step.index + 1}</span>
+              <span className="pj-run-step-role">{step.role}</span>
+              <span className="pj-run-step-exec">{step.executorId ? (EXECUTOR_LABELS[step.executorId] || step.executorId) : '待分配'}</span>
+              <span className="pj-run-step-status">{RUN_STEP_LABELS[step.status] || step.status}</span>
+            </li>)}
+          </ol>}
+          {run.board.length > 0 && <ul className="pj-run-board">
+            {run.board.slice(-3).map((entry, index) => <li key={`${run.id}-board-${index}`}>{entry.text}</li>)}
+          </ul>}
+          {run.status === 'completed' && run.digest && <p className="pj-run-digest">{run.digest}</p>}
+          {run.error && <p className="pj-run-error">{run.error}</p>}
+          <div className="pj-run-actions">
+            {run.status === 'awaiting_approval' && <>
+              <button type="button" className="pj-btn pj-primary pj-small" disabled={runBusy.startsWith(run.id)} onClick={() => void decideRun(run, 'approve')}><Check size={13} />{runBusy === `${run.id}:approve` ? '批准中…' : '批准计划'}</button>
+              <button type="button" className="pj-btn pj-small" disabled={runBusy.startsWith(run.id)} onClick={() => void decideRun(run, 'reject')}>退回</button>
+            </>}
+            {['drafting', 'awaiting_approval', 'running', 'verifying', 'repairing'].includes(run.status) && <button type="button" className="pj-link" disabled={runBusy.startsWith(run.id)} onClick={() => void cancelRun(run)}><X size={12} />取消这次运行</button>}
+          </div>
+        </div>)}
+      </div>}
       {threadTickets.length ? threadTickets.map(ticket => {
         const open = expandedTurns[ticket.id] === true;
         const trace = traces[ticket.id];
@@ -736,11 +867,12 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
         disabled={busy === 'send'}
       />}
       <div className="pj-composer-actions">
+        {orchestratorOn && <button type="button" className={`pj-chip pj-orch${orchestrate ? ' on' : ''}`} aria-pressed={orchestrate} onClick={toggleOrchestrate} title="开着：先分析任务、拆成步骤、分配 Agent，批准后逐步执行并在验证不过时返工">{orchestrate ? <Check size={12} /> : <Plus size={12} />}深度编排</button>}
         <button type="button" className="pj-btn" disabled={!chatDraft.trim() || !dispatchExecutors.length} aria-expanded={dispatchOpen} onClick={toggleDispatchPanel}><Users size={14} />并行分派</button>
         <button type="button" className="pj-btn" disabled={!chatDraft.trim() || planBusy === 'suggest'} onClick={() => void startPlan()}><Sparkles size={14} />{planBusy === 'suggest' ? '拆解中…' : '拆成计划'}</button>
-        <button type="button" className="pj-btn pj-primary" disabled={!chatDraft.trim() || busy === 'send'} onClick={() => void send()}><Send size={14} />{busy === 'send' ? '提交中…' : '发送（需审批）'}</button>
+        <button type="button" className="pj-btn pj-primary" disabled={!chatDraft.trim() || busy === 'send'} onClick={() => void send()}><Send size={14} />{busy === 'send' ? '提交中…' : orchestrate ? '开始编排' : '发送（需审批）'}</button>
       </div>
-      <p className="pj-note pj-note-bar">消息会创建待确认工单；批准后 CLI 会在项目目录内修改文件，窗口 Agent 会把指令发到已绑定的窗口。<button type="button" className="pj-link" onClick={openManualPlan}>手动编排计划</button><span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
+      <p className="pj-note pj-note-bar">{orchestrate ? '深度编排：先分析任务、拆成步骤并分给合适的 Agent，批准后逐步执行，验证不过会自动返工（最多 2 轮）。危险操作仍会单独弹窗。' : '消息会创建待确认工单；批准后 CLI 会在项目目录内修改文件，窗口 Agent 会把指令发到已绑定的窗口。'}<button type="button" className="pj-link" onClick={openManualPlan}>手动编排计划</button><span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
     </div>
   </div> : null;
 

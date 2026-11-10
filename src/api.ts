@@ -1,5 +1,5 @@
 import type { ModelUsageReport, Bootstrap, PublicReport, ShareItem, Dataset, ExploreInput, Exploration, Mode, ModelCatalog, ReportMetadata, Runtime, Settings, Task, TaskSnapshot, TaskResponse, Transaction, User, Wallet } from './types';
-import type { WorkAction, WorkBootstrap, WorkPlan, WorkPlanStep, WorkPolicy, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkTaskAnalysis, WorkTeam, WorkTeamwork, WorkTicket, WorkTicketDetail } from './superagent';
+import type { WorkAction, WorkBootstrap, WorkPlan, WorkPlanStep, WorkPolicy, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkRun, WorkTaskAnalysis, WorkTeam, WorkTeamwork, WorkTicket, WorkTicketDetail } from './superagent';
 import { uploadFiles } from './upload.ts';
 import type { UploadOptions } from './upload';
 
@@ -61,6 +61,12 @@ export const api = {
   workProjectDispatch: (projectId: string, text: string, executorIds: string[], window?: { handle: number; process?: string; title?: string }) => request<{ project: WorkProject; tickets: WorkTicket[] }>(`/work/projects/${encodeURIComponent(projectId)}/dispatch`, { method: 'POST', body: JSON.stringify({ text, executorIds, ...(window ? { window } : {}) }) }),
   workAction: (id: string, action: WorkAction, input?: Record<string, unknown>) => request<{ ticket: WorkTicket }>(`/work/tickets/${encodeURIComponent(id)}/actions`, { method: 'POST', body: JSON.stringify({ action, ...(input ? { input } : {}) }) }),
   workDeleteTicket: (id: string) => request<{ id: string; removed: number; ids: string[]; planRemoved: boolean }>(`/work/tickets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  // 编排器：一次运行 = 分析 → 拆解 → 批准 → 分发 → 验证（可返工）→ 汇总
+  workOrchestrator: () => request<{ enabled: boolean }>('/work/orchestrator'),
+  workRuns: (limit = 20) => request<{ runs: WorkRun[] }>(`/work/runs?limit=${limit}`),
+  workStartRun: (input: { goal: string; projectId?: string | null; chatId?: string | null }) => request<{ run: WorkRun }>('/work/runs', { method: 'POST', body: JSON.stringify(input) }),
+  workApproveRun: (id: string, decision: 'approve' | 'reject' = 'approve') => request<{ run: WorkRun }>(`/work/runs/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify({ decision }) }),
+  workCancelRun: (id: string) => request<{ run: WorkRun }>(`/work/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' }),
   workReviewTeam: (id: string, nodeId: string, decision: 'accept' | 'reject') => request<{ team: WorkTeam }>(`/work/tickets/${encodeURIComponent(id)}/team/${encodeURIComponent(nodeId)}/review`, { method: 'POST', body: JSON.stringify({ decision }) }),
   workDecideProposal: (id: string, nodeId: string, proposalId: string, decision: 'accept' | 'reject') => request<{ team: WorkTeam }>(`/work/tickets/${encodeURIComponent(id)}/team/${encodeURIComponent(nodeId)}/proposals/${encodeURIComponent(proposalId)}`, { method: 'POST', body: JSON.stringify({ decision }) }),
   workPolicy: () => request<{ policy: WorkPolicy }>('/work/policy'),

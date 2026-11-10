@@ -93,6 +93,38 @@ export interface WorkTeamwork {
   problems: { part?: string; message: string }[]; allSettled?: boolean; projectName?: string; projectPath?: string;
   createdAt: string; updatedAt: string;
 }
+export type WorkRunStatus = 'drafting' | 'awaiting_approval' | 'running' | 'verifying' | 'repairing' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+export interface WorkRunStep {
+  index: number;
+  role: string;
+  need?: Record<string, boolean>;
+  executorId: string | null;
+  ticketId: string | null;
+  status: string;
+  summary?: string;
+  error?: string;
+}
+export interface WorkRunBoardEntry { at: string; kind: string; text: string }
+/** 一次「深度编排」：分析目标 → 拆解步骤 → 等批准 → 逐部分发 → 验证（可返工）→ 汇总。 */
+export interface WorkRun {
+  id: string;
+  goal: string;
+  projectId: string | null;
+  chatId: string | null;
+  templateId: string | null;
+  templateLabel: string | null;
+  confidence: number;
+  status: WorkRunStatus;
+  createdAt: string;
+  updatedAt: string;
+  endedAt: string | null;
+  rounds: number;
+  maxRounds: number;
+  steps: WorkRunStep[];
+  board: WorkRunBoardEntry[];
+  digest: string;
+  error: string | null;
+}
 export interface WorkBootstrap {
   capabilities: { work: boolean };
   tickets: WorkTicket[];

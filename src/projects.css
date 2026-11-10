@@ -1212,3 +1212,220 @@
 .pj-head[hidden] {
   display: none;
 }
+
+/* ——— 深度编排：开关与运行卡片 ——— */
+.pj-chip.pj-orch {
+  border: 1px solid var(--sa-line-strong);
+  background: var(--sa-surface);
+  color: var(--sa-text-2);
+}
+
+.pj-chip.pj-orch.on {
+  border-color: var(--sa-accent);
+  background: var(--sa-accent-soft);
+  color: var(--sa-accent-ink);
+  font-weight: 560;
+}
+
+.pj-runs {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.pj-run {
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface);
+  padding: 12px 14px;
+  box-shadow: var(--sa-shadow-sm);
+}
+
+.pj-run.is-awaiting_approval {
+  border-color: var(--sa-accent-line);
+}
+
+.pj-run-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.pj-run-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--sa-r-xs);
+  background: var(--sa-accent-soft);
+  color: var(--sa-accent-ink);
+}
+
+.pj-run-title {
+  font-size: var(--sa-fs-base);
+  font-weight: 600;
+  color: var(--sa-text);
+}
+
+.pj-run-tag {
+  font-size: var(--sa-fs-2xs);
+  padding: 1px 6px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-3);
+}
+
+.pj-run-status {
+  margin-left: auto;
+  font-size: var(--sa-fs-2xs);
+  padding: 1px 7px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-2);
+}
+
+.pj-run-status.is-awaiting_approval {
+  background: var(--sa-warning-soft);
+  color: var(--sa-warning);
+}
+
+.pj-run-status.is-running,
+.pj-run-status.is-verifying,
+.pj-run-status.is-repairing,
+.pj-run-status.is-drafting {
+  background: var(--sa-accent-soft);
+  color: var(--sa-accent-ink);
+}
+
+.pj-run-status.is-completed {
+  background: var(--sa-success-soft);
+  color: var(--sa-success);
+}
+
+.pj-run-status.is-failed,
+.pj-run-status.is-interrupted {
+  background: var(--sa-danger-soft);
+  color: var(--sa-danger);
+}
+
+.pj-run-time {
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.pj-run-goal {
+  margin: 0 0 8px;
+  font-size: var(--sa-fs-sm);
+  line-height: 1.6;
+  color: var(--sa-text-2);
+  overflow-wrap: anywhere;
+}
+
+.pj-run-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.pj-run-step {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--sa-fs-sm);
+  color: var(--sa-text-2);
+  padding: 3px 0;
+}
+
+.pj-run-step-index {
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+  text-align: center;
+}
+
+.pj-run-step-role {
+  color: var(--sa-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pj-run-step-exec {
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.pj-run-step-status {
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.pj-run-step.is-running .pj-run-step-status,
+.pj-run-step.is-running .pj-run-step-role {
+  color: var(--sa-accent-ink);
+}
+
+.pj-run-step.is-completed .pj-run-step-status {
+  color: var(--sa-success);
+}
+
+.pj-run-step.is-failed .pj-run-step-status {
+  color: var(--sa-danger);
+}
+
+.pj-run-board {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  list-style: none;
+  display: grid;
+  gap: 3px;
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface-2);
+}
+
+.pj-run-board li {
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+  overflow-wrap: anywhere;
+}
+
+.pj-run-digest {
+  margin: 8px 0 0;
+  font-size: var(--sa-fs-sm);
+  line-height: 1.65;
+  color: var(--sa-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pj-run-error {
+  margin: 8px 0 0;
+  font-size: var(--sa-fs-sm);
+  color: var(--sa-danger);
+}
+
+.pj-run-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pj-run-actions:empty {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .pj-run-step {
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+  }
+
+  .pj-run-step-exec {
+    display: none;
+  }
+}

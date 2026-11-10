@@ -1,0 +1,200 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Store } from './store.js';
+import { createOrchestrator } from './work/orchestrator/index.js';
+import { detectTemplate, buildSteps, TEMPLATES } from './work/orchestrator/templates.js';
+import { pickExecutor, matches, capabilitiesOf } from './work/orchestrator/capabilities.js';
+
+function harness(t, options = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'dataagent-orchestrator-'));
+  const store = new Store(join(root, 'store.sqlite'));
+  const events = [];
+  let counter = 0;
+  // 假执行器：只是把工单写成「已完成」，用来验证编排的顺序、路由与返工逻辑。
+  const engine = {
+    command(input) {
+      const id = `ticket-${++counter}`;
+      store.put('work-ticket', {
+        id,
+        title: input.text.slice(0, 100),
+        status: 'awaiting_review',
+        executor: input.executorId,
+        ...(input.projectChatId ? { projectChatId: input.projectChatId } : {})
+      });
+      return { id, status: 'awaiting_review' };
+    },
+    action(id, action) {
+      if (action !== 'approve') return { id };
+      const ticket = store.get('work-ticket', id);
+      const outcome = options.outcome || (() => 'completed');
+      const status = outcome(ticket);
+      store.put('work-ticket', { ...ticket, status });
+      store.put('work-report', {
+        id: `report-${id}`,
+        ticketId: id,
+        kind: status === 'completed' ? 'ready' : 'failed',
+        summary: status === 'completed' ? `做完了：${ticket.title.slice(0, 20)}` : '命令退出码 1：测试失败'
+      });
+      return { id, status };
+    },
+    getProject(id) {
+      return { id, chats: [] };
+    },
+    createProjectChat(projectId, input) {
+      return { chat: { id: `chat-${input.executorId}`, executorId: input.executorId, projectId } };
+    }
+  };
+  const orchestrator = createOrchestrator({
+    engine,
+    store,
+    emit: event => events.push(event),
+    listAgents: () => options.agents || [
+      { id: 'claude-code', status: 'available' },
+      { id: 'model', status: 'available' },
+      { id: 'terminal', status: 'available' }
+    ],
+    storageUrl: `file:${join(root, 'runs.db')}`
+  });
+  t.after(() => {
+    store.close();
+    try {
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch {
+      // LibSQL 的文件句柄在 Windows 上可能还没释放，临时目录留给系统清理。
+    }
+  });
+  return { orchestrator, store, events };
+}
+
+async function settle(orchestrator, runId) {
+  const terminal = new Set(['completed', 'failed', 'cancelled']);
+  for (let i = 0; i < 200; i++) {
+    const run = orchestrator.get(runId);
+    if (terminal.has(run.status)) return run;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(`运行没有在预期时间内结束：${orchestrator.get(runId).status}`);
+}
+
+test('模板识别：改代码 / 数据分析 / 调研 / 运维各归各的', () => {
+  assert.equal(detectTemplate('修复首页按钮在窄屏溢出').template.id, 'code-change');
+  assert.equal(detectTemplate('统计近 30 天的留存并出个报表').template.id, 'data-analysis');
+  assert.equal(detectTemplate('对比三个矢量库做选型调研').template.id, 'research');
+  assert.equal(detectTemplate('服务起不来，查一下端口和日志').template.id, 'ops');
+  assert.equal(detectTemplate('做点事').template.id, 'code-change', '没命中时用默认模板');
+  assert.equal(detectTemplate('做点事').confidence, 0);
+});
+
+test('能力路由：写步骤交给能写的 Agent，验证步骤交给能跑命令的', () => {
+  const available = ['model', 'terminal', 'claude-code', 'browser'];
+  assert.equal(pickExecutor(available, { reads: true, writes: true }), 'claude-code', '优先外部 CLI');
+  assert.equal(pickExecutor(['model', 'terminal'], { reads: true, writes: true }), 'model', '没有外部 CLI 时退回内置模型');
+  assert.equal(pickExecutor(['model', 'terminal'], { commands: true }), 'model', '终端执行器不做代码工作');
+  assert.equal(pickExecutor(['browser'], { reads: true, writes: true }), null, '没有能写的就返回 null');
+  assert.equal(matches('browser', { browser: true }), true);
+  assert.equal(capabilitiesOf('不存在').writes, false);
+});
+
+test('模板步骤：每一步都带提示词与所需能力', () => {
+  for (const template of TEMPLATES) {
+    const steps = buildSteps(template, '修好登录页');
+    assert.ok(steps.length >= 3, `${template.id} 至少三步`);
+    for (const step of steps) {
+      assert.ok(step.prompt.includes('修好登录页'), '提示词要带上目标');
+      assert.ok(Object.keys(step.need).length >= 1, '每一步都要声明能力需求');
+    }
+  }
+});
+
+test('运行：先出计划等批准，批准后逐步执行并汇总', async t => {
+  const { orchestrator, events } = harness(t);
+  const created = await orchestrator.start({ goal: '修复首页按钮在窄屏溢出' });
+
+  let run = null;
+  for (let i = 0; i < 100; i++) {
+    run = orchestrator.get(created.id);
+    if (run.status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(run.status, 'awaiting_approval', '没有批准前不应该开跑');
+  assert.equal(run.templateId, 'code-change');
+  assert.equal(run.steps.length, 3);
+  assert.deepEqual(run.steps.map(step => step.executorId), ['claude-code', 'claude-code', 'claude-code']);
+
+  await orchestrator.approve(created.id);
+  const done = await settle(orchestrator, created.id);
+  assert.equal(done.status, 'completed');
+  assert.equal(done.steps.filter(step => step.status === 'done').length, 3);
+  assert.match(done.digest, /目标：修复首页按钮在窄屏溢出/);
+  assert.match(done.digest, /模板：改代码/);
+  assert.ok(events.some(event => event.type === 'run-step'), '要发出步骤事件给界面');
+});
+
+test('运行：验证失败会返工一次，第二次通过就算成功', async t => {
+  let verifyCalls = 0;
+  const { orchestrator } = harness(t, {
+    outcome: ticket => {
+      if (!ticket.title.startsWith('验证')) return 'completed';
+      verifyCalls += 1;
+      return verifyCalls === 1 ? 'failed' : 'completed';
+    }
+  });
+  const created = await orchestrator.start({ goal: '修复首页按钮在窄屏溢出' });
+  for (let i = 0; i < 100; i++) {
+    if (orchestrator.get(created.id).status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  await orchestrator.approve(created.id);
+  const done = await settle(orchestrator, created.id);
+  assert.equal(done.status, 'completed');
+  assert.equal(done.rounds, 1, '只返工一轮');
+  assert.equal(verifyCalls, 2, '验证跑了两次');
+  assert.ok(done.steps.some(step => step.role === '修掉问题'), '返工步骤要留在记录里');
+  assert.ok(done.board.some(item => /验证没通过/.test(item.text)));
+});
+
+test('运行：验证一直不过时最多返工两轮，然后判失败', async t => {
+  const { orchestrator } = harness(t, { outcome: ticket => (ticket.title.includes('验证') ? 'failed' : 'completed') });
+  const created = await orchestrator.start({ goal: '修复首页按钮在窄屏溢出' });
+  for (let i = 0; i < 100; i++) {
+    if (orchestrator.get(created.id).status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  await orchestrator.approve(created.id);
+  const done = await settle(orchestrator, created.id);
+  assert.equal(done.status, 'failed');
+  assert.equal(done.rounds, 2);
+});
+
+test('运行：拒绝批准就结束，不派任何工单', async t => {
+  const { orchestrator, store } = harness(t);
+  const created = await orchestrator.start({ goal: '这段代码需要重构一下' });
+  for (let i = 0; i < 100; i++) {
+    if (orchestrator.get(created.id).status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  await orchestrator.approve(created.id, 'reject');
+  const run = await settle(orchestrator, created.id);
+  assert.equal(run.status, 'cancelled');
+  assert.equal(store.list('work-ticket').length, 0);
+});
+
+test('运行：项目里每个执行器各有一个子对话，工单挂在对应对话上', async t => {
+  const created = [];
+  const { orchestrator, store } = harness(t);
+  const run = await orchestrator.start({ goal: '修复首页按钮在窄屏溢出', projectId: 'project-1' });
+  for (let i = 0; i < 100; i++) {
+    if (orchestrator.get(run.id).status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  await orchestrator.approve(run.id);
+  await settle(orchestrator, run.id);
+  const tickets = store.list('work-ticket');
+  assert.ok(tickets.length >= 3);
+  for (const ticket of tickets) assert.ok(ticket.projectChatId, '项目运行里的工单要挂在对话上');
+  created.push(run.id);
+  assert.ok(created.length === 1);
+});
