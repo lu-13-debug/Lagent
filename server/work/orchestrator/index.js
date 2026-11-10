@@ -35,14 +35,40 @@ export function createOrchestrator({
       .map(agent => agent.id);
   }
 
+  // 模板有两种来源：用户在对话里手动选的（templateChoice），或者按目标关键词猜的。
+  // 手动选的优先，不再猜；这样「补一份 README」这类词面不明显的目标也能选对模板。
+  function templateOf(run) {
+    const manual = run.templateChoice ? templateById(run.templateChoice) : null;
+    if (manual) return { template: manual, confidence: 1, manual: true };
+    return { ...detectTemplate(run.goal), manual: false };
+  }
+
+  // 把前几步的结论摘成一段，跟着下一步的提示词一起发过去。
+  // 没有这个，后面几步只能看到自己的任务，容易把上一步已经做完的事再做一遍。
+  function boardBrief(run) {
+    // 只带「上一步做完了什么」和「验证发现了什么」：模板判定这类决策对执行没帮助，反而占提示词。
+    const entries = (run.board || []).filter(item => item.kind === 'result' || item.kind === 'check').slice(-6);
+    if (!entries.length) return '';
+    const lines = [];
+    let size = 0;
+    for (const entry of entries) {
+      const line = `- ${String(entry.text || '').replace(/\s+/g, ' ').slice(0, 200)}`;
+      if (size + line.length > 800) break;
+      lines.push(line);
+      size += line.length + 1;
+    }
+    return lines.length ? `前几步的结论（供参考，别重复做）：\n${lines.join('\n')}` : '';
+  }
+
   function planStepsFor(run) {
-    const { template, confidence } = detectTemplate(run.goal);
+    const { template, confidence, manual } = templateOf(run);
     const steps = buildSteps(template, run.goal);
     const available = agentsUsable();
     const preferred = ['claude-code', 'codex', 'model'];
     return {
       template,
       confidence,
+      manual,
       steps: steps.map(step => ({
         ...step,
         executorId: pickExecutor(available, step.need, preferred),
@@ -96,8 +122,11 @@ export function createOrchestrator({
       return { status: 'skipped', summary: '没有可用 Agent' };
     }
     const chatId = chatFor(run, executorId, step.need?.writes === true);
+    const brief = boardBrief(run);
+    // 上下文放后面：工单标题取的是开头，前面塞一段摘要会让列表里看不出这一步在干什么。
     const ticket = engine.command({
-      text: step.prompt,
+      text: brief ? `${step.prompt}\n\n${brief}` : step.prompt,
+      title: step.prompt,
       executorId,
       ...(chatId ? { projectChatId: chatId } : {})
     });
@@ -128,13 +157,15 @@ export function createOrchestrator({
     outputSchema: z.object({ runId: z.string() }),
     execute: async ({ inputData }) => {
       const run = runs.get(inputData.runId);
-      const { template, confidence } = detectTemplate(run.goal);
+      const { template, confidence, manual } = templateOf(run);
       run.templateId = template.id;
       run.templateLabel = template.label;
       run.confidence = confidence;
-      runs.note(run, 'decision', confidence > 0
-        ? `判定为「${template.label}」类任务（关键词命中 ${Math.round(confidence * 3)} 个）`
-        : `没命中关键词，按默认的「${template.label}」处理`);
+      runs.note(run, 'decision', manual
+        ? `按你选的「${template.label}」模板拆解`
+        : confidence > 0
+          ? `判定为「${template.label}」类任务（关键词命中 ${Math.round(confidence * 3)} 个）`
+          : `没命中关键词，按默认的「${template.label}」处理`);
       runs.setStatus(run, RUN_STATUS.drafting);
       publish({ type: 'run', runId: run.id, payload: { status: run.status, templateId: run.templateId } });
       return { runId: run.id };
@@ -226,6 +257,7 @@ export function createOrchestrator({
         }
         let result = await dispatch(run, step);
         let round = 0;
+        let previous = String(result.summary || '').trim();
         while (result.status !== 'completed' && round < run.maxRounds && !run.cancelledAt) {
           round += 1;
           run.rounds = (run.rounds || 0) + 1;
@@ -245,6 +277,13 @@ export function createOrchestrator({
           await dispatch(run, fix);
           runs.setStatus(run, RUN_STATUS.verifying);
           result = await dispatch(run, { ...step, ticketId: null });
+          const current = String(result.summary || '').trim();
+          // 返工一轮后结论一字不变，说明这条路走不通，再试就是重复同样的失败。
+          if (result.status !== 'completed' && current && current === previous) {
+            runs.note(run, 'check', '返工后结果没有变化，先停下，避免重复同样的失败。');
+            break;
+          }
+          previous = current;
         }
         if (result.status !== 'completed') {
           runs.note(run, 'check', `返工 ${round} 轮仍未通过验证，这次运行标记为失败。`);
@@ -319,8 +358,18 @@ export function createOrchestrator({
     return context;
   }
 
-  async function start({ goal, projectId = null, chatId = null }) {
+  async function start({ goal, projectId = null, chatId = null, templateId = null }) {
+    const template = templateId ? templateById(templateId) : null;
+    if (templateId && !template) {
+      const error = new Error(`未知的任务模板：${templateId}`);
+      error.status = 400;
+      throw error;
+    }
     const run = runs.create({ goal, projectId, chatId });
+    if (template) {
+      run.templateChoice = template.id;
+      runs.save(run);
+    }
     await startWorkflow(run);
     return run;
   }

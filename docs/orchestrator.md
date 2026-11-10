@@ -45,12 +45,16 @@ drafting ──→ awaiting_approval ──→ running ──→ verifying ─�
 | --- | --- | --- |
 | GET | `/api/work/orchestrator` | `{ enabled }`，前端据此决定是否显示开关 |
 | GET | `/api/work/runs?limit=20` | 最近的运行（含步骤与黑板） |
-| POST | `/api/work/runs` | `{ goal, projectId?, chatId? }` → 起一次运行 |
+| POST | `/api/work/runs` | `{ goal, projectId?, chatId?, templateId? }` → 起一次运行 |
 | GET | `/api/work/runs/:id` | 单次运行 |
 | POST | `/api/work/runs/:id/approve` | `{ decision: 'approve' \| 'reject' }` |
 | POST | `/api/work/runs/:id/cancel` | 取消（已经派出去的工单不回收） |
 
 目标长度 1–300 字；`projectId` 给了就在该项目的目录里干活，每个执行器各有一条子对话。
+
+`templateId` 可选：给了就按这套模板拆（`code-change` / `data-analysis` / `research` / `ops`），不再按
+关键词猜；给了不存在的模板直接 400，不会悄悄退回自动识别。运行记录里 `templateChoice` 记下这次是手选
+还是自动识别。
 
 ## 能力路由
 
@@ -63,6 +67,15 @@ drafting ──→ awaiting_approval ──→ running ──→ verifying ─�
 运行期间的关键决策（模板判定、分配理由、验证结论）写进 `run.board`（上限 200 条），前端只显示最近
 3 条。成功结束时 `run.digest` 是这次运行的总结；项目记忆仍由 `project-memory` 在执行完成后写入，
 两者不重复。
+
+派发每一步时，会把黑板里最近的「上一步做完了什么」和「验证发现了什么」拼在**提示词末尾**发给执行器，
+后面几步因此知道前面做过什么，不会把同一件事再做一遍。拼接只带这两类，模板判定之类决策对执行没帮助。
+摘要放在末尾是为了工单标题仍取这一步的任务本身——标题走 `command({ title })`，不从整段提示词里截。
+
+## 返工
+
+验证不过就插一条「修掉问题」步骤重跑验证，最多 2 轮。如果返工后验证结论和上一轮**一字不差**，说明
+这条路走不通，直接停下并记「返工后结果没有变化」，不做重复的失败。
 
 ## 打开与关闭
 

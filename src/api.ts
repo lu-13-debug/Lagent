@@ -64,7 +64,7 @@ export const api = {
   // 编排器：一次运行 = 分析 → 拆解 → 批准 → 分发 → 验证（可返工）→ 汇总
   workOrchestrator: () => request<{ enabled: boolean }>('/work/orchestrator'),
   workRuns: (limit = 20) => request<{ runs: WorkRun[] }>(`/work/runs?limit=${limit}`),
-  workStartRun: (input: { goal: string; projectId?: string | null; chatId?: string | null }) => request<{ run: WorkRun }>('/work/runs', { method: 'POST', body: JSON.stringify(input) }),
+  workStartRun: (input: { goal: string; projectId?: string | null; chatId?: string | null; templateId?: string | null }) => request<{ run: WorkRun }>('/work/runs', { method: 'POST', body: JSON.stringify(input) }),
   workApproveRun: (id: string, decision: 'approve' | 'reject' = 'approve') => request<{ run: WorkRun }>(`/work/runs/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify({ decision }) }),
   workCancelRun: (id: string) => request<{ run: WorkRun }>(`/work/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' }),
   workReviewTeam: (id: string, nodeId: string, decision: 'accept' | 'reject') => request<{ team: WorkTeam }>(`/work/tickets/${encodeURIComponent(id)}/team/${encodeURIComponent(nodeId)}/review`, { method: 'POST', body: JSON.stringify({ decision }) }),

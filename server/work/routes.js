@@ -92,7 +92,12 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
       error.status = 400;
       throw error;
     }
-    return { run: await started.start({ goal, projectId: req.body?.projectId || null, chatId: req.body?.chatId || null }) };
+    return { run: await started.start({
+      goal,
+      projectId: req.body?.projectId || null,
+      chatId: req.body?.chatId || null,
+      templateId: typeof req.body?.templateId === 'string' && req.body.templateId ? req.body.templateId : null
+    }) };
   }));
   app.get('/api/work/runs/:id', runRoute(async req => {
     const started = await orchestrator();

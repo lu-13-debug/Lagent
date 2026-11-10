@@ -1227,6 +1227,59 @@
   font-weight: 560;
 }
 
+/* 模板选择贴着「深度编排」放，开着编排才出现。 */
+.pj-orch-template {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 22px 0 10px;
+  border: 1px solid var(--sa-line-strong);
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface);
+  font-size: var(--sa-fs-xs);
+  color: var(--sa-text-3);
+  white-space: nowrap;
+}
+
+/* 原生 select 的边框和箭头在胶囊里像套了个小胶囊，这里自己画箭头。 */
+.pj-composer-actions .pj-orch-template select {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 22px;
+  min-height: 0;
+  max-width: 108px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sa-text);
+  font: inherit;
+  font-size: var(--sa-fs-xs);
+  cursor: pointer;
+}
+
+.pj-orch-template::after {
+  content: '';
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -4px;
+  border-right: 1.5px solid var(--sa-text-3);
+  border-bottom: 1.5px solid var(--sa-text-3);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+.pj-composer-actions .pj-orch-template select:focus-visible {
+  outline: 2px solid var(--sa-accent);
+  outline-offset: 2px;
+  border-radius: var(--sa-r-full);
+}
+
 .pj-runs {
   display: grid;
   gap: 10px;
@@ -1329,6 +1382,44 @@
   list-style: none;
   display: grid;
   gap: 4px;
+}
+
+/* 进度条：只看步骤列表也能数，但一眼看到「走到第几步了」更省事。 */
+.pj-run-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.pj-run-progress-bar {
+  flex: 1;
+  min-width: 0;
+  height: 3px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-3);
+  overflow: hidden;
+}
+
+.pj-run-progress-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--sa-accent);
+  transition: width var(--sa-t-base) var(--sa-ease);
+}
+
+.pj-run.is-failed .pj-run-progress-bar i,
+.pj-run.is-cancelled .pj-run-progress-bar i,
+.pj-run.is-interrupted .pj-run-progress-bar i {
+  background: var(--sa-text-3);
+}
+
+.pj-run-progress-text {
+  flex: none;
+  font-size: var(--sa-fs-xs);
+  color: var(--sa-text-3);
+  font-variant-numeric: tabular-nums;
 }
 
 .pj-run-step {

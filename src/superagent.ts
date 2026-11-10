@@ -113,6 +113,8 @@ export interface WorkRun {
   chatId: string | null;
   templateId: string | null;
   templateLabel: string | null;
+  /** 用户在对话里手选的模板 id；null 表示按目标关键词自动识别。 */
+  templateChoice?: string | null;
   confidence: number;
   status: WorkRunStatus;
   createdAt: string;

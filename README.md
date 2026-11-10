@@ -219,6 +219,7 @@ scripts/              开发启动与浏览器验收
 desktop/              Windows 桌面主进程与运行验收
 release/              Windows 安装包与校验文件（构建生成）
 docs/api-contract.md  前后端接口
+docs/orchestrator.md  内置 Agent 的深度编排（拆解、分派、验证、返工）
 docs/superpowers/     设计与实施记录
 data/                 本地运行数据（自动生成，不进入版本控制）
 ```

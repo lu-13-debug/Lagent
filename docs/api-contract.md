@@ -235,11 +235,11 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 
 - `GET /api/work/orchestrator` → `{enabled}`。默认开启；`DATAAGENT_ORCHESTRATOR=legacy` 时 `enabled:false`，下面四个写入接口返回 503。
 - `GET /api/work/runs?limit=20` → `{runs:[Run]}`；`GET /api/work/runs/:id` → `{run}`。
-- `POST /api/work/runs {goal,projectId?,chatId?}` → `201 {run}`。goal 1–300 字；带 `projectId` 时在该目录里干活，每个执行器一条子对话（`parentChatId` 指向 `chatId`）。
+- `POST /api/work/runs {goal,projectId?,chatId?,templateId?}` → `201 {run}`。goal 1–300 字；带 `projectId` 时在该目录里干活，每个执行器一条子对话（`parentChatId` 指向 `chatId`）。`templateId` 可选（`code-change|data-analysis|research|ops`）：给了就按它拆、不再按关键词猜，给了不存在的模板返回 400。
 - `POST /api/work/runs/:id/approve {decision:'approve'|'reject'}` → `{run}`。批准的是一次运行的全部步骤，逐步执行不再问；执行器内部的越权访问、递归删除、白名单外命令仍各自弹窗。
 - `POST /api/work/runs/:id/cancel` → `{run}`。已派出去的工单不回收，只是不再往下推。
 
-Run `{id,goal,projectId,chatId,templateId,templateLabel,confidence,status,createdAt,updatedAt,endedAt,rounds,maxRounds,steps,board,digest,error}`；
+Run `{id,goal,projectId,chatId,templateId,templateLabel,templateChoice,confidence,status,createdAt,updatedAt,endedAt,rounds,maxRounds,steps,board,digest,error}`；
 `status` ∈ `drafting|awaiting_approval|running|verifying|repairing|completed|failed|cancelled|interrupted`；
 `steps[]` 为 `{index,role,need?,executorId,ticketId,status,summary?,error?}`；`board[]` 为 `{at,kind,text}`（上限 200 条，前端展示最近 3 条）。
 

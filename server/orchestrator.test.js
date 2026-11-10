@@ -19,7 +19,8 @@ function harness(t, options = {}) {
       const id = `ticket-${++counter}`;
       store.put('work-ticket', {
         id,
-        title: input.text.slice(0, 100),
+        title: (typeof input.title === 'string' && input.title.trim() ? input.title.trim() : input.text).slice(0, 100),
+        text: input.text,
         status: 'awaiting_review',
         executor: input.executorId,
         ...(input.projectChatId ? { projectChatId: input.projectChatId } : {})
@@ -36,7 +37,12 @@ function harness(t, options = {}) {
         id: `report-${id}`,
         ticketId: id,
         kind: status === 'completed' ? 'ready' : 'failed',
-        summary: status === 'completed' ? `做完了：${ticket.title.slice(0, 20)}` : '命令退出码 1：测试失败'
+        // 每次失败的报告文字都不一样，模拟「返工后确实有变化」；需要模拟「毫无变化」时用 options.summary。
+        summary: options.summary
+          ? options.summary(ticket, status)
+          : status === 'completed'
+            ? `做完了：${ticket.title.slice(0, 20)}`
+            : `命令退出码 1：测试失败（第 ${counter} 次）`
       });
       return { id, status };
     },
@@ -169,6 +175,59 @@ test('运行：验证一直不过时最多返工两轮，然后判失败', async
   const done = await settle(orchestrator, created.id);
   assert.equal(done.status, 'failed');
   assert.equal(done.rounds, 2);
+});
+
+test('运行：返工后结论一字不变就停下，不重复同样的失败', async t => {
+  const { orchestrator } = harness(t, {
+    outcome: ticket => (ticket.title.includes('验证') ? 'failed' : 'completed'),
+    summary: () => '命令退出码 1：测试失败'
+  });
+  const created = await orchestrator.start({ goal: '修复首页按钮在窄屏溢出' });
+  for (let i = 0; i < 100; i++) {
+    if (orchestrator.get(created.id).status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  await orchestrator.approve(created.id);
+  const done = await settle(orchestrator, created.id);
+  assert.equal(done.status, 'failed');
+  assert.equal(done.rounds, 1, '一轮之后发现没有变化就停');
+  assert.ok(done.board.some(item => /没有变化/.test(item.text)));
+});
+
+test('运行：手选模板就按选的拆，不再按关键词猜', async t => {
+  const { orchestrator } = harness(t);
+  const created = await orchestrator.start({ goal: '看看这批订单怎么回事', templateId: 'data-analysis' });
+  for (let i = 0; i < 100; i++) {
+    if (orchestrator.get(created.id).status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  const planned = orchestrator.get(created.id);
+  assert.equal(planned.templateId, 'data-analysis');
+  assert.equal(planned.templateChoice, 'data-analysis');
+  assert.deepEqual(planned.steps.map(step => step.role), ['读数据', '算结果', '核对口径']);
+  assert.ok(planned.board.some(item => /按你选的/.test(item.text)));
+});
+
+test('运行：不认识的模板直接报错，不会悄悄退回自动识别', async t => {
+  const { orchestrator } = harness(t);
+  await assert.rejects(() => orchestrator.start({ goal: '随便干点什么', templateId: 'not-a-template' }), /未知的任务模板/);
+});
+
+test('运行：后面的步骤能看到前面几步的结论，但工单标题仍是这一步的任务', async t => {
+  const { orchestrator, store } = harness(t);
+  const created = await orchestrator.start({ goal: '修复首页按钮在窄屏溢出' });
+  for (let i = 0; i < 100; i++) {
+    if (orchestrator.get(created.id).status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  await orchestrator.approve(created.id);
+  const done = await settle(orchestrator, created.id);
+  assert.equal(done.status, 'completed');
+  const tickets = done.steps.map(step => step.ticketId).filter(Boolean).map(id => store.get('work-ticket', id)).filter(Boolean);
+  assert.ok(tickets.length >= 2);
+  assert.ok(!/前几步的结论/.test(tickets[0].title), '第一步没有上文可带');
+  assert.ok(/前几步的结论/.test(tickets[1].text), '第二步要带上前一步的结论');
+  assert.ok(!/前几步的结论/.test(tickets[1].title), '标题只留这一步的任务，不要在列表里显示摘要');
 });
 
 test('运行：拒绝批准就结束，不派任何工单', async t => {

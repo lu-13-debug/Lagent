@@ -111,6 +111,10 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const [chatDraft, setChatDraft] = useState('');
   const [chatModel, setChatModel] = useState<ChatModelChoice>({ profileId: '', effort: 'default' });
   // 深度编排：开=一次运行里分析/拆解/分发/验证；关=沿用现在的单条工单。
+  // 深度编排的模板：空字符串 = 让编排器按目标猜，其余为用户手选。
+  const [orchTemplate, setOrchTemplate] = useState(() => {
+    try { return localStorage.getItem('dataagent.orchtemplate.v1') || ''; } catch { return ''; }
+  });
   const [orchestrate, setOrchestrate] = useState(() => {
     try { return localStorage.getItem('dataagent.orchestrate.v1') !== 'off'; } catch { return true; }
   });
@@ -424,7 +428,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     try {
       // 深度编排：把整句话交给编排器，它自己拆解、分发、验证。
       if (orchestrate) {
-        const started = await api.workStartRun({ goal: text, projectId: project?.id || null, chatId: chat.id });
+        const started = await api.workStartRun({ goal: text, projectId: project?.id || null, chatId: chat.id, templateId: orchTemplate || null });
         setChatDraft('');
         setRuns(current => [started.run, ...current.filter(run => run.id !== started.run.id)]);
         notify('已开始分析任务；拆完的计划会先给你过一遍，批准后才动手。');
@@ -770,15 +774,23 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const thread = project && chat ? <div className="pj-thread pj-thread-full">
     <div className="pj-messages pj-conv">
       {runs.length > 0 && <div className="pj-runs">
-        {runs.map(run => <div className={`pj-run is-${run.status}`} key={run.id}>
+        {runs.map(run => {
+          const total = run.steps.length;
+          const done = run.steps.filter(step => step.status === 'done' || step.status === 'skipped').length;
+          const pct = total ? Math.round((done / total) * 100) : 0;
+          return <div className={`pj-run is-${run.status}`} key={run.id}>
           <div className="pj-run-head">
             <span className="pj-run-icon"><Sparkles size={13} /></span>
             <span className="pj-run-title">深度编排</span>
-            {run.templateLabel && <span className="pj-run-tag">{run.templateLabel}</span>}
+            {run.templateLabel && <span className="pj-run-tag">{run.templateLabel}{run.templateChoice ? ' · 手选' : ''}</span>}
             <span className={`pj-run-status is-${run.status}`}>{RUN_STATUS_LABELS[run.status] || run.status}</span>
             <span className="pj-run-time">{new Date(run.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
           </div>
           <p className="pj-run-goal">{run.goal}</p>
+          {total > 0 && <div className="pj-run-progress" role="progressbar" aria-valuenow={done} aria-valuemin={0} aria-valuemax={total} aria-label="已完成的步骤">
+            <span className="pj-run-progress-bar"><i style={{ width: `${pct}%` }} /></span>
+            <span className="pj-run-progress-text">{done}/{total} 步</span>
+          </div>}
           {run.steps.length > 0 && <ol className="pj-run-steps">
             {run.steps.map(step => {
               const inner = <>
@@ -808,7 +820,8 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
             </>}
             {['drafting', 'awaiting_approval', 'running', 'verifying', 'repairing'].includes(run.status) && <button type="button" className="pj-link" disabled={runBusy.startsWith(run.id)} onClick={() => void cancelRun(run)}><X size={12} />取消这次运行</button>}
           </div>
-        </div>)}
+        </div>;
+        })}
       </div>}
       {threadTickets.length ? threadTickets.map(ticket => {
         const open = expandedTurns[ticket.id] === true;
@@ -877,6 +890,26 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       />}
       <div className="pj-composer-actions">
         {orchestratorOn && <button type="button" className={`pj-chip pj-orch${orchestrate ? ' on' : ''}`} aria-pressed={orchestrate} onClick={toggleOrchestrate} title="开着：先分析任务、拆成步骤、分配 Agent，批准后逐步执行并在验证不过时返工">{orchestrate ? <Check size={12} /> : <Plus size={12} />}深度编排</button>}
+        {orchestrate && (
+          <label className="pj-orch-template" title="用哪套步骤模板；自动识别按目标里的关键词猜">
+            <span>模板</span>
+            <select
+              value={orchTemplate}
+              disabled={busy === 'send'}
+              onChange={event => {
+                const next = event.target.value;
+                setOrchTemplate(next);
+                try { localStorage.setItem('dataagent.orchtemplate.v1', next); } catch { /* 隐私模式下忽略 */ }
+              }}
+            >
+              <option value="">自动识别</option>
+              <option value="code-change">改代码</option>
+              <option value="data-analysis">数据分析</option>
+              <option value="research">资料研究</option>
+              <option value="ops">运维处置</option>
+            </select>
+          </label>
+        )}
         <button type="button" className="pj-btn" disabled={!chatDraft.trim() || !dispatchExecutors.length} aria-expanded={dispatchOpen} onClick={toggleDispatchPanel}><Users size={14} />并行分派</button>
         <button type="button" className="pj-btn" disabled={!chatDraft.trim() || planBusy === 'suggest'} onClick={() => void startPlan()}><Sparkles size={14} />{planBusy === 'suggest' ? '拆解中…' : '拆成计划'}</button>
         <button type="button" className="pj-btn pj-primary" disabled={!chatDraft.trim() || busy === 'send'} onClick={() => void send()}><Send size={14} />{busy === 'send' ? '提交中…' : orchestrate ? '开始编排' : '发送（需审批）'}</button>
