@@ -252,7 +252,9 @@ test('没有写权限时 delete_path 被拒绝', async t => {
     executorInput: { prompt: '删掉文件', workspace: dir, write: false },
   });
   const done = await settle(executor, 'assign-denied');
-  assert.equal(done.status, 'completed', done.error || '');
+  // 工具被拒 + 结论说「没有权限」= 任务没达成，不能报完成。
+  assert.equal(done.status, 'failed');
+  assert.match(String(done.error || ''), /没有完成/);
   assert.equal(fs.existsSync(path.join(dir, 'a.txt')), true);
   assert.ok(done.activity.some(item => item.kind === 'error'));
 });
@@ -417,6 +419,107 @@ test('只读白名单内的命令直接执行，不弹窗', async t => {
   const observed = done.activity.filter(item => item.kind === 'observation').map(item => `${item.text || ''} ${item.detail || ''}`).join('\n');
   assert.match(observed, /退出码 0/);
 });
+
+// 用户抱怨过"点不完"：只是看看目录里有什么，不该每次都弹确认框。
+test('查看目录的命令不用逐次确认，直接执行', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-cmd-list-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'readme.md'), 'hello\n');
+  const hub = fakeModelHub([
+    '{"tool":"run_command","args":{"command":"Get-ChildItem","shell":"powershell"}}',
+    '{"final":{"summary":"目录里只有一个 readme.md","files":[]}}',
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '看看目录' }, { id: 'assign-cmd-list' }, {
+    executorInput: { prompt: '看看目录', workspace: dir, write: false },
+  });
+  const done = await settle(executor, 'assign-cmd-list');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(done.activity.some(item => item.kind === 'waiting'), false, '查看类命令不该弹确认');
+  const observed = done.activity.filter(item => item.kind === 'observation').map(item => `${item.text || ''} ${item.detail || ''}`).join('\n');
+  assert.match(observed, /运行命令/);
+  assert.match(observed, /退出码 0|目录/);
+});
+
+// 真实踩过的坑：`cmd.exe /d /s /c "powershell -Command "..."` 会把内层引号吃掉，
+// PowerShell 只回显脚本、退出码还是 0 —— 命令看着成功，其实什么都没做。
+test('shell=powershell 的脚本带引号也能真正执行，不会被 cmd 吃掉', async t => {
+  if (process.platform !== 'win32') { t.skip('只在 Windows 上有 cmd 引号问题'); return; }
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-pwsh-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'gone.txt'), 'x');
+  fs.writeFileSync(path.join(dir, 'keep.txt'), 'y');
+  const command = `Get-ChildItem -Path '${dir}' -Filter 'gone.txt' | Remove-Item -Force; Get-ChildItem -Path '${dir}' | Select-Object -ExpandProperty Name`;
+  const hub = fakeModelHub([
+    JSON.stringify({ tool: 'run_command', args: { command, shell: 'powershell' } }),
+    '{"final":{"summary":"删掉了 gone.txt","files":[]}}',
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '删掉 gone.txt' }, { id: 'assign-pwsh' }, {
+    executorInput: { prompt: '删掉 gone.txt', workspace: dir, write: true, permission: 'workspace' },
+  });
+  const { task: done } = await answerAccess(executor, 'assign-pwsh');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(fs.existsSync(path.join(dir, 'gone.txt')), false, '脚本必须真的执行，而不是只被回显');
+  assert.equal(fs.existsSync(path.join(dir, 'keep.txt')), true);
+  const observed = done.activity.filter(item => item.kind === 'observation').map(item => `${item.text || ''} ${item.detail || ''}`).join('\n');
+  assert.match(observed, /退出码 0/);
+  assert.match(observed, /keep\.txt/);
+});
+
+test('步数用完还没做完的工单标成失败，不再报「已完成」', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-steps-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  // 每一步都在读同一个文件，永远不给 final
+  const hub = fakeModelHub(Array.from({ length: 8 }, () => '{"tool":"list_files","args":{"path":"."}}'));
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '一直读' }, { id: 'assign-steps' }, {
+    executorInput: { prompt: '一直读', workspace: dir, write: false, maxSteps: 3 },
+  });
+  const done = await settle(executor, 'assign-steps', 6000);
+  assert.equal(done.status, 'failed');
+  assert.match(String(done.error || ''), /步数上限/);
+  assert.equal(done.artifacts.cli.exitCode, 1);
+});
+
+test('模型自己说「没有权限、没执行」时标成失败，而不是已完成', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-refuse-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const hub = fakeModelHub([
+    JSON.stringify({ final: { summary: '未执行删除：本 Agent 没有写权限，D:\\test 下没有删除任何文件。', files: [] } }),
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '删掉所有文件' }, { id: 'assign-refuse' }, {
+    executorInput: { prompt: '删掉所有文件', workspace: dir, write: false },
+  });
+  const done = await settle(executor, 'assign-refuse');
+  assert.equal(done.status, 'failed');
+  assert.match(String(done.error || ''), /没有完成/);
+  assert.match(String(done.artifacts.cli.summary || ''), /没有写权限/);
+});
+
+test('确实改了文件又给出结论的，仍然是完成', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-done-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const hub = fakeModelHub([
+    JSON.stringify({ tool: 'write_file', args: { path: 'note.txt', content: 'hi' } }),
+    JSON.stringify({ final: { summary: '写好了 note.txt', files: ['note.txt'] } }),
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '写个文件' }, { id: 'assign-done' }, {
+    executorInput: { prompt: '写个文件', workspace: dir, write: true },
+  });
+  const done = await settle(executor, 'assign-done');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(fs.readFileSync(path.join(dir, 'note.txt'), 'utf8'), 'hi');
+});
+
+
 
 test('replace_in_file 精确替换，多处时要显式 all', async t => {
   const store = memoryStore();

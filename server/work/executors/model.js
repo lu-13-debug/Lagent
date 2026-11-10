@@ -15,9 +15,13 @@ const ACTIVITY_LIMIT = 60;
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.dataagent', 'data', '.venv', '__pycache__', 'coverage']);
 const WRITE_TOOLS = new Set(['write_file', 'replace_in_file', 'move_path', 'delete_path']);
 const READ_COMMAND = /^(git\s+(status|diff|log|show|branch)\b[^|;&<>]*|node\s+--check\s+\S+)$/i;
+// 纯查看类命令：只列、只看，不写不改。带管道/重定向/分号的一律不算（可能被用来夹带写操作）。
+const SAFE_READ = /^(?:Get-ChildItem|Get-Content|Get-Item|Get-Location|Get-ChildItem|Test-Path|Resolve-Path|dir|ls|type|cat)\b[^;|&<>$]*$/i;
 // 三档权限，语义与 dsh 一致：仅查看 / 只在工作区内修改 / 完全权限。
 const PERMISSIONS = ['read', 'workspace', 'full'];
 const PERMISSION_LABELS = { read: '仅查看', workspace: '仅工作区内修改', full: '完全权限' };
+// 模型明确说「没做成」的措辞：一个文件都没改、结论却是这些，就按失败上报。
+const REFUSAL = /无法(执行|完成|删除|修改|写入|创建)|未执行|没有(?:写)?权限|无权限|不能(删除|修改|写入|创建)|未完成/;
 
 const text = (value, limit) => (typeof value === 'string' ? value.trim().slice(0, limit) : '');
 
@@ -27,7 +31,8 @@ export function normalizeModelInput(input, { maxPromptBytes = 16 * 1024 } = {}) 
   if (!prompt) throw statusError('模型 Agent 的 prompt 必须是非空字符串');
   if (prompt.includes('\0')) throw statusError('prompt 不允许 NUL 字符');
   if (Buffer.byteLength(prompt) > maxPromptBytes) throw statusError(`prompt 不能超过 ${maxPromptBytes} 字节`);
-  const steps = input.maxSteps === undefined ? 8 : input.maxSteps;
+  // 8 步太紧：列目录 + 逐项删除 + 复查就刚好用光，连给结论的余量都没有。
+  const steps = input.maxSteps === undefined ? 10 : input.maxSteps;
   if (!Number.isInteger(steps) || steps < 1 || steps > MAX_STEPS) throw statusError(`maxSteps 必须是 1-${MAX_STEPS} 的整数`);
   const workspace = typeof input.workspace === 'string' ? input.workspace.trim() : '';
   if (workspace && (!path.isAbsolute(workspace) || workspace.length > 500)) throw statusError('workspace 必须是有效的工作目录绝对路径');
@@ -242,25 +247,91 @@ const SHELL = process.platform === 'win32'
   ? { file: process.env.ComSpec || 'cmd.exe', args: value => ['/d', '/s', '/c', value] }
   : { file: '/bin/sh', args: value => ['-c', value] };
 
-// 只读白名单直接跑（不起 shell，避免命令拼接）；其它命令必须先拿到用户确认，再交给系统 shell 执行。
-function runCommand(guard, command, { approved = false } = {}) {
-  const value = text(command, 300);
+const PWSH = process.platform === 'win32'
+  ? (process.env.DATAAGENT_POWERSHELL || 'powershell.exe')
+  : (process.env.DATAAGENT_POWERSHELL || 'pwsh');
+
+// execFileSync 默认按 utf8 解码，而 Windows 的 cmd / powershell 输出的是代码页（GBK）。
+// 先按 utf8 解，出现替换字符（U+FFFD）就退回 GBK —— 否则报错信息会变成一片乱码。
+function decodeOutput(chunk) {
+  if (chunk === undefined || chunk === null) return '';
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
+  const utf8 = buffer.toString('utf8');
+  if (!utf8.includes('\uFFFD')) return utf8;
+  try { return new TextDecoder('gbk').decode(buffer); } catch { return utf8; }
+}
+
+// `cmd.exe /d /s /c "powershell -NoProfile -Command "a;b""` 会把内层引号吃掉：
+// PowerShell 只回显脚本、退出码还可能是 0，看起来像成功其实什么都没做（真实踩过）。
+// 所以把 powershell 调用整个解包出来，脚本作为单独的 argv 传给 pwsh，不经过 cmd。
+export function unwrapPowerShell(value) {
+  const head = /^(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+([\s\S]*)$/i.exec(value);
+  if (!head) return null;
+  let rest = head[1].trim();
+  const flags = [];
+  for (;;) {
+    const flag = /^-(NoProfile|NonInteractive|NoLogo|ExecutionPolicy|NoExit)\b(?:\s+(Bypass|Unrestricted|RemoteSigned|AllSigned|Restricted))?/i.exec(rest);
+    if (!flag) break;
+    flags.push(flag[1] === 'ExecutionPolicy' && flag[2] ? `-ExecutionPolicy ${flag[2]}` : `-${flag[1]}`);
+    rest = rest.slice(flag[0].length).trim();
+  }
+  const commandFlag = /^-(?:Command|c)\b\s*/i.exec(rest);
+  if (!commandFlag) return null;
+  let script = rest.slice(commandFlag[0].length).trim();
+  if (script.length > 1 && ((script.startsWith('"') && script.endsWith('"')) || (script.startsWith("'") && script.endsWith("'")))) script = script.slice(1, -1);
+  if (!script) return null;
+  return { flags, script };
+}
+
+// 回显没执行：有些 shell 会把整条命令原样打印出来、退出码却是 0。
+function echoOnly(command, output) {
+  const text_ = String(output || '').trim();
+  const value = String(command || '').trim();
+  if (!text_) return false;
+  return text_ === value || (text_.length < 40 && value.includes(text_) && text_ === value.slice(0, text_.length));
+}
+
+// 只读白名单直接跑（不起 shell，避免命令拼接）；其它命令必须先拿到用户确认，再交给 shell 执行。
+function runCommand(guard, command, { approved = false, shell = '' } = {}) {
+  const value = text(command, 4000);
   if (!value) throw new Error('command 不能为空');
-  const readOnly = READ_COMMAND.test(value);
-  if (!readOnly && !approved) throw new Error('这条命令不在只读白名单内：需要用户在弹窗里确认后才能执行');
-  const options = { cwd: guard.base, timeout: readOnly ? 15000 : 60000, encoding: 'utf8', windowsHide: true, maxBuffer: 4 * 1024 * 1024 };
+  const explicitShell = shell === 'powershell' ? 'powershell' : '';
+  const readOnly = !explicitShell && READ_COMMAND.test(value);
+  // 查看类命令走 PowerShell：Get-ChildItem 这类是 cmdlet，交给 cmd 会报"不是内部或外部命令"。
+  const safeRead = !explicitShell && !readOnly && SAFE_READ.test(value);
+  if (!readOnly && !safeRead && !approved) throw new Error('这条命令不在只读白名单内：需要用户在弹窗里确认后才能执行');
+  const options = { cwd: guard.base, timeout: readOnly || safeRead ? 15000 : 60000, encoding: 'buffer', windowsHide: true, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] };
+  const unwrapped = explicitShell ? { flags: [], script: value } : unwrapPowerShell(value);
   try {
     if (readOnly) {
       const parts = value.split(/\s+/);
-      return { command: value, exitCode: 0, output: String(execFileSync(parts[0], parts.slice(1), options)).slice(0, 4000) };
+      const output = decodeOutput(execFileSync(parts[0], parts.slice(1), options));
+      return { command: value, exitCode: 0, output: output.slice(0, 4000) };
     }
-    const output = execFileSync(SHELL.file, SHELL.args(value), { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
-    return { command: value, exitCode: 0, output: String(output).slice(0, 4000) };
+    if (safeRead) {
+      const output = decodeOutput(execFileSync(PWSH, ['-NoProfile', '-NonInteractive', '-Command', value], options));
+      return { command: value, exitCode: 0, output: output.slice(0, 4000) };
+    }
+    if (unwrapped) {
+      // 默认带上 -NoProfile：加载用户 profile 会让每条命令多等十几秒。
+      const flags = [...new Set(['-NoProfile', '-NonInteractive', ...unwrapped.flags])];
+      const output = decodeOutput(execFileSync(PWSH, [...flags, '-Command', unwrapped.script], options));
+      if (echoOnly(value, output) || echoOnly(unwrapped.script, output)) {
+        return { command: value, exitCode: 900, output: `命令只被回显、没有真正执行（多半是引号被 shell 吃掉了）。改用 run_command{command:"<脚本本体>", shell:"powershell"} 会更稳。` };
+      }
+      return { command: value, exitCode: 0, output: output.slice(0, 4000) };
+    }
+    const output = decodeOutput(execFileSync(SHELL.file, SHELL.args(value), options));
+    if (echoOnly(value, output)) {
+      return { command: value, exitCode: 900, output: '命令只被回显、没有真正执行（多半是引号被 shell 吃掉了）。改用 run_command{command:"<脚本本体>", shell:"powershell"} 会更稳。' };
+    }
+    return { command: value, exitCode: 0, output: output.slice(0, 4000) };
   } catch (error) {
+    const raw = error?.stdout || error?.stderr || error?.message || '';
     return {
       command: value,
       exitCode: typeof error?.status === 'number' ? error.status : 1,
-      output: String(error?.stdout || error?.stderr || error?.message || '').slice(0, 4000),
+      output: decodeOutput(raw).slice(0, 4000),
     };
   }
 }
@@ -274,11 +345,12 @@ export function modelSystemPrompt({ maxSteps, write, permission = write ? 'works
     '· 调用工具：{"tool":"read_file","args":{"path":"src/app.tsx"}}',
     '· 结束任务：{"final":{"summary":"做了什么、结论是什么","files":["改动过的文件"]}}',
     '',
-    `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content}、replace_in_file{path,find,replace,all?}、move_path{from,to}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command}。`,
+    `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content}、replace_in_file{path,find,replace,all?}、move_path{from,to}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command,shell?}。`,
+    '注意：环境是 Windows。要跑 PowerShell 就写 run_command{command:"<脚本本体>",shell:"powershell"}，command 直接给脚本，不要自己再拼 powershell -Command 和引号。',
     '路径可以写相对工作目录的路径，也可以写绝对路径。',
     `当前权限档位：${PERMISSION_LABELS[mode]}（${mode}）。`,
     write
-      ? '你被允许修改文件：先读再改，一次改一处，改动要小、要能说清理由。小改用 replace_in_file，整文件重写才用 write_file。删除不可恢复：只有用户明确要求删除时才做，先 delete_path{path,dryRun:true} 看清将删掉什么，再真正删；删目录必须显式传 recursive:true；工作目录本身不许删。'
+      ? '你被允许修改文件：先读再改，一次改一处，改动要小、要能说清理由。小改用 replace_in_file，整文件重写才用 write_file。删除不可恢复：只有用户明确要求删除时才做，先 delete_path{path,dryRun:true} 看清将删掉什么，再真正删；dryRun 只是预览，确认要删就**去掉 dryRun 再调一次**。删目录必须显式传 recursive:true；工作目录本身不许删。删除文件和目录优先用 delete_path，不要用 run_command 拼 Remove-Item。'
       : '你没有写权限：不要尝试 write_file、replace_in_file、move_path 或 delete_path，只读取与检索，最后给出结论和改动建议。',
     mode === 'full'
       ? `权限规则：当前是完全权限，工作目录内外都可直接读写，不再逐次询问。受保护路径（系统目录、.git、.ssh、.env、密钥）仍然拒绝。${extra}`
@@ -530,16 +602,18 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       return deletePath(guard, args?.path, { recursive, dryRun: args?.dryRun === true });
     }
     if (name === 'run_command') {
-      const value = text(args?.command, 300);
-      if (!READ_COMMAND.test(value)) {
-        if (permission === 'read') throw new Error(`当前是「${PERMISSION_LABELS.read}」模式，只能执行只读命令（git status/diff/log/show/branch、node --check）。`);
-        if (permission === 'workspace') {
-          const answer = await requestAccess(task, { path: value, mode: 'command', reason: '不在只读白名单内，需要确认后执行' });
-          if (!answer.allow) throw new Error('用户拒绝了这条命令，请不要绕道执行');
-        }
-        return runCommand(guard, value, { approved: true });
+      const value = text(args?.command, 4000);
+      const shell = args?.shell === 'powershell' ? 'powershell' : '';
+      if (!value) throw new Error('command 不能为空');
+      // 只读的查看类命令（列目录/看文件）不该每次都弹窗——用户已经抱怨过"点不完"。
+      const readable = READ_COMMAND.test(value) || SAFE_READ.test(value);
+      if (readable) return runCommand(guard, value);
+      if (permission === 'read') throw new Error(`当前是「${PERMISSION_LABELS.read}」模式，只能执行只读命令（查看目录/文件、git status/diff/log/show/branch、node --check）。`);
+      if (permission === 'workspace') {
+        const answer = await requestAccess(task, { path: value, mode: 'command', reason: '不在只读白名单内，需要确认后执行' });
+        if (!answer.allow) throw new Error('用户拒绝了这条命令，请不要绕道执行');
       }
-      return runCommand(guard, value);
+      return runCommand(guard, value, { approved: true, shell });
     }
     throw new Error(`未知工具：${name}`);
   }
@@ -578,8 +652,13 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       if (parsed.type === 'final') {
         summary = parsed.summary;
         files = [...new Set([...files, ...parsed.files])];
-        pushActivity(task, { kind: 'result', text: summary || '模型 Agent 完成' });
-        return { summary, files, usage, steps: step + 1 };
+        // 模型自己说「没做」时不能对外报成功：一个文件都没改、结论却写着无法执行/没有权限，
+        // 说明任务没达成（常见于权限不足、命令没跑通），标成失败更诚实。
+        const refused = files.length === 0 && REFUSAL.test(summary);
+        pushActivity(task, refused
+          ? { kind: 'error', text: summary || '任务没有完成', detail: '模型明确表示没有执行' }
+          : { kind: 'result', text: summary || '模型 Agent 完成' });
+        return { summary, files, usage, steps: step + 1, ...(refused ? { failed: `任务没有完成：${summary.slice(0, 300)}` } : {}) };
       }
       messages.push({ role: 'assistant', content: reply.slice(0, 4000) });
       pushActivity(task, { kind: 'tool', text: describeCall(parsed.tool, parsed.args) });
@@ -597,8 +676,40 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
         pushActivity(task, { kind: 'error', text: `${parsed.tool} 失败：${message}` });
       }
     }
+    // 步数用完了：不要立刻判失败，先让它基于已经看到的东西直接给结论（不再调工具）。
+    // 真实任务常在最后一步刚好做完，差一步就报失败会让人以为没干活。
+    pushActivity(task, { kind: 'note', text: '步数快用完了，让它直接收尾给结论' });
+    try {
+      const remaining = deadline - Date.now();
+      if (remaining > 1000) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), Math.min(perCallTimeoutMs, remaining));
+        let reply = '';
+        try {
+          const result = await askModel([
+            ...messages,
+            { role: 'user', content: '步数已经用完，不能再调用任何工具。请只输出一个 JSON：{"final":{"summary":"已经做完什么、还有什么没做","files":["改动过的文件"]}}' },
+          ], task, controller.signal, input.profileId, input.effort);
+          for (const [key, value] of Object.entries(result.usage || {})) usage[key] = (usage[key] || 0) + (Number(value) || 0);
+          reply = replyOf(result.payload, result.protocol);
+        } finally {
+          clearTimeout(timer);
+        }
+        const parsed = parseModelStep(reply);
+        if (parsed?.type === 'final') {
+          summary = parsed.summary || '步数用完，任务收尾';
+          files = [...new Set([...files, ...parsed.files])];
+          const refused = files.length === 0 && REFUSAL.test(summary);
+          pushActivity(task, refused
+            ? { kind: 'error', text: summary, detail: '步数用完，模型表示没有做完' }
+            : { kind: 'result', text: summary });
+          return { summary, files, usage, steps: input.maxSteps, ...(refused ? { failed: `任务没有完成：${summary.slice(0, 300)}` } : {}) };
+        }
+      }
+    } catch { /* 收尾也失败就按步数上限处理 */ }
     summary = summary || '已达到步数上限，任务未完全完成。';
-    pushActivity(task, { kind: 'result', text: summary });
+    pushActivity(task, { kind: 'error', text: summary, detail: `用完了 ${input.maxSteps} 步还没得出结论` });
+    // 步数用完 = 任务没做完，不能对外报成「已完成」。
     return { summary, files, usage, steps: input.maxSteps, exhausted: true };
   }
 
@@ -677,7 +788,13 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       const controller = new AbortController();
       task.controller = controller;
       void execute(task, normalized, runWorkspace)
-        .then(result => finalize(task, { ...result, startedAt }))
+        // 步数用完 / 模型自己说没做成：如实标成失败，别人看到「已完成」会以为事情做完了。
+        .then(result => {
+          const error = result.exhausted
+            ? `到达步数上限（${result.steps} 步），任务没有做完`
+            : result.failed;
+          return finalize(task, error ? { ...result, startedAt, error } : { ...result, startedAt });
+        })
         .catch(error => {
           const cancelled = task.cancelled === true;
           finalize(task, {

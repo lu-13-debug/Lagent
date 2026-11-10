@@ -916,7 +916,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
                 <span className={`pj-agent-status is-${ticket.status}`}>{STATUS_LABELS[ticket.status] || ticket.status}</span>
                 <time>{stamp}</time>
               </div>
-              {ticket.summary ? <p className={`pj-bubble-text${open ? '' : ' pj-clamp'}`}>{ticket.summary}</p> : <p className="pj-bubble-text pj-bubble-muted">{ticket.status === 'awaiting_review' ? '等你确认后开始执行。' : ticket.status === 'queued' ? '排队中，还没开始。' : '还没有输出。'}</p>}
+              {ticket.summary ? <p className={`pj-bubble-text${open ? '' : ' pj-clamp'}`}>{ticket.summary}</p> : <p className="pj-bubble-text pj-bubble-muted">{ticket.status === 'awaiting_review' ? '等你确认后开始执行。' : ticket.status === 'queued' ? '排队中，还没开始。' : ticket.status === 'failed' ? '执行失败了，展开过程能看到是哪一步出的问题。' : '还没有输出。'}</p>}
               <div className="pj-bubble-actions">
                 <button type="button" className="pj-link" aria-expanded={open} onClick={() => void toggleTrace(ticket)}>{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{open ? '收起过程' : '展开思考过程'}</button>
                 {ticket.status === 'awaiting_review' && onApprove && <button type="button" className="pj-btn pj-primary pj-small" onClick={() => onApprove(ticket.id)}><Check size={13} />确认执行</button>}
