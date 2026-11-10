@@ -1225,6 +1225,24 @@
 }
 
 /* ——— 深度编排：开关与运行卡片 ——— */
+/* 协作 Agent：内置 Agent 对话里才会出现，和「深度编排」同一套胶囊样式。 */
+.pj-chip.pj-collab {
+  border: 1px solid var(--sa-line-strong);
+  background: var(--sa-surface);
+  color: var(--sa-text-2);
+}
+
+.pj-chip.pj-collab.on {
+  border-color: var(--sa-accent);
+  background: var(--sa-accent-soft);
+  color: var(--sa-accent-ink);
+  font-weight: 560;
+}
+
+.pj-collab-panel .pj-dispatch-label {
+  color: var(--sa-accent-ink);
+}
+
 .pj-chip.pj-orch {
   border: 1px solid var(--sa-line-strong);
   background: var(--sa-surface);
