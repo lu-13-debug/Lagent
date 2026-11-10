@@ -218,12 +218,11 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const resuming = typeof chat.sessionId === 'string' && chat.sessionId;
     // 首条消息给完整项目简报；后续消息只带记忆摘录，避免每轮都塞大段背景。
     const context = resuming ? projectMemoryContext(project) : projectBriefContext(project);
-    // ACP 的文件读写走客户端回调，性能上等价于给 Agent 项目目录写权限，
-    // 所以额外受 policy.limits.acpWrites 约束（CLI 执行器本来就有写权限）。
+    // 权限模式决定能不能写：仅查看一律只读，工作区与完全权限都可写。
+    const permission = policy.permission === 'read' || policy.permission === 'workspace' || policy.permission === 'full' ? policy.permission : 'workspace';
     const isAcp = Array.isArray(executor.capabilities) && executor.capabilities.includes('acp');
-    // 模型 Agent 默认只读：写权限必须由 limits.modelWrites 显式打开，避免它绕过审批改文件。
     const isModel = executor?.id === 'model';
-    const write = chat.writable !== false && (isModel ? policy.limits?.modelWrites === true : (!isAcp || policy.limits?.acpWrites !== false));
+    const write = chat.writable !== false && permission !== 'read';
     return {
       prompt: context ? `${context}\n${text}` : text,
       maxTurns,
@@ -232,9 +231,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       // 模型 Agent 的会话级模型与思考强度：只在模型执行器上透传，其它 CLI 不认识这些键。
       ...(isModel && typeof options?.profileId === 'string' && options.profileId.trim() ? { profileId: options.profileId.trim().slice(0, 100) } : {}),
       ...(isModel && typeof options?.effort === 'string' && options.effort.trim() ? { effort: options.effort.trim().slice(0, 10) } : {}),
-      // 跨目录读写：策略里登记的额外目录直接放行，其余路径由执行器逐次弹窗申请。
+      // 跨目录读写：策略里登记的额外目录直接放行，其余路径按权限模式处理（工作区模式下逐次弹窗）。
       ...(isModel && Array.isArray(policy.limits?.extraRoots) && policy.limits.extraRoots.length ? { roots: [...policy.limits.extraRoots] } : {}),
-      ...(isModel ? { confirmDanger: policy.limits?.confirmDanger !== false } : {}),
+      ...(isModel ? { permission, confirmDanger: permission === 'workspace' && policy.limits?.confirmDanger !== false } : {}),
       ...(resuming ? { resume: chat.sessionId } : {})
     };
   };
@@ -726,7 +725,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     if (!goal || goal.length > 300) throw workError('计划目标须为 1–300 字');
     if (!Array.isArray(input.steps) || input.steps.length < 2 || input.steps.length > 5) throw workError('计划必须包含 2–5 个步骤');
     const clientRequestId = typeof input.clientRequestId === 'string' ? input.clientRequestId.trim() : '';
-    const autoRun = input.autoRun === true;
+    // 显式传 autoRun 时以它为准；否则「先批准再执行」模式下逐步等确认，其余模式一路跑完。
+    const autoRun = typeof input.autoRun === 'boolean' ? input.autoRun : policy.requireApproval !== true;
     const projectChat = projectContext(input.projectChatId);
     if (projectChat && !PROJECT_CHAT_EXECUTORS.includes(projectChat.chat.executorId)) throw workError('该执行器暂不支持项目拆解', 400);
     // 计划可以直接绑定「工作文件夹」：每一步都在这个目录里读写，未指定对话时按执行器自动建会话。
@@ -1088,7 +1088,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     policy(){return JSON.parse(JSON.stringify(policy));},
     auditExternal(action,executor,result,reason=''){audit(null,action,executor,result,reason);},
     updatePolicy(input){
-      const next=normalizePolicy(input);
+      // 与当前策略合并：只改传进来的字段，不再把其它设置重置成默认值。
+      const next=normalizePolicy(input,policy);
       policy=next;
       store.put('work-policy',{id:WORK_POLICY_ID,...next});
       audit(null,'policy','policy','allowed','策略更新');
@@ -1330,11 +1331,18 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const stamp=now();
       const direct=active.requiresDataset===false;
       const cli=active.kind==='cli';
-      // 内置模型 Agent 的能力取决于写权限开关，文案不能再说「只读」。
-      const modelCopy=executorInput?.write===true?'请确认后执行（会在项目目录内读写文件）':'请确认后执行（只读项目文件）';
-      const created=write({id:randomUUID(),title:(typeof input?.title==='string'&&input.title.trim()?input.title.trim():trigger.text).slice(0,100),status:'awaiting_review',stage:direct?'approval':'dataset',source:'manual',executor:activeId,summary:activeId==='browser'?'请确认受控浏览器读取后批准执行':activeId==='github'?'请确认 GitHub 只读查询后批准执行':activeId==='terminal'?'请确认终端命令后批准执行':activeId==='model'?modelCopy:cli?'请确认只读 CLI 任务后批准执行':'请选择数据集并批准开始',attention:review(reviewQuestion(activeId,project?(project.chat.executorId==='window'?'window':'write'):undefined)),createdAt:stamp,updatedAt:stamp,command:trigger.text,clientRequestId:trigger.clientRequestId,datasetId,executorInput,...(project?{projectChatId:project.chat.id}:{})});
+      // 不需要数据集、且策略没有要求先批准时，直接开跑：批准只在真正需要额外权限时出现。
+      const auto=direct&&policy.requireApproval!==true;
+      // 内置模型 Agent 的能力取决于权限模式，文案不能说「只读」。
+      const modelCopy=executorInput?.write===true?'执行中（会在项目目录内读写文件）':'执行中（只读项目文件）';
+      const confirmCopy=activeId==='browser'?'请确认受控浏览器读取后批准执行':activeId==='github'?'请确认 GitHub 只读查询后批准执行':activeId==='terminal'?'请确认终端命令后批准执行':activeId==='model'?modelCopy:cli?'请确认只读 CLI 任务后批准执行':'请选择数据集并批准开始';
+      const record={id:randomUUID(),title:(typeof input?.title==='string'&&input.title.trim()?input.title.trim():trigger.text).slice(0,100),status:auto?'queued':'awaiting_review',stage:direct?(auto?'launch':'approval'):'dataset',source:'manual',executor:activeId,summary:auto?(activeId==='model'?modelCopy:activeId==='terminal'?'终端命令执行中':cli?'CLI 执行中':'执行中'):confirmCopy,attention:auto?undefined:review(reviewQuestion(activeId,project?(project.chat.executorId==='window'?'window':'write'):undefined)),createdAt:stamp,updatedAt:stamp,command:trigger.text,clientRequestId:trigger.clientRequestId,datasetId,executorInput,...(project?{projectChatId:project.chat.id}:{})};
+      // write() 返回的是 publicTicket（会剥掉 executorInput），直接执行必须用原始记录，否则会写回一份空的执行输入。
+      const created=write(record);
       if(project)touchProjectChat(project.chat,{lastTicketId:created.id});
       if(project)takeGitSnapshot(created.id,project.project.path);
+      // 直接执行：start() 会把工单推进到 working 并调用执行器；失败时保留现场让用户能看到原因。
+      if(auto)try{return start(record);}catch(error){return get(created.id);}
       return created;
     },
     async suggestPlan(input){

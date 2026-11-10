@@ -21,7 +21,9 @@ test('Work policy 默认拒绝外部执行器并允许 analysis/terminal', t => 
   const { engine } = fixture(t);
   const policy = engine.policy();
   assert.deepEqual(policy.allowedExecutors, ['analysis', 'terminal']);
-  assert.equal(policy.requireApproval, true);
+  // 默认不再「先批准再执行」，信任由权限模式表达。
+  assert.equal(policy.requireApproval, false);
+  assert.equal(policy.permission, 'workspace');
   assert.throws(() => engine.command({ text: '读取仓库', executorId: 'codex', executorInput: { prompt: 'hi' } }), { status: 403 });
   assert.equal(engine.command({ text: '检查活跃' }).executor, 'analysis');
 });
@@ -51,24 +53,28 @@ test('Work policy 校验白名单字段并写脱敏审计', t => {
   assert.ok(store.get('work-policy', 'default'));
 });
 
-test('Work policy 的 acpWrites 默认开启、可关闭且只接受布尔值', t => {
+test('Work policy 的三档权限决定写权限与危险操作确认', t => {
   const { engine } = fixture(t);
-  assert.equal(engine.policy().limits.acpWrites, true);
-  const off = engine.updatePolicy({ limits: { acpWrites: false } });
-  assert.equal(off.limits.acpWrites, false);
-  assert.equal(engine.policy().limits.acpWrites, false);
-  assert.throws(() => engine.updatePolicy({ limits: { acpWrites: 'no' } }), { status: 400 });
-  const on = engine.updatePolicy({ limits: { acpWrites: true, browserHosts: [], githubRepos: [] } });
-  assert.equal(on.limits.acpWrites, true);
-});
+  const initial = engine.policy();
+  assert.equal(initial.permission, 'workspace');
+  assert.equal(initial.limits.modelWrites, true);
+  assert.equal(initial.limits.acpWrites, true);
+  assert.equal(initial.limits.confirmDanger, true);
 
-test('Work policy 的 modelWrites 默认关闭、可打开且只接受布尔值', t => {
-  const { engine } = fixture(t);
-  assert.equal(engine.policy().limits.modelWrites, false);
-  const on = engine.updatePolicy({ limits: { modelWrites: true } });
-  assert.equal(on.limits.modelWrites, true);
-  assert.equal(engine.policy().limits.modelWrites, true);
-  assert.throws(() => engine.updatePolicy({ limits: { modelWrites: 'yes' } }), { status: 400 });
-  const off = engine.updatePolicy({ limits: { modelWrites: false, browserHosts: [], githubRepos: [] } });
-  assert.equal(off.limits.modelWrites, false);
+  const read = engine.updatePolicy({ permission: 'read' });
+  assert.equal(read.permission, 'read');
+  assert.equal(read.limits.modelWrites, false);
+  assert.equal(read.limits.acpWrites, false);
+  assert.equal(read.limits.confirmDanger, false);
+
+  const full = engine.updatePolicy({ permission: 'full' });
+  assert.equal(full.permission, 'full');
+  assert.equal(full.limits.modelWrites, true);
+  assert.equal(full.limits.confirmDanger, false);
+
+  assert.throws(() => engine.updatePolicy({ permission: 'root' }), { status: 400 });
+  // 旧开关不再反向覆盖权限模式：传 modelWrites:false 也不会让 workspace 变只读。
+  const back = engine.updatePolicy({ permission: 'workspace', limits: { modelWrites: false, browserHosts: [], githubRepos: [] } });
+  assert.equal(back.permission, 'workspace');
+  assert.equal(back.limits.modelWrites, true);
 });

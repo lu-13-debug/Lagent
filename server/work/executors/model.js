@@ -15,6 +15,9 @@ const ACTIVITY_LIMIT = 60;
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.dataagent', 'data', '.venv', '__pycache__', 'coverage']);
 const WRITE_TOOLS = new Set(['write_file', 'replace_in_file', 'move_path', 'delete_path']);
 const READ_COMMAND = /^(git\s+(status|diff|log|show|branch)\b[^|;&<>]*|node\s+--check\s+\S+)$/i;
+// 三档权限，语义与 dsh 一致：仅查看 / 只在工作区内修改 / 完全权限。
+const PERMISSIONS = ['read', 'workspace', 'full'];
+const PERMISSION_LABELS = { read: '仅查看', workspace: '仅工作区内修改', full: '完全权限' };
 
 const text = (value, limit) => (typeof value === 'string' ? value.trim().slice(0, limit) : '');
 
@@ -38,15 +41,18 @@ export function normalizeModelInput(input, { maxPromptBytes = 16 * 1024 } = {}) 
   const roots = Array.isArray(input.roots)
     ? [...new Set(input.roots.filter(item => typeof item === 'string' && path.isAbsolute(item.trim())).map(item => path.resolve(item.trim())))].slice(0, 10)
     : [];
+  // 权限模式：read 只读、workspace 只在工作区（含额外授权目录）内改、full 完全权限。
+  const permission = PERMISSIONS.includes(input.permission) ? input.permission : (input.write === true ? 'workspace' : 'read');
   return {
     prompt,
     maxSteps: steps,
+    permission,
     ...(workspace ? { workspace: path.resolve(workspace) } : {}),
     ...(profileId ? { profileId } : {}),
     ...(effort ? { effort } : {}),
     ...(roots.length ? { roots } : {}),
     confirmDanger: input.confirmDanger !== false,
-    write: input.write === true,
+    write: permission !== 'read',
   };
 }
 
@@ -259,7 +265,8 @@ function runCommand(guard, command, { approved = false } = {}) {
   }
 }
 
-export function modelSystemPrompt({ maxSteps, write, roots = [] }) {
+export function modelSystemPrompt({ maxSteps, write, permission = write ? 'workspace' : 'read', roots = [] }) {
+  const mode = PERMISSIONS.includes(permission) ? permission : 'workspace';
   const extra = roots.length ? `已获得长期授权的其它目录：${roots.join('、')}。` : '';
   return [
     '你是 DataAgent 的模型 Agent，在一个本地工作目录里独立完成任务。',
@@ -269,11 +276,18 @@ export function modelSystemPrompt({ maxSteps, write, roots = [] }) {
     '',
     `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content}、replace_in_file{path,find,replace,all?}、move_path{from,to}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command}。`,
     '路径可以写相对工作目录的路径，也可以写绝对路径。',
+    `当前权限档位：${PERMISSION_LABELS[mode]}（${mode}）。`,
     write
-      ? '你被允许修改这个目录内的文件：先读再改，一次改一处，改动要小、要能说清理由。小改用 replace_in_file，整文件重写才用 write_file。删除不可恢复：只有用户明确要求删除时才做，先 delete_path{path,dryRun:true} 看清将删掉什么，再真正删；删目录必须显式传 recursive:true；工作目录本身不许删。'
+      ? '你被允许修改文件：先读再改，一次改一处，改动要小、要能说清理由。小改用 replace_in_file，整文件重写才用 write_file。删除不可恢复：只有用户明确要求删除时才做，先 delete_path{path,dryRun:true} 看清将删掉什么，再真正删；删目录必须显式传 recursive:true；工作目录本身不许删。'
       : '你没有写权限：不要尝试 write_file、replace_in_file、move_path 或 delete_path，只读取与检索，最后给出结论和改动建议。',
-    `权限规则：工作目录内的读写直接执行；工作目录之外的路径会先弹窗问用户，用户拒绝就必须停止并说明。受保护路径（系统目录、.git、.ssh、.env、密钥）永远拒绝。${extra}`,
-    'run_command：只读的 git 命令（status/diff/log/show/branch）与 node --check 直接执行；其它命令会先弹窗让用户确认，被拒绝就不要绕道。',
+    mode === 'full'
+      ? `权限规则：当前是完全权限，工作目录内外都可直接读写，不再逐次询问。受保护路径（系统目录、.git、.ssh、.env、密钥）仍然拒绝。${extra}`
+      : `权限规则：工作目录内的读写直接执行；工作目录之外的路径会先弹窗问用户，用户拒绝就必须停止并说明。受保护路径（系统目录、.git、.ssh、.env、密钥）永远拒绝。${extra}`,
+    mode === 'read'
+      ? 'run_command：只能执行只读的 git 命令（status/diff/log/show/branch）与 node --check，其它命令会被拒绝。'
+      : mode === 'full'
+        ? 'run_command：直接执行，注意不要做不可逆的危险操作。'
+        : 'run_command：只读的 git 命令（status/diff/log/show/branch）与 node --check 直接执行；其它命令会先弹窗让用户确认，被拒绝就不要绕道。',
     '规则：不要编造文件、函数或结论；读不懂就先 list_files / search_code。',
     `最多 ${maxSteps} 步，步数用完必须给出 final。`,
   ].join('\n');
@@ -459,8 +473,10 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
     });
   }
 
-  // 统一入口：命中已知目录直接放行；越界先问；危险动作（递归删除、白名单外命令）也先问。
-  async function guardAccess(task, { absolute, known }, mode, reason) {
+  // 统一入口：完全权限直接放行；命中已知目录直接放行；工作区模式下越界先问；
+  // 危险动作（递归删除、白名单外命令）也按模式决定要不要问。
+  async function guardAccess(task, { absolute, known }, mode, reason, permission = 'workspace') {
+    if (permission === 'full') return { allow: true };
     if (known) return { allow: true };
     if ([...grantedFor(task.id)].some(root => insideRoot(root, absolute))) return { allow: true };
     const answer = await requestAccess(task, { path: absolute, mode, reason });
@@ -474,40 +490,40 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
     return answer;
   }
 
-  async function runTool(task, name, args, guard, { write, confirmDanger }) {
+  async function runTool(task, name, args, guard, { write, confirmDanger, permission = 'workspace' }) {
     const writeTools = WRITE_TOOLS;
-    if (writeTools.has(name) && !write) throw new Error('当前任务没有写权限');
+    if (writeTools.has(name) && !write) throw new Error(`当前是「${PERMISSION_LABELS.read}」模式，不能修改文件；要改动请在设置里切换到「${PERMISSION_LABELS.workspace}」。`);
     if (name === 'list_files') {
-      await guardAccess(task, guard.resolve(args?.path), 'read');
+      await guardAccess(task, guard.resolve(args?.path), 'read', undefined, permission);
       return listFiles(guard, args?.path);
     }
     if (name === 'read_file') {
-      await guardAccess(task, guard.resolve(args?.path), 'read');
+      await guardAccess(task, guard.resolve(args?.path), 'read', undefined, permission);
       return readFile(guard, args?.path, args?.offset, args?.limit);
     }
     if (name === 'search_code') {
-      await guardAccess(task, guard.resolve(args?.path), 'read');
+      await guardAccess(task, guard.resolve(args?.path), 'read', undefined, permission);
       return searchCode(guard, text(args?.pattern, 200) || '.', args?.path);
     }
     if (name === 'write_file') {
-      await guardAccess(task, guard.resolve(args?.path), 'write');
+      await guardAccess(task, guard.resolve(args?.path), 'write', undefined, permission);
       return writeFile(guard, args?.path, args?.content);
     }
     if (name === 'replace_in_file') {
-      await guardAccess(task, guard.resolve(args?.path), 'write');
+      await guardAccess(task, guard.resolve(args?.path), 'write', undefined, permission);
       return replaceInFile(guard, args?.path, { find: args?.find, replace: args?.replace, all: args?.all === true });
     }
     if (name === 'move_path') {
-      await guardAccess(task, guard.resolve(args?.from), 'write');
-      await guardAccess(task, guard.resolve(args?.to), 'write');
+      await guardAccess(task, guard.resolve(args?.from), 'write', undefined, permission);
+      await guardAccess(task, guard.resolve(args?.to), 'write', undefined, permission);
       return movePath(guard, args?.from, args?.to);
     }
     if (name === 'delete_path') {
       const resolved = guard.resolve(args?.path);
-      await guardAccess(task, resolved, 'delete');
+      await guardAccess(task, resolved, 'delete', undefined, permission);
       const recursive = args?.recursive === true;
-      // 递归删除不可恢复：即使目录已授权，也只在「危险操作需要确认」开着时再问一次。
-      if (recursive && confirmDanger && args?.dryRun !== true) {
+      // 递归删除不可恢复：只在「仅工作区内修改」下再问一次；完全权限不再打断。
+      if (recursive && permission === 'workspace' && confirmDanger && args?.dryRun !== true) {
         const answer = await requestAccess(task, { path: resolved.absolute, mode: 'delete', reason: '递归删除整个目录，不可恢复' });
         if (!answer.allow) throw new Error(`用户拒绝了这次删除：${resolved.absolute}`);
       }
@@ -516,8 +532,11 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
     if (name === 'run_command') {
       const value = text(args?.command, 300);
       if (!READ_COMMAND.test(value)) {
-        const answer = await requestAccess(task, { path: value, mode: 'command', reason: '不在只读白名单内，需要确认后执行' });
-        if (!answer.allow) throw new Error('用户拒绝了这条命令，请不要绕道执行');
+        if (permission === 'read') throw new Error(`当前是「${PERMISSION_LABELS.read}」模式，只能执行只读命令（git status/diff/log/show/branch、node --check）。`);
+        if (permission === 'workspace') {
+          const answer = await requestAccess(task, { path: value, mode: 'command', reason: '不在只读白名单内，需要确认后执行' });
+          if (!answer.allow) throw new Error('用户拒绝了这条命令，请不要绕道执行');
+        }
         return runCommand(guard, value, { approved: true });
       }
       return runCommand(guard, value);
@@ -528,7 +547,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
   async function execute(task, input, runWorkspace) {
     const guard = pathGuard(runWorkspace, input.roots);
     const messages = [
-      { role: 'system', content: modelSystemPrompt({ maxSteps: input.maxSteps, write: input.write, roots: guard.extras }) },
+      { role: 'system', content: modelSystemPrompt({ maxSteps: input.maxSteps, write: input.write, permission: input.permission, roots: guard.extras }) },
       { role: 'user', content: `任务：${input.prompt}\n\n工作目录：${runWorkspace}` },
     ];
     const usage = {};
@@ -566,7 +585,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       pushActivity(task, { kind: 'tool', text: describeCall(parsed.tool, parsed.args) });
       let output;
       try {
-        output = await runTool(task, parsed.tool, parsed.args, guard, { write: input.write, confirmDanger: input.confirmDanger !== false });
+        output = await runTool(task, parsed.tool, parsed.args, guard, { write: input.write, permission: input.permission, confirmDanger: input.confirmDanger !== false });
         if (parsed.tool === 'write_file' || parsed.tool === 'replace_in_file') files = [...new Set([...files, output.path])];
         if (parsed.tool === 'move_path') files = [...new Set([...files, `${output.from} → ${output.to}`])];
         if (parsed.tool === 'delete_path' && output.removed) files = [...new Set([...files, `${output.path}（已删除）`])];

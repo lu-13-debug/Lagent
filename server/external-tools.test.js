@@ -386,7 +386,7 @@ test('E3 Work 对 browser/github 先审批后执行并只公开白名单 artifac
     start() { throw new Error('not used'); }, get() { return null; }
   };
   const registry = createExecutorRegistry([analysis, browser, github]);
-  const engine = createWorkEngine(store, registry, event => events.push(event), { policy: { allowedExecutors: ['browser', 'github'] }, env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
+  const engine = createWorkEngine(store, registry, event => events.push(event), { policy: { allowedExecutors: ['browser', 'github'], requireApproval: true }, env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
 
   const agents = engine.bootstrap().agents;

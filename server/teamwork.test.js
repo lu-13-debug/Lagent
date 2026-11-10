@@ -29,7 +29,7 @@ function harness(t) {
   const claude = claudeCodeExecutor({ store, cwd: root, binary: process.execPath, spawnImpl: (...args) => { spawned.push(args); return fake(); } });
   const codex = codexExecutor({ store, cwd: root, binary: process.execPath, spawnImpl: (...args) => { spawned.push(args); return fake(); } });
   const engine = createWorkEngine(store, createExecutorRegistry([claude, codex]), () => {}, {
-    policy: { allowedExecutors: ['claude-code', 'codex'] },
+    policy: { allowedExecutors: ['claude-code', 'codex'], requireApproval: true },
     env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXTERNAL: '1', DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home
   });

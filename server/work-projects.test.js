@@ -200,7 +200,7 @@ test('P1 项目对话消息经审批后在工作目录续接会话并回写 sess
   });
   let plannerInput = null;
   const engine = createWorkEngine(store, createExecutorRegistry([claude]), () => {}, {
-    policy: { allowedExecutors: ['claude-code'] },
+    policy: { allowedExecutors: ['claude-code'], requireApproval: true },
     env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home,
     planner: async input => {
@@ -402,7 +402,7 @@ test('P1 项目计划把步骤分派给不同 Agent 并各自建立项目对话'
   });
   let plannerInput = null;
   const engine = createWorkEngine(store, createExecutorRegistry([claude, codex]), () => {}, {
-    policy: { allowedExecutors: ['claude-code', 'codex'] },
+    policy: { allowedExecutors: ['claude-code', 'codex'], requireApproval: true },
     env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home,
     planner: async input => {
@@ -471,7 +471,7 @@ test('P1 窗口 Agent 可与项目内 Agent 并行分派，窗口会话绑定所
   });
   const window = windowExecutor({ store, bridge, waitMs: 1, pollMs: 1, maxWaitMs: 1 });
   const engine = createWorkEngine(store, createExecutorRegistry([claude, window]), () => {}, {
-    policy: { allowedExecutors: ['claude-code', 'window'] },
+    policy: { allowedExecutors: ['claude-code', 'window'], requireApproval: true },
     env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home,
     windowBridge: bridge

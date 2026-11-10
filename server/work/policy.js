@@ -24,12 +24,17 @@ export const WORK_POLICY_ID = 'default';
 
 const defaults = Object.freeze({
   mode: 'personal',
+  // 权限模式：read 仅查看、workspace 只在工作区内改、full 完全权限（越界不再问）。
+  permission: 'workspace',
   acceptMode: 'explicit',
   allowedExecutors: Object.freeze(['analysis', 'terminal']),
-  requireApproval: true,
+  // 默认不再「先批准再执行」：需要额外权限时才会在对话里弹一次确认。
+  requireApproval: false,
   budgets: Object.freeze({ maxConcurrent: 2, maxCallsPerTicket: 12, maxRuntimeMs: 3600000, maxTokensPerTicket: 200000 }),
-  limits: Object.freeze({ browserHosts: Object.freeze([]), githubRepos: Object.freeze([]), acpWrites: true, modelWrites: false, extraRoots: Object.freeze([]), confirmDanger: true })
+  limits: Object.freeze({ browserHosts: Object.freeze([]), githubRepos: Object.freeze([]), acpWrites: true, modelWrites: true, extraRoots: Object.freeze([]), confirmDanger: true })
 });
+
+export const PERMISSIONS = Object.freeze(['read', 'workspace', 'full']);
 
 const clone = value => JSON.parse(JSON.stringify(value));
 const fail = message => { throw Object.assign(new Error(message), { status: 400, code: 'INVALID_WORK_POLICY' }); };
@@ -87,10 +92,12 @@ export function defaultPolicy() { return clone(defaults); }
 
 export function normalizePolicy(input = {}, base = defaults) {
   input = object(input, 'Work policy');
-  onlyKeys(input, ['mode', 'acceptMode', 'allowedExecutors', 'requireApproval', 'budgets', 'limits'], 'Work policy');
+  onlyKeys(input, ['mode', 'permission', 'acceptMode', 'allowedExecutors', 'requireApproval', 'budgets', 'limits'], 'Work policy');
   if (input.mode !== undefined && input.mode !== 'personal') fail('mode 仅支持 personal');
-  if (input.acceptMode !== undefined && input.acceptMode !== 'explicit') fail('acceptMode 仅支持 explicit');
-  if (input.requireApproval !== undefined && input.requireApproval !== true) fail('requireApproval 必须为 true');
+  if (input.permission !== undefined && !PERMISSIONS.includes(input.permission)) fail('permission 仅支持 read、workspace、full');
+  if (input.acceptMode !== undefined && !['auto', 'explicit'].includes(input.acceptMode)) fail('acceptMode 仅支持 auto、explicit');
+  if (input.requireApproval !== undefined && typeof input.requireApproval !== 'boolean') fail('requireApproval 必须是布尔值');
+  const permission = input.permission === undefined ? (base.permission || 'workspace') : input.permission;
   const allowedExecutors = input.allowedExecutors === undefined ? [...base.allowedExecutors] : stringList(input.allowedExecutors, 'allowedExecutors', 12);
   const unknown = allowedExecutors.filter(id => !['analysis', 'terminal', 'window', 'model', ...EXTERNAL_EXECUTORS].includes(id));
   if (unknown.length) fail(`未知执行器：${unknown.join('、')}`);
@@ -104,16 +111,20 @@ export function normalizePolicy(input = {}, base = defaults) {
   const browserHosts = limits.browserHosts === undefined ? clone(base.limits.browserHosts) : normalizedList(limits.browserHosts, 'browserHosts', 50, browserHost);
   const githubRepos = limits.githubRepos === undefined ? clone(base.limits.githubRepos) : normalizedList(limits.githubRepos, 'githubRepos', 100, githubRepo);
   const extraRoots = limits.extraRoots === undefined ? clone(base.limits.extraRoots || []) : normalizedList(limits.extraRoots, 'extraRoots', 10, extraRoot);
-  const acpWrites = limits.acpWrites === undefined ? (base.limits?.acpWrites !== false) : limits.acpWrites === true;
-  // 模型 Agent 默认只读，写权限必须显式打开。
-  const modelWrites = limits.modelWrites === undefined ? base.limits?.modelWrites === true : limits.modelWrites === true;
-  // 危险操作（递归删除、白名单外的命令等）默认逐次询问，用户可以在设置里关掉。
-  const confirmDanger = limits.confirmDanger === undefined ? base.limits?.confirmDanger !== false : limits.confirmDanger === true;
+  // 写权限由权限模式决定：仅查看时一律不给写，工作区/完全权限都给写。
+  const acpWrites = permission !== 'read';
+  const modelWrites = permission !== 'read';
+  // 危险操作（递归删除、白名单外的命令等）只在「仅工作区内修改」下逐次询问。
+  const confirmDanger = permission === 'workspace'
+    ? (limits.confirmDanger === undefined ? base.limits?.confirmDanger !== false : limits.confirmDanger === true)
+    : false;
+  // 兼容旧字段：显式传 acpWrites/modelWrites 时以权限模式为准，避免出现「模式说只读、开关说可写」。
   return {
     mode: 'personal',
-    acceptMode: 'explicit',
+    permission,
+    acceptMode: input.acceptMode === undefined ? (base.acceptMode === 'explicit' ? 'explicit' : 'auto') : input.acceptMode,
     allowedExecutors,
-    requireApproval: true,
+    requireApproval: input.requireApproval === undefined ? base.requireApproval === true : input.requireApproval === true,
     budgets: {
       maxConcurrent: integer(budgets.maxConcurrent ?? base.budgets.maxConcurrent, 'maxConcurrent', 1, 8),
       maxCallsPerTicket: integer(budgets.maxCallsPerTicket ?? base.budgets.maxCallsPerTicket, 'maxCallsPerTicket', 1, 50),

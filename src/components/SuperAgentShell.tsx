@@ -764,7 +764,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         setCommand('');
         setActiveTicketId(null);
         setActiveGroupId(null);
-        notify(`内置 Agent 已拆解任务，并分派给 ${execs.length} 个 Agent；确认后开始执行。`);
+        notify(`内置 Agent 已拆解任务，并分派给 ${execs.length} 个 Agent，开始执行。`);
         if (scope) {
           setView('chat');
           setProjectFocus(scope.id);
@@ -794,7 +794,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         setProjectFocus(scope.id);
         setChatFocus(chatId);
         setSending(false);
-        notify(`已把任务分派给 ${targets.length || execs.length} 个 Agent，确认后在 ${scope.name} 目录内执行。`);
+        notify(`已把任务分派给 ${targets.length || execs.length} 个 Agent，在 ${scope.name} 目录里开始执行。`);
         void refresh();
         void reloadProjects();
       } catch (cause) { notify((cause as Error).message, true); setSending(false); }
@@ -1341,9 +1341,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
 
   const settingsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">SETTINGS</p><h1>设置</h1><p>主题、模型与执行权限。</p></div></header><div className="sa-settings-grid"><article className="sa-card"><h2>外观</h2><p>当前仅保留简洁版，主题可切换。</p><button className="sa-button" onClick={() => setAppearanceOpen(true)}><SunMoon size={15} />打开显示设置</button></article><article className="sa-card"><h2>模型与 API</h2><p>配置执行器使用的模型和凭据。</p><button className="sa-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} />打开模型设置</button></article><article className="sa-card sa-policy-card"><h2>执行器策略</h2><p>与「Agent」页的开关同步，这里可批量调整并设置预算；外部执行器还需 <code>DATAAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code>。</p>
     {policy ? <><div className="sa-policy-executors">{executorIds.map(id => <label key={id}><input type="checkbox" checked={(policy.allowedExecutors || []).includes(id)} onChange={() => toggleExecutor(id)} />{executorNames[id]}</label>)}</div>
-      <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.acpWrites !== false} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), acpWrites: event.target.checked } } : previous)} /><span>项目内 ACP 可写<em>关闭后 ACP Agent 在项目里只能读文件；终端调用始终拒绝。</em></span></label>
-      <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.modelWrites === true} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), modelWrites: event.target.checked } } : previous)} /><span>模型 Agent 可写项目文件<em>默认只读。打开后它能在工作目录里改文件、删文件；删除不可恢复，且每个任务执行前仍要你批准。</em></span></label>
-      <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.confirmDanger !== false} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), confirmDanger: event.target.checked } } : previous)} /><span>危险操作再确认<em>递归删除、白名单外的命令，即使目录已授权也会再弹一次窗。</em></span></label>
+      <div className="sa-permissions" role="radiogroup" aria-label="权限模式">{[{ id: 'read', name: '仅查看', desc: '只能读文件、跑只读命令，不改任何东西。' }, { id: 'workspace', name: '仅工作区内修改', desc: '项目目录里直接改；目录之外、递归删除、非白名单命令会弹窗问你。' }, { id: 'full', name: '完全权限', desc: '不再逐次确认；系统目录、.git、.ssh、密钥仍然拒绝。' }].map(option => <button key={option.id} type="button" role="radio" aria-checked={(policy.permission || 'workspace') === option.id} className={`sa-permission${(policy.permission || 'workspace') === option.id ? ' is-on' : ''}`} onClick={() => setPolicy(previous => previous ? { ...previous, permission: option.id as 'read' | 'workspace' | 'full' } : previous)}><strong>{option.name}</strong><em>{option.desc}</em></button>)}</div>
+      {(policy.permission || 'workspace') === 'workspace' && <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.confirmDanger !== false} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), confirmDanger: event.target.checked } } : previous)} /><span>危险操作再确认<em>递归删除、白名单外的命令，即使目录已授权也会再弹一次窗。</em></span></label>}
       <div className="sa-policy-roots">
         <div className="sa-policy-roots-head"><strong>额外授权的目录</strong><em>工作目录之外的目录。登记后里面的读写直接执行、不再逐个弹窗；最多 10 个，系统目录、.git、.ssh、密钥与 .env 始终不开放。</em></div>
         {(policy.limits?.extraRoots || []).length > 0 ? <ul className="sa-policy-root-list">{policy.limits?.extraRoots?.map(root => <li key={root}><code>{root}</code><button type="button" className="sa-link" onClick={() => removeExtraRoot(root)}>移除</button></li>)}</ul> : <p className="sa-inline-note">还没有额外目录。模型 Agent 碰到工作目录之外的路径时，会逐次弹窗问你。</p>}
@@ -1356,7 +1355,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         <label>Token 上限<input type="number" min={1000} max={10000000} value={policy.budgets?.maxTokensPerTicket ?? 200000} onChange={event => setBudget('maxTokensPerTicket', Number(event.target.value))} /></label>
         <label>浏览器主机<input value={(policy.limits?.browserHosts || []).join(', ')} placeholder="example.com" onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), browserHosts: event.target.value.split(',').map(item => item.trim()).filter(Boolean) } } : previous)} /></label>
         <label>GitHub 仓库<input value={(policy.limits?.githubRepos || []).join(', ')} placeholder="owner/repo" onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), githubRepos: event.target.value.split(',').map(item => item.trim()).filter(Boolean) } } : previous)} /></label>
-      </div><div className="sa-policy-actions"><button className="sa-button sa-primary" disabled={policySaving} onClick={() => void savePolicy()}>{policySaving ? '保存中…' : '保存策略'}</button><span className="sa-tag-ok"><ShieldCheck size={14} />审批模式开启</span></div></> : <p className="sa-empty">策略载入中…</p>}
+      </div><div className="sa-policy-actions"><button className="sa-button sa-primary" disabled={policySaving} onClick={() => void savePolicy()}>{policySaving ? '保存中…' : '保存策略'}</button><span className="sa-tag-ok"><ShieldCheck size={14} />{`当前：${policy.permission === 'read' ? '仅查看' : policy.permission === 'full' ? '完全权限' : '仅工作区内修改'}`}</span></div></> : <p className="sa-empty">策略载入中…</p>}
   </article><article className="sa-card sa-mobile-card"><h2><Smartphone size={16} />手机指挥</h2><p>{runtime.mode === 'cloud' ? <>在手机浏览器打开 <code>{location.origin}/m</code>，输入一次性配对码即可远程查看、审批和下达指令。</> : <>本地服务只监听 <code>127.0.0.1</code>，手机无法直接访问。请使用云端账号版，或通过 HTTPS 反向代理暴露服务后打开 <code>/m</code>。</>}</p>
     {mobilePair && <div className="sa-mobile-code" role="status"><strong>{mobilePair.code}</strong><span>{mobilePairSeconds > 0 ? `${mobilePairSeconds} 秒后过期` : '已过期，请重新生成'}</span></div>}
     <button className="sa-button" disabled={mobileBusy === 'pair'} onClick={() => void createMobilePair()}>{mobileBusy === 'pair' ? <RefreshCw size={15} className="sa-spin" /> : <Smartphone size={15} />}{mobilePair ? '重新生成配对码' : '生成配对码'}</button>
@@ -1627,7 +1626,7 @@ function PlanBuilder({ agents, allowedExecutors, datasets, windows, initialGoal,
   ]);
   const [busy, setBusy] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
-  const [autoRun, setAutoRun] = useState(false);
+  const [autoRun, setAutoRun] = useState(true);
   const [error, setError] = useState('');
   const update = (index: number, patch: Partial<PlanStepDraft>) => setSteps(previous => previous.map((step, current) => current === index ? { ...step, ...patch } : step));
   const suggest = async () => {
@@ -1668,7 +1667,7 @@ function PlanBuilder({ agents, allowedExecutors, datasets, windows, initialGoal,
   };
   const parseDependencies = (raw: string, index: number) => [...new Set(raw.split(/[,，\s]+/).map(Number).filter(item => Number.isInteger(item) && item >= 1 && item <= index))].slice(0, 3).map(item => item - 1);
   const removeStep = (index: number) => setSteps(previous => previous.filter((_, current) => current !== index).map(step => ({ ...step, dependsOn: step.dependsOn.filter(item => item !== index).map(item => item > index ? item - 1 : item) })));
-  return <Modal title="多步计划" subtitle="按依赖推进，每一步仍需要你审批" close={close}>
+  return <Modal title="多步计划" subtitle="按依赖推进，默认一路跑完；需要逐步确认时关掉下面的自动执行" close={close}>
     <form className="sa-plan-form" onSubmit={submit}>
       <div className="sa-plan-goal"><label className="sa-field"><span>计划目标</span><input value={goal} onChange={event => setGoal(event.target.value)} placeholder="例如：检查 CI、修复失败项并验证" autoFocus /></label><button type="button" className="sa-button" disabled={!goal.trim() || suggesting || !targets.length} onClick={() => void suggest()}>{suggesting ? '规划中…' : 'AI 帮我规划'}</button></div>
       <div className="sa-plan-steps">{steps.map((step, index) => <div className="sa-plan-step" key={index}>
@@ -1682,10 +1681,10 @@ function PlanBuilder({ agents, allowedExecutors, datasets, windows, initialGoal,
       </div>)}</div>
       <div className="sa-plan-form-foot">
         <button type="button" className="sa-button" disabled={steps.length >= 5} onClick={() => setSteps(previous => [...previous, { executorId: defaultExecutor, text: '', datasetId: datasets.length === 1 ? datasets[0].id : '', dependsOn: previous.length ? [previous.length - 1] : [], windowHandle: '' }])}>添加一步</button>
-        <span className="sa-inline-note">最多 5 步；无依赖步骤可并行，依赖满足后自动待审批。</span>
+        <span className="sa-inline-note">最多 5 步；无依赖步骤可并行，依赖满足后自动开始。</span>
       </div>
       {error && <p className="sa-error-text" role="alert">{error}</p>}
-      <label className="sa-plan-auto"><input type="checkbox" checked={autoRun} onChange={event => setAutoRun(event.target.checked)} /><span>创建后自动执行（跳过逐步审批，仍受执行器策略与预算限制）</span></label>
+      <label className="sa-plan-auto"><input type="checkbox" checked={autoRun} onChange={event => setAutoRun(event.target.checked)} /><span>创建后自动执行（关掉就每一步都等你确认；权限与预算限制不变）</span></label>
       <div className="sa-plan-actions"><button type="button" className="sa-button" onClick={close}>取消</button><button type="submit" className="sa-button sa-primary" disabled={busy || !targets.length}>{busy ? '创建中…' : autoRun ? '创建并执行' : '创建计划'}</button></div>
     </form>
   </Modal>;

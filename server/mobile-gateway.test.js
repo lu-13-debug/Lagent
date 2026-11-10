@@ -287,6 +287,8 @@ test('本地应用完成配对、移动 Work API、只读 policy、脱敏与设�
 
   const device = await pairDevice(base, null);
   const token = device.deviceToken;
+  // 这两条用例验证的是「先批准再执行」的审批链路，显式打开该策略（产品默认已改成直接执行）。
+  assert.equal((await request(base, '/api/work/policy', { method: 'PUT', body: { requireApproval: true } })).status, 200);
   const bootstrapResponse = await request(base, '/api/mobile/bootstrap', { token });
   assert.equal(bootstrapResponse.status, 200);
   const bootstrap = await bootstrapResponse.json();
@@ -411,6 +413,8 @@ test('移动端交接路由返回脱敏子工单且重复交接幂等', async t 
 
   const device = await pairDevice(base, null);
   const token = device.deviceToken;
+  // 这两条用例验证的是「先批准再执行」的审批链路，显式打开该策略（产品默认已改成直接执行）。
+  assert.equal((await request(base, '/api/work/policy', { method: 'PUT', body: { requireApproval: true } })).status, 200);
   const sourceResponse = await request(base, '/api/mobile/command', {
     method: 'POST', token,
     body: { text: '移动交接源', executorId: 'terminal', executorInput: { program: 'pwd', args: [] } }

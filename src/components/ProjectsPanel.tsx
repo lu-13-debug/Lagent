@@ -387,7 +387,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     try {
       const task = newTask.trim();
       if (execs.length > 1) {
-        // 多 Agent：同一任务并行分派，每个 Agent 一条待确认工单，各自在自己的会话里执行。
+        // 多 Agent：同一任务并行分派，每个 Agent 一条工单，各自在自己的会话里执行。
         // 窗口 Agent 不在项目目录里跑，它把同一段任务发进你选定的那个窗口。
         if (!task) { notify('多 Agent 协同需要写下要一起完成的任务。', true); return; }
         const result = await api.workProjectDispatch(project.id, task, execs, execs.includes('window') && target
@@ -399,7 +399,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
         if (chatId) setActiveChatId(chatId);
         notify(execs.includes('window')
           ? `已把任务分派给 ${execs.length} 个 Agent：项目内 Agent 会在项目目录执行，窗口 Agent 会发送到「${target?.title || '所选窗口'}」。`
-          : `已把任务分派给 ${execs.length} 个 Agent，确认后各自在项目目录内执行。`);
+          : `已把任务分派给 ${execs.length} 个 Agent，各自在项目目录里开始执行。`);
         return;
       }
       const result = await api.workCreateProjectChat(project.id, {
@@ -453,7 +453,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       setChatDraft('');
       setTickets(current => [...current.filter(item => item.id !== result.ticket.id), result.ticket]);
       await loadProjects(true);
-      notify(chat.executorId === 'window' ? '已提交，确认后会发送到该窗口的 Agent 会话。' : '已提交，确认后会在项目目录续接该 Agent 会话并修改文件。');
+      notify(chat.executorId === 'window' ? '已发送到该窗口的 Agent 会话。' : '已交给 Agent 开始执行，过程在右侧「执行详情」里。');
     } catch (cause) { notify((cause as Error).message, true); }
     finally { setBusy(''); }
   };
@@ -502,7 +502,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       setChatDraft('');
       setDispatchOpen(false);
       await loadProjects(true);
-      notify(`已分派给 ${result.tickets.length} 个 Agent，确认后各自在项目目录内执行。`);
+      notify(`已分派给 ${result.tickets.length} 个 Agent，各自在项目目录里开始执行。`);
     } catch (cause) { notify((cause as Error).message, true); }
     finally { setDispatchBusy(false); }
   };
@@ -884,14 +884,14 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
             </div>
           </div>
         </div>;
-      }) : <p className="pj-empty">还没有消息。在下方描述任务，确认后才会发送给 Agent。</p>}
+      }) : <p className="pj-empty">还没有消息。在下方描述任务，Agent 会直接开始做。</p>}
     </div>
     <div className="pj-composer">
       <textarea value={chatDraft} onChange={event => setChatDraft(event.target.value)} rows={3} maxLength={3000} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} placeholder={chat.executorId === 'window' ? '描述要发送到该窗口 Agent 会话的指令…' : '描述要在该项目中完成的任务，例如：修复首页布局在窄屏下的溢出'} />
       {dispatchOpen && <div className="pj-dispatch">
         <span className="pj-dispatch-label">并行分派给</span>
         {dispatchExecutors.map(id => <button type="button" key={id} className={`pj-chip ${dispatchTargets.includes(id) ? 'on' : ''}`} aria-pressed={dispatchTargets.includes(id)} onClick={() => toggleDispatchTarget(id)}>{dispatchTargets.includes(id) ? <Check size={12} /> : <Plus size={12} />}{EXECUTOR_LABELS[id] || id}</button>)}
-        <span className="pj-dispatch-hint">每个 Agent 各建一条待确认工单</span>
+        <span className="pj-dispatch-hint">每个 Agent 各建一条工单</span>
         <span className="pj-dispatch-actions">
           <button type="button" className="pj-link" onClick={() => setDispatchOpen(false)}>取消</button>
           <button type="button" className="pj-btn pj-primary pj-small" disabled={!dispatchTargets.length || dispatchBusy} onClick={() => void dispatch()}>{dispatchBusy ? '分派中…' : `分派给 ${dispatchTargets.length} 个 Agent`}</button>
@@ -927,9 +927,9 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
         )}
         <button type="button" className="pj-btn" disabled={!chatDraft.trim() || !dispatchExecutors.length} aria-expanded={dispatchOpen} onClick={toggleDispatchPanel}><Users size={14} />并行分派</button>
         <button type="button" className="pj-btn" disabled={!chatDraft.trim() || planBusy === 'suggest'} onClick={() => void startPlan()}><Sparkles size={14} />{planBusy === 'suggest' ? '拆解中…' : '拆成计划'}</button>
-        <button type="button" className="pj-btn pj-primary" disabled={!chatDraft.trim() || busy === 'send'} onClick={() => void send()}><Send size={14} />{busy === 'send' ? '提交中…' : orchestrate ? '开始编排' : '发送（需审批）'}</button>
+        <button type="button" className="pj-btn pj-primary" disabled={!chatDraft.trim() || busy === 'send'} onClick={() => void send()}><Send size={14} />{busy === 'send' ? '提交中…' : orchestrate ? '开始编排' : '发送'}</button>
       </div>
-      <p className="pj-note pj-note-bar">{orchestrate ? '深度编排：先分析任务、拆成步骤并分给合适的 Agent，批准后逐步执行，验证不过会自动返工（最多 2 轮）。危险操作仍会单独弹窗。' : '消息会创建待确认工单；批准后 CLI 会在项目目录内修改文件，窗口 Agent 会把指令发到已绑定的窗口。'}<button type="button" className="pj-link" onClick={openManualPlan}>手动编排计划</button><span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
+      <p className="pj-note pj-note-bar">{orchestrate ? '深度编排：先分析任务、拆成步骤并分给合适的 Agent，逐步执行，验证不过会自动返工（最多 2 轮）。越界操作仍会单独弹窗。' : '消息会立刻交给 Agent 执行；能不能改文件、要不要你确认，取决于设置里的权限档位。'}<button type="button" className="pj-link" onClick={openManualPlan}>手动编排计划</button><span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
     </div>
   </div> : null;
 
@@ -1026,11 +1026,11 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
                   return <button type="button" key={id} className={`pj-chip ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => toggleNewExecutor(id)}>{on && <Check size={11} />}{EXECUTOR_LABELS[id] || id}</button>;
                 })}
               </div>
-              <small>{newExecutors.includes('window') ? '窗口 Agent 会把同一条任务发送到你选定的那个窗口，其余 Agent 在项目目录里执行；每个 Agent 各有一条待确认工单。' : '可选多个 Agent；多选时会用同一条任务并行分派，每个 Agent 各有一条待确认工单。'}</small>
+              <small>{newExecutors.includes('window') ? '窗口 Agent 会把同一条任务发送到你选定的那个窗口，其余 Agent 在项目目录里执行；每个 Agent 各有一条工单。' : '可选多个 Agent；多选时会用同一条任务并行分派，每个 Agent 各有一条工单。'}</small>
             </div>
             {newExecutors.includes('window') && <label>目标窗口<select value={windowId} onChange={event => setWindowId(event.target.value)}><option value="">选择窗口…</option>{windows.map(item => <option key={item.id} value={item.id}>{item.process} · {item.title}</option>)}</select></label>}
             <label>对话标题（可选）<input value={newTitle} onChange={event => setNewTitle(event.target.value)} placeholder="例如 修复登录页" /></label>
-            <label>任务（可选）<textarea rows={3} maxLength={3000} value={newTask} onChange={event => setNewTask(event.target.value)} placeholder={newExecutors.length > 1 ? '写下要一起完成的任务，创建后立即并行分派' : '写下要完成的任务，创建后立即提交（仍需审批）'} /></label>
+            <label>任务（可选）<textarea rows={3} maxLength={3000} value={newTask} onChange={event => setNewTask(event.target.value)} placeholder={newExecutors.length > 1 ? '写下要一起完成的任务，创建后立即并行分派' : '写下要完成的任务，创建后立即提交'} /></label>
             <div className="pj-editor-actions">
               <button type="button" className="pj-btn" onClick={() => setNewChatOpen(false)}>取消</button>
               <button type="button" className="pj-btn pj-primary" disabled={busy === 'new-chat'} onClick={() => void createChat()}>{busy === 'new-chat' ? '创建中…' : newExecutors.length > 1 ? `分派给 ${newExecutors.length} 个 Agent` : '创建'}</button>

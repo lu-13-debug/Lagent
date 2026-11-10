@@ -48,6 +48,8 @@ function fixture(t, options = {}) {
   };
   const open = () => { engine = createWorkEngine(store, options.executorFactory ? options.executorFactory(executor) : executor, event => events.push(event), { ...(options.planner ? { planner: options.planner } : {}) }); };
   open();
+  // 这些用例验证的是「先批准再执行」的审批链路，需要显式打开该策略；产品默认已改成直接执行。
+  engine.updatePolicy({ requireApproval: true });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   return {
     engine,
@@ -454,6 +456,7 @@ test('E1 执行器注册表校验 ID、可用性与真实 bootstrap 投影', t =
   const dir = mkdtempSync(join(tmpdir(), 'dataagent-executor-registry-'));
   const store = new Store(dir);
   const engine = createWorkEngine(store, registry);
+  engine.updatePolicy({ requireApproval: true });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   assert.throws(() => engine.command({ text: '未知执行器', executorId: 'missing' }), { status: 400 });
   assert.throws(() => engine.command({ text: '不可用执行器', executorId: 'offline' }), { status: 400 });
@@ -482,6 +485,7 @@ test('E1 terminal command 批准前冻结输入，批准后才启动并生成 te
     }
   });
   const engine = createWorkEngine(store, createExecutorRegistry([terminal]));
+  engine.updatePolicy({ requireApproval: true });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
 
   const ticket = engine.command({
@@ -618,6 +622,7 @@ test('E1 terminal 非零退出通过 Work failed report 暴露退出码', async 
     spawnImpl: () => fakeTerminalChild({ stderr: 'denied', code: 9 })
   });
   const engine = createWorkEngine(store, createExecutorRegistry([terminal]));
+  engine.updatePolicy({ requireApproval: true });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   const ticket = engine.command({
     text: '失败命令',
@@ -648,12 +653,8 @@ test('E1 Work app 注册 terminal，cloud 账号使用各自 dataDir 作为 cwd'
       body: { text: `pwd ${account}`, executorId: 'terminal', executorInput: { program: 'pwd', args: [] } }
     }).ticket;
     assert.equal(ticket.executor, 'terminal');
-    assert.equal(call(app, '/api/work/tickets/:id', { params: { id: ticket.id } }).assignments.length, 0);
-    const approved = call(app, '/api/work/tickets/:id/actions', {
-      params: { id: ticket.id },
-      body: { action: 'approve', input: { executorInput: { program: 'git', args: ['status'] } } }
-    }).ticket;
-    assert.equal(approved.status, 'working');
+    // 默认策略是直接执行：工单创建后立即进入工作，不需要再点一次批准。
+    assert.notEqual(ticket.status, 'awaiting_review');
     await waitFor(() => call(app, '/api/work/tickets/:id', { params: { id: ticket.id } }).ticket.status === 'completed', `${account} terminal 未完成`);
     const detail = call(app, '/api/work/tickets/:id', { params: { id: ticket.id } });
     const report = detail.reports.find(item => item.kind === 'ready');
@@ -806,7 +807,7 @@ test('E8 handoff action 首次返回 201，重复交接返回 200 和同一子�
   const source = call(app, '/api/work/command', {
     body: { text: 'HTTP 交接源', executorId: 'terminal', executorInput: { program: 'pwd', args: [] } }
   }).ticket;
-  call(app, '/api/work/tickets/:id/actions', { params: { id: source.id }, body: { action: 'approve' } });
+  // 默认策略直接执行，创建后不需要再点一次批准。
   await waitFor(() => call(app, '/api/work/tickets/:id', { params: { id: source.id } }).ticket.status === 'completed', 'HTTP 源工单未完成');
 
   const invoke = input => {
@@ -897,7 +898,7 @@ test('E9 计划路由创建、查询与取消', async t => {
   const app = createApp({ dataDir: dir, cloud: true, workEnabled: true, serveStatic: false });
   t.after(() => { app.locals.close(); rmSync(dir, { recursive: true, force: true }); });
   const created = call(app, '/api/work/plans', {
-    body: { goal: '路由计划', clientRequestId: 'plan-route', steps: [
+    body: { goal: '路由计划', clientRequestId: 'plan-route', autoRun: false, steps: [
       { executorId: 'terminal', text: '第一步', executorInput: { program: 'pwd', args: [] } },
       { executorId: 'terminal', text: '第二步', executorInput: { program: 'pwd', args: [] }, dependsOn: [0] }
     ] }
@@ -1111,4 +1112,17 @@ test('P4 自动计划创建后直接启动，并在完成后自动启动下一�
   const secondTask = f.store.get('task', second.assignments[0].sessionId);
   f.store.put('task', { ...secondTask, status: 'completed', report: { id: `auto-${second.ticket.id}`, summary: '自动完成' } });
   await waitFor(() => f.engine.getPlan(plan.id).status === 'completed', '自动计划未完成');
+});
+
+test('默认策略下计划一路执行，不需要逐步点批准', t => {
+  const f = fixture(t);
+  f.engine.updatePolicy({ requireApproval: false });
+  assert.equal(f.engine.policy().requireApproval, false);
+  const plan = f.engine.plan({ goal: '直接执行', steps: [
+    { executorId: 'analysis', text: '第一步', datasetId: 'dataset-one' },
+    { executorId: 'analysis', text: '第二步', datasetId: 'dataset-one', dependsOn: [0] }
+  ] });
+  assert.equal(plan.autoRun, true);
+  assert.equal(f.engine.detail(plan.steps[0].ticketId).ticket.status, 'working');
+  assert.deepEqual(f.engine.bootstrap().attention, []);
 });

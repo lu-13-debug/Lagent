@@ -55,7 +55,7 @@ test('P1 工作文件夹与会话可重命名，首条消息自动命名且项�
   // 摘要里的工单元数据
   const executor = claudeCodeExecutor({ store, cwd: root, binary: process.execPath, spawnImpl: () => { throw new Error('不应启动 CLI'); } });
   const engine = createWorkEngine(store, createExecutorRegistry([executor]), () => {}, {
-    policy: { allowedExecutors: ['claude-code'] },
+    policy: { allowedExecutors: ['claude-code'], requireApproval: true },
     env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home
   });

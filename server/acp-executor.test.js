@@ -120,7 +120,7 @@ test('ACP 工单未显式提供 executorInput 时用指令文本作为 prompt', 
   assert.equal(ticket.executor, 'claude-acp');
 });
 
-test('策略关闭 acpWrites 后项目分派给 ACP 只读', t => {
+test('策略切到「仅查看」后项目分派给 ACP 只读', t => {
   const dir = mkdtempSync(join(tmpdir(), 'acp-policy-'));
   const projectDir = mkdtempSync(join(tmpdir(), 'acp-policy-project-'));
   mkdirSync(join(projectDir, '.git'), { recursive: true });
@@ -150,14 +150,14 @@ test('策略关闭 acpWrites 后项目分派给 ACP 只读', t => {
   };
   const engine = createWorkEngine(store, createExecutorRegistry([acp]), () => {}, { env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); rmSync(projectDir, { recursive: true, force: true }); });
-  engine.updatePolicy({ allowedExecutors: ['claude-acp'], limits: { browserHosts: [], githubRepos: [], acpWrites: false } });
+  engine.updatePolicy({ allowedExecutors: ['claude-acp'], permission: 'read' });
   const { project } = engine.importProject({ path: projectDir });
   const result = engine.projectDispatch(project.id, { text: '梳理项目结构', executorIds: ['claude-acp'] });
   assert.equal(result.tickets.length, 1);
   const control = store.get('work-control', result.tickets[0].id);
   assert.equal(control.executorInput.workspace, project.path);
   assert.equal(control.executorInput.write, false);
-  engine.updatePolicy({ allowedExecutors: ['claude-acp'], limits: { browserHosts: [], githubRepos: [], acpWrites: true } });
+  engine.updatePolicy({ allowedExecutors: ['claude-acp'], permission: 'workspace' });
   const second = engine.projectDispatch(project.id, { text: '再梳理一次', executorIds: ['claude-acp'] });
   assert.equal(store.get('work-control', second.tickets[0].id).executorInput.write, true);
 });

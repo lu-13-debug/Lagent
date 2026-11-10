@@ -335,6 +335,49 @@ test('长期授权的额外目录不再询问', async t => {
   assert.match(observed, /lib\.txt/);
 });
 
+test('完全权限模式下写工作目录外的文件不再询问', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-full-'));
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'model-full-extra-'));
+  t.after(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(other, { recursive: true, force: true });
+  });
+  const outside = path.join(other, 'outside.txt');
+  const hub = fakeModelHub([
+    JSON.stringify({ tool: 'write_file', args: { path: outside, content: '完全权限' } }),
+    '{"final":{"summary":"写完了","files":[]}}',
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '写到外面的目录' }, { id: 'assign-full' }, {
+    executorInput: { prompt: '写到外面的目录', workspace: dir, permission: 'full', write: true },
+  });
+  const done = await settle(executor, 'assign-full');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(done.activity.some(item => item.kind === 'waiting'), false, '完全权限不该再弹窗');
+  assert.equal(fs.readFileSync(outside, 'utf8'), '完全权限');
+});
+
+test('仅查看模式下写文件直接被拒绝，不等用户点允许', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-read-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const target = path.join(dir, 'blocked.txt');
+  const hub = fakeModelHub([
+    JSON.stringify({ tool: 'write_file', args: { path: target, content: '不该落盘' } }),
+    '{"final":{"summary":"写不了","files":[]}}',
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '尝试写文件' }, { id: 'assign-read' }, {
+    executorInput: { prompt: '尝试写文件', workspace: dir, permission: 'read' },
+  });
+  const done = await settle(executor, 'assign-read');
+  assert.equal(fs.existsSync(target), false);
+  const observed = done.activity.map(item => `${item.text || ''} ${item.detail || ''}`).join('\n');
+  assert.match(observed, /仅查看/);
+  assert.equal(done.activity.some(item => item.kind === 'waiting'), false, '仅查看模式不该弹窗，应直接拒绝');
+});
+
 test('白名单外的命令要确认，拒绝就不执行', async t => {
   const store = memoryStore();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-cmd-'));

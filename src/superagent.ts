@@ -13,6 +13,7 @@ export interface WorkAgent { id: string; name: string; kind: 'analysis' | 'claud
 export interface WorkTool { id: string; name: string; kind: string; status: string; permissions: string[] }
 export interface WorkPolicy {
   mode: 'personal'; acceptMode: 'explicit' | 'observe' | 'auto';
+  permission?: 'read' | 'workspace' | 'full';
   allowedExecutors?: string[]; requireApproval?: boolean;
   budgets?: { maxConcurrent: number; maxCallsPerTicket: number; maxRuntimeMs: number; maxTokensPerTicket: number };
   limits?: { browserHosts: string[]; githubRepos: string[]; acpWrites?: boolean; modelWrites?: boolean; extraRoots?: string[]; confirmDanger?: boolean };
