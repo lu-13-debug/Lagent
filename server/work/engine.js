@@ -15,7 +15,11 @@ import { analyzeTask } from './task-analyzer.js';
 import * as teamwork from './teamwork.js';
 
 const now = () => new Date().toISOString();
-const review = question => ({question,createdAt:now(),options:[{id:'approve',label:'批准',action:'approve'},{id:'reject',label:'退回',action:'reject'}]});
+const review = (question, approveLabel = '批准', rejectLabel = '退回') => ({question,createdAt:now(),options:[{id:'approve',label:approveLabel,action:'approve'},{id:'reject',label:rejectLabel,action:'reject'}]});
+// 越权访问的确认文案：命令类的 path 其实是命令本身。
+const ACCESS_VERBS = { read: '读取', write: '写入', delete: '删除', command: '执行命令' };
+const accessPrompt = request => `模型 Agent 请求${ACCESS_VERBS[request.mode] || '访问'}：${String(request.path || '').slice(0, 240)}`;
+const accessReview = request => ({...review(accessPrompt(request), `允许这次${ACCESS_VERBS[request.mode] || '访问'}`, '拒绝'),kind:'access',accessMode:request.mode,accessPath:String(request.path || '').slice(0,240)});
 const publicTicket = ({clientRequestId, command, lastAction, datasetId, useAI, approvalSnapshot, executorInput, artifacts, prompt, parentTicketId, chainRootId, handoffDepth, handoffSummary, handoffChildId, planId, planStep, planTotal, ...ticket}) => ({
   ...ticket,
   datasetId:datasetId??null,
@@ -209,6 +213,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       // 模型 Agent 的会话级模型与思考强度：只在模型执行器上透传，其它 CLI 不认识这些键。
       ...(isModel && typeof options?.profileId === 'string' && options.profileId.trim() ? { profileId: options.profileId.trim().slice(0, 100) } : {}),
       ...(isModel && typeof options?.effort === 'string' && options.effort.trim() ? { effort: options.effort.trim().slice(0, 10) } : {}),
+      // 跨目录读写：策略里登记的额外目录直接放行，其余路径由执行器逐次弹窗申请。
+      ...(isModel && Array.isArray(policy.limits?.extraRoots) && policy.limits.extraRoots.length ? { roots: [...policy.limits.extraRoots] } : {}),
+      ...(isModel ? { confirmDanger: policy.limits?.confirmDanger !== false } : {}),
       ...(resuming ? { resume: chat.sessionId } : {})
     };
   };
@@ -550,12 +557,12 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     })();
     const summary=status==='failed'?String(task.error||`${label}执行失败`).slice(0,400):{
       working:`${label}执行中`,
-      awaiting_review:`${label}等待确认`,
+      awaiting_review:task.accessRequest?accessPrompt(task.accessRequest):`${label}等待确认`,
       completed:activeId==='window'?(typeof task.report?.summary==='string'&&task.report.summary.trim()?task.report.summary.trim():'窗口指令已发送'):tool?toolSummary:terminal?'终端命令执行完成':activeId==='model'?(typeof task.artifacts?.cli?.summary==='string'&&task.artifacts.cli.summary.trim()?task.artifacts.cli.summary.trim().slice(0,200):'模型 Agent 执行完成'):cli?`${label}执行完成`:'分析报告已生成',
       cancelled:`${label}已停止`
     }[status];
     const finished=['completed','failed','cancelled'].includes(status);
-    const next={...ticket,status,stage:status==='awaiting_review'?(task.steps?.[task.currentStep]?.id||(terminal||cli||tool?'approval':'plan')):finished?'result':terminal?'terminal':cli?'cli':tool?'tool':'analysis',summary,updatedAt:now(),approvalSnapshot,attention:status==='awaiting_review'?review(summary):undefined};
+    const next={...ticket,status,stage:status==='awaiting_review'?(task.steps?.[task.currentStep]?.id||(terminal||cli||tool?'approval':'plan')):finished?'result':terminal?'terminal':cli?'cli':tool?'tool':'analysis',summary,updatedAt:now(),approvalSnapshot,attention:status==='awaiting_review'?(task.accessRequest?accessReview(task.accessRequest):review(summary)):undefined};
     const run={...assignment,status,sessionId:task.id,...(finished?{endedAt:now()}: {})};
     const kind={awaiting_review:'waiting',completed:'ready',failed:'failed',cancelled:'dropped'}[status];
     const artifacts={taskId:task.id,...(status==='completed'&&task.report?{report:task.report}:{}),...(terminal&&task.artifacts?.terminal?{terminal:task.artifacts.terminal}:{}),...(cli&&task.artifacts?.cli?{cli:task.artifacts.cli}:{}),...(tool&&task.artifacts?.[activeId]?{[activeId]:task.artifacts[activeId]}:{})};
@@ -1250,7 +1257,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const stamp=now();
       const direct=active.requiresDataset===false;
       const cli=active.kind==='cli';
-      const created=write({id:randomUUID(),title:trigger.text.slice(0,100),status:'awaiting_review',stage:direct?'approval':'dataset',source:'manual',executor:activeId,summary:activeId==='browser'?'请确认受控浏览器读取后批准执行':activeId==='github'?'请确认 GitHub 只读查询后批准执行':activeId==='terminal'?'请确认终端命令后批准执行':cli?'请确认只读 CLI 任务后批准执行':'请选择数据集并批准开始',attention:review(reviewQuestion(activeId,project?(project.chat.executorId==='window'?'window':'write'):undefined)),createdAt:stamp,updatedAt:stamp,command:trigger.text,clientRequestId:trigger.clientRequestId,datasetId,executorInput,...(project?{projectChatId:project.chat.id}:{})});
+      // 内置模型 Agent 的能力取决于写权限开关，文案不能再说「只读」。
+      const modelCopy=executorInput?.write===true?'请确认后执行（会在项目目录内读写文件）':'请确认后执行（只读项目文件）';
+      const created=write({id:randomUUID(),title:trigger.text.slice(0,100),status:'awaiting_review',stage:direct?'approval':'dataset',source:'manual',executor:activeId,summary:activeId==='browser'?'请确认受控浏览器读取后批准执行':activeId==='github'?'请确认 GitHub 只读查询后批准执行':activeId==='terminal'?'请确认终端命令后批准执行':activeId==='model'?modelCopy:cli?'请确认只读 CLI 任务后批准执行':'请选择数据集并批准开始',attention:review(reviewQuestion(activeId,project?(project.chat.executorId==='window'?'window':'write'):undefined)),createdAt:stamp,updatedAt:stamp,command:trigger.text,clientRequestId:trigger.clientRequestId,datasetId,executorInput,...(project?{projectChatId:project.chat.id}:{})});
       if(project)touchProjectChat(project.chat,{lastTicketId:created.id});
       if(project)takeGitSnapshot(created.id,project.project.path);
       return created;
@@ -1563,7 +1572,12 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         if (stopped.planId && Number.isSafeInteger(stopped.planStep)) advancePlan(stopped.planId);
         return result;
       }
-      if(action==='reject')return write({...next,status:'waiting',attention:undefined,summary:typeof input?.reason==='string'?input.reason.slice(0,400):'已退回，等待新指令'},...(assignment?[['assignment',{...assignment,status:'waiting'}]]:[]));
+      if(action==='reject'){
+        if(task&&typeof active.reject==='function')active.reject(task);
+        // 越权访问被拒绝时任务仍在跑：带着「被拒绝」的结论继续，而不是把工单打回等待。
+        const denied=Boolean(task?.accessRequest);
+        return write({...next,status:denied?'working':'waiting',attention:undefined,summary:typeof input?.reason==='string'?input.reason.slice(0,400):denied?'已拒绝这次访问':'已退回，等待新指令'},...(assignment&&!denied?[['assignment',{...assignment,status:'waiting'}]]:[]));
+      }
       return write({...next,status:'awaiting_review',attention:review(reviewQuestion(activeId))});
     },
     recover(){

@@ -228,6 +228,23 @@
 
 .pj-message:hover { border-color: var(--sa-line-strong); }
 
+/* 一条消息 + 右侧的「确认执行」：待审批的工单在对话里直接放行。 */
+.pj-message-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.pj-message-row .pj-message {
+  flex: 1;
+  min-width: 0;
+}
+
+.pj-message-approve {
+  flex: none;
+  margin-top: 2px;
+}
+
 .pj-editor input,
 .pj-newchat input,
 .pj-newchat select,

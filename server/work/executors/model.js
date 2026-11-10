@@ -13,7 +13,7 @@ const LIST_LIMIT = 120;
 const HITS_LIMIT = 40;
 const ACTIVITY_LIMIT = 60;
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.dataagent', 'data', '.venv', '__pycache__', 'coverage']);
-const WRITE_TOOLS = new Set(['write_file', 'delete_path']);
+const WRITE_TOOLS = new Set(['write_file', 'replace_in_file', 'move_path', 'delete_path']);
 const READ_COMMAND = /^(git\s+(status|diff|log|show|branch)\b[^|;&<>]*|node\s+--check\s+\S+)$/i;
 
 const text = (value, limit) => (typeof value === 'string' ? value.trim().slice(0, limit) : '');
@@ -34,31 +34,60 @@ export function normalizeModelInput(input, { maxPromptBytes = 16 * 1024 } = {}) 
   // 思考强度也是会话级选项；是否真支持由模型能力表在取上下文时校验。
   const effort = typeof input.effort === 'string' ? input.effort.trim() : '';
   if (effort && !/^[a-z]{2,10}$/.test(effort)) throw statusError('effort 无效');
+  // 额外可访问目录由策略给出（用户在设置里添加）：只接受绝对路径，最多 10 个。
+  const roots = Array.isArray(input.roots)
+    ? [...new Set(input.roots.filter(item => typeof item === 'string' && path.isAbsolute(item.trim())).map(item => path.resolve(item.trim())))].slice(0, 10)
+    : [];
   return {
     prompt,
     maxSteps: steps,
     ...(workspace ? { workspace: path.resolve(workspace) } : {}),
     ...(profileId ? { profileId } : {}),
     ...(effort ? { effort } : {}),
+    ...(roots.length ? { roots } : {}),
+    confirmDanger: input.confirmDanger !== false,
     write: input.write === true,
   };
 }
 
-// 所有文件操作都必须落在工作目录内：先解析绝对路径再比对相对路径，避免 ../ 与链接逃逸。
-function resolveInside(workspace, target) {
-  const raw = typeof target === 'string' ? target.trim() : '';
-  if (!raw) throw new Error('path 不能为空');
-  const absolute = path.resolve(workspace, raw);
-  const relative = path.relative(workspace, absolute);
-  // relative 为空字符串表示就是工作目录本身；只有越界（../ 或另一个盘符）才拒绝。
-  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('只能访问工作目录内的文件');
-  return absolute;
+// 权限边界：项目工作目录 + 策略里登记的额外目录。越界的路径不直接拒绝，而是先问用户。
+const insideRoot = (root, absolute) => {
+  const relative = path.relative(root, absolute);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+};
+// 无论用户怎么授权，这些地方永远不碰：系统目录、密钥材料、版本库内部文件、环境变量文件。
+const WINDOWS_SYSTEM_ROOTS = ['C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)', 'C:\\ProgramData'];
+const POSIX_SYSTEM_ROOTS = ['/etc', '/usr', '/bin', '/sbin', '/boot', '/dev', '/proc', '/sys', '/System', '/Library'];
+const SECRET_RULES = [
+  /(^|[\\/])\.git([\\/]|$)/i,
+  /(^|[\\/])\.ssh([\\/]|$)/i,
+  /(^|[\\/])\.env(\.|$)/i,
+  /(^|[\\/])id_(rsa|dsa|ed25519)(\.|$)/i,
+  /\.(pem|p12|pfx|key)$/i,
+];
+const SYSTEM_ROOTS = process.platform === 'win32' ? WINDOWS_SYSTEM_ROOTS : POSIX_SYSTEM_ROOTS;
+const isForbiddenPath = absolute =>
+  SYSTEM_ROOTS.some(root => insideRoot(path.resolve(root), absolute)) || SECRET_RULES.some(rule => rule.test(absolute));
+
+function pathGuard(workspace, roots) {
+  const base = path.resolve(workspace);
+  const extras = [...new Set((Array.isArray(roots) ? roots : []).map(root => path.resolve(root)))].filter(root => root !== base);
+  const known = absolute => insideRoot(base, absolute) || extras.some(root => insideRoot(root, absolute));
+  const display = absolute => (insideRoot(base, absolute) ? path.relative(base, absolute) || '.' : absolute);
+  const resolve = target => {
+    const raw = typeof target === 'string' ? target.trim() : '';
+    if (!raw) throw new Error('path 不能为空');
+    const absolute = path.resolve(base, raw);
+    if (isForbiddenPath(absolute)) {
+      throw new Error(`拒绝访问受保护路径：${display(absolute)}（系统目录、.git、.ssh、密钥与 .env 一类文件不开放）`);
+    }
+    return { absolute, known: known(absolute) };
+  };
+  return { base, extras, resolve, display, known };
 }
 
-const relativeTo = (workspace, absolute) => path.relative(workspace, absolute).split(path.sep).join('/');
-
-function listFiles(workspace, target) {
-  const start = target ? resolveInside(workspace, target) : workspace;
+function listFiles(guard, target) {
+  const start = target ? guard.resolve(target).absolute : guard.base;
   const stat = fs.statSync(start);
   if (!stat.isDirectory()) return { entries: [{ name: path.basename(start), type: 'file', size: stat.size }] };
   const entries = [];
@@ -70,11 +99,11 @@ function listFiles(workspace, target) {
     try { size = fs.statSync(absolute).size; } catch { size = 0; }
     entries.push({ name: entry.name, type: entry.isDirectory() ? 'dir' : 'file', size });
   }
-  return { path: relativeTo(workspace, start) || '.', entries };
+  return { path: guard.display(start) || '.', entries };
 }
 
-function readFile(workspace, target, offset, limit) {
-  const absolute = resolveInside(workspace, target);
+function readFile(guard, target, offset, limit) {
+  const absolute = guard.resolve(target).absolute;
   const stat = fs.statSync(absolute);
   if (!stat.isFile()) throw new Error('只能读取文件');
   if (stat.size > 400 * 1024) throw new Error('文件超过 400KB，请改用 search_code 定位');
@@ -82,7 +111,7 @@ function readFile(workspace, target, offset, limit) {
   const from = Number.isInteger(offset) && offset > 0 ? offset : 0;
   const take = Number.isInteger(limit) && limit > 0 ? Math.min(limit, READ_LIMIT) : READ_LIMIT;
   return {
-    path: relativeTo(workspace, absolute),
+    path: guard.display(absolute),
     size: stat.size,
     offset: from,
     content: content.slice(from, from + take),
@@ -90,8 +119,8 @@ function readFile(workspace, target, offset, limit) {
   };
 }
 
-function searchCode(workspace, pattern, target) {
-  const start = target ? resolveInside(workspace, target) : workspace;
+function searchCode(guard, pattern, target) {
+  const start = target ? guard.resolve(target).absolute : guard.base;
   const expression = new RegExp(pattern, 'i');
   const hits = [];
   const walk = directory => {
@@ -111,7 +140,7 @@ function searchCode(workspace, pattern, target) {
       if (content.includes('\0')) continue;
       content.split(/\r?\n/).forEach((line, index) => {
         if (hits.length >= HITS_LIMIT || !expression.test(line)) return;
-        hits.push({ file: relativeTo(workspace, absolute), line: index + 1, text: line.trim().slice(0, 200) });
+        hits.push({ file: guard.display(absolute), line: index + 1, text: line.trim().slice(0, 200) });
       });
     }
   };
@@ -119,8 +148,8 @@ function searchCode(workspace, pattern, target) {
   return { pattern, count: hits.length, hits };
 }
 
-function writeFile(workspace, target, content) {
-  const absolute = resolveInside(workspace, target);
+function writeFile(guard, target, content) {
+  const absolute = guard.resolve(target).absolute;
   if (typeof content !== 'string') throw new Error('content 必须是字符串');
   if (Buffer.byteLength(content) > 200 * 1024) throw new Error('单次写入不能超过 200KB');
   fs.mkdirSync(path.dirname(absolute), { recursive: true });
@@ -128,23 +157,50 @@ function writeFile(workspace, target, content) {
   const before = existed ? fs.readFileSync(absolute, 'utf8') : '';
   fs.writeFileSync(absolute, content, 'utf8');
   return {
-    path: relativeTo(workspace, absolute),
+    path: guard.display(absolute),
     created: !existed,
     before: before.length,
     after: content.length,
   };
 }
 
+// 精确替换：比整文件重写省 token，也更不容易误伤别的内容。
+function replaceInFile(guard, target, { find, replace, all = false } = {}) {
+  const absolute = guard.resolve(target).absolute;
+  if (typeof find !== 'string' || !find) throw new Error('find 必须是非空字符串');
+  if (typeof replace !== 'string') throw new Error('replace 必须是字符串');
+  const before = fs.readFileSync(absolute, 'utf8');
+  const occurrences = before.split(find).length - 1;
+  if (occurrences === 0) throw new Error(`没有在 ${guard.display(absolute)} 里找到要替换的文本`);
+  if (occurrences > 1 && all !== true) throw new Error(`找到 ${occurrences} 处相同文本；请提供更长的 find，或显式传 all:true`);
+  const after = all === true ? before.split(find).join(replace) : before.replace(find, () => replace);
+  if (Buffer.byteLength(after) > 200 * 1024) throw new Error('替换后文件超过 200KB');
+  fs.writeFileSync(absolute, after, 'utf8');
+  return { path: guard.display(absolute), replaced: all === true ? occurrences : 1, before: before.length, after: after.length };
+}
+
+// 移动/重命名：源和目标都走同一套权限判定，跨目录移动时目标目录可能也需要授权。
+function movePath(guard, from, to) {
+  const source = guard.resolve(from).absolute;
+  const target = guard.resolve(to).absolute;
+  if (source === guard.base) throw new Error('不能移动工作目录本身');
+  if (!fs.existsSync(source)) throw new Error(`源路径不存在：${guard.display(source)}`);
+  if (fs.existsSync(target)) throw new Error(`目标已存在：${guard.display(target)}`);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.renameSync(source, target);
+  return { from: guard.display(source), to: guard.display(target) };
+}
+
 // 删除是不可恢复的：先算清楚要删什么，再动手；工作目录本身永远不许删。
-function deletePath(workspace, target, { recursive = false, dryRun = false } = {}) {
-  const root = path.resolve(workspace);
-  const absolute = resolveInside(workspace, target);
+function deletePath(guard, target, { recursive = false, dryRun = false } = {}) {
+  const root = guard.base;
+  const absolute = guard.resolve(target).absolute;
   const atRoot = absolute === root;
   let stat;
   try {
     stat = fs.lstatSync(absolute);
   } catch {
-    throw new Error(`路径不存在：${relativeTo(workspace, absolute)}`);
+    throw new Error(`路径不存在：${guard.display(absolute)}`);
   }
   const isDirectory = stat.isDirectory();
   if (atRoot && dryRun !== true) throw new Error('不能删除工作目录本身；要清空它就只能逐个删里面的条目');
@@ -165,38 +221,60 @@ function deletePath(workspace, target, { recursive = false, dryRun = false } = {
       } else {
         files += 1;
       }
-      if (sample.length < 20) sample.push(relativeTo(workspace, path.join(directory, entry.name)) + (entry.isDirectory() ? '/' : ''));
+      if (sample.length < 20) sample.push(guard.display(path.join(directory, entry.name)) + (entry.isDirectory() ? '/' : ''));
     }
   };
   if (isDirectory) walk(absolute);
   else files = 1;
-  const summary = { path: relativeTo(workspace, absolute) || '.', kind: isDirectory ? 'dir' : 'file', recursive: isDirectory ? recursive === true : false, files, dirs, sample };
+  const summary = { path: guard.display(absolute) || '.', kind: isDirectory ? 'dir' : 'file', recursive: isDirectory ? recursive === true : false, files, dirs, sample };
   if (dryRun) return { ...summary, dryRun: true, ...(atRoot ? { note: '工作目录本身不会被删除，这里只是它内容的清单' } : {}) };
   fs.rmSync(absolute, { recursive, force: false });
   return { ...summary, removed: true };
 }
 
-function runCommand(workspace, command) {
+const SHELL = process.platform === 'win32'
+  ? { file: process.env.ComSpec || 'cmd.exe', args: value => ['/d', '/s', '/c', value] }
+  : { file: '/bin/sh', args: value => ['-c', value] };
+
+// 只读白名单直接跑（不起 shell，避免命令拼接）；其它命令必须先拿到用户确认，再交给系统 shell 执行。
+function runCommand(guard, command, { approved = false } = {}) {
   const value = text(command, 300);
-  if (!READ_COMMAND.test(value)) throw new Error('只允许只读的 git 命令（status/diff/log/show/branch）或 node --check');
-  // 白名单命令本身不写文件；用 execFileSync 走 shell 之外，避免命令拼接。
-  const parts = value.split(/\s+/);
-  const output = execFileSync(parts[0], parts.slice(1), { cwd: workspace, timeout: 15000, encoding: 'utf8', windowsHide: true });
-  return { command: value, output: String(output).slice(0, 4000) };
+  if (!value) throw new Error('command 不能为空');
+  const readOnly = READ_COMMAND.test(value);
+  if (!readOnly && !approved) throw new Error('这条命令不在只读白名单内：需要用户在弹窗里确认后才能执行');
+  const options = { cwd: guard.base, timeout: readOnly ? 15000 : 60000, encoding: 'utf8', windowsHide: true, maxBuffer: 4 * 1024 * 1024 };
+  try {
+    if (readOnly) {
+      const parts = value.split(/\s+/);
+      return { command: value, exitCode: 0, output: String(execFileSync(parts[0], parts.slice(1), options)).slice(0, 4000) };
+    }
+    const output = execFileSync(SHELL.file, SHELL.args(value), { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { command: value, exitCode: 0, output: String(output).slice(0, 4000) };
+  } catch (error) {
+    return {
+      command: value,
+      exitCode: typeof error?.status === 'number' ? error.status : 1,
+      output: String(error?.stdout || error?.stderr || error?.message || '').slice(0, 4000),
+    };
+  }
 }
 
-export function modelSystemPrompt({ maxSteps, write }) {
+export function modelSystemPrompt({ maxSteps, write, roots = [] }) {
+  const extra = roots.length ? `已获得长期授权的其它目录：${roots.join('、')}。` : '';
   return [
     '你是 DataAgent 的模型 Agent，在一个本地工作目录里独立完成任务。',
     '每一步只输出一个 JSON 对象，不要输出任何其它文字、不要用代码块包裹：',
     '· 调用工具：{"tool":"read_file","args":{"path":"src/app.tsx"}}',
     '· 结束任务：{"final":{"summary":"做了什么、结论是什么","files":["改动过的文件"]}}',
     '',
-    `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command}。`,
+    `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content}、replace_in_file{path,find,replace,all?}、move_path{from,to}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command}。`,
+    '路径可以写相对工作目录的路径，也可以写绝对路径。',
     write
-      ? '你被允许修改这个目录内的文件：先读再改，一次写一个文件，改动要小、要能说清理由。删除不可恢复：只有用户明确要求删除时才做，先 delete_path{path,dryRun:true} 看清将删掉什么，再真正删；删目录必须显式传 recursive:true；工作目录本身不许删。'
-      : '你没有写权限：不要尝试 write_file 或 delete_path，只读取与检索，最后给出结论和改动建议。',
-    '规则：不要编造文件、函数或结论；只访问工作目录内的路径；读不懂就先 list_files / search_code。',
+      ? '你被允许修改这个目录内的文件：先读再改，一次改一处，改动要小、要能说清理由。小改用 replace_in_file，整文件重写才用 write_file。删除不可恢复：只有用户明确要求删除时才做，先 delete_path{path,dryRun:true} 看清将删掉什么，再真正删；删目录必须显式传 recursive:true；工作目录本身不许删。'
+      : '你没有写权限：不要尝试 write_file、replace_in_file、move_path 或 delete_path，只读取与检索，最后给出结论和改动建议。',
+    `权限规则：工作目录内的读写直接执行；工作目录之外的路径会先弹窗问用户，用户拒绝就必须停止并说明。受保护路径（系统目录、.git、.ssh、.env、密钥）永远拒绝。${extra}`,
+    'run_command：只读的 git 命令（status/diff/log/show/branch）与 node --check 直接执行；其它命令会先弹窗让用户确认，被拒绝就不要绕道。',
+    '规则：不要编造文件、函数或结论；读不懂就先 list_files / search_code。',
     `最多 ${maxSteps} 步，步数用完必须给出 final。`,
   ].join('\n');
 }
@@ -226,6 +304,8 @@ const TOOL_LABELS = {
   read_file: '读文件',
   search_code: '搜代码',
   write_file: '写文件',
+  replace_in_file: '改文件',
+  move_path: '移动',
   delete_path: '删除',
   run_command: '运行命令',
 };
@@ -240,6 +320,8 @@ export function describeCall(tool, args = {}) {
   if (tool === 'read_file') return `${label} ${shortPath(args.path)}`;
   if (tool === 'search_code') return `${label} ${String(args.pattern || '').slice(0, 60)}`;
   if (tool === 'write_file') return `${label} ${shortPath(args.path)}`;
+  if (tool === 'replace_in_file') return `${label} ${shortPath(args.path)}${args.all === true ? '（全部）' : ''}`;
+  if (tool === 'move_path') return `${label} ${shortPath(args.from)} → ${shortPath(args.to)}`;
   if (tool === 'delete_path') return `${label} ${shortPath(args.path)}${args.recursive === true ? '（递归）' : ''}${args.dryRun === true ? '（试运行）' : ''}`;
   if (tool === 'run_command') return `${label} ${String(args.command || '').slice(0, 80)}`;
   return tool;
@@ -263,13 +345,19 @@ export function describeOutput(tool, output = {}) {
   if (tool === 'write_file') {
     return `${shortPath(output.path)} · ${output.created ? '新建' : '覆盖'} · ${output.after || 0} 字符`;
   }
+  if (tool === 'replace_in_file') {
+    return `${shortPath(output.path)} · 替换 ${output.replaced || 0} 处 · ${output.after || 0} 字符`;
+  }
+  if (tool === 'move_path') {
+    return `${shortPath(output.from)} → ${shortPath(output.to)}`;
+  }
   if (tool === 'delete_path') {
     const scope = `${output.files || 0} 个文件${output.dirs ? `、${output.dirs} 个目录` : ''}`;
     return `${shortPath(output.path)} · ${scope}${output.dryRun ? '（试运行，未删除）' : ' 已删除'}`;
   }
   if (tool === 'run_command') {
     const first = String(output.output || '').trim().split(/\r?\n/)[0] || '';
-    return `退出码 0${first ? `：${first.slice(0, 100)}` : ''}`;
+    return `退出码 ${output.exitCode ?? 0}${first ? `：${first.slice(0, 100)}` : ''}`;
   }
   return '';
 }
@@ -334,25 +422,113 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
     return visibleReply(payload, protocol);
   }
 
-  function runTool(name, args, runWorkspace, write) {
-    if (name === 'list_files') return listFiles(runWorkspace, args?.path);
-    if (name === 'read_file') return readFile(runWorkspace, args?.path, args?.offset, args?.limit);
-    if (name === 'search_code') return searchCode(runWorkspace, text(args?.pattern, 200) || '.', args?.path);
+  // 越界访问不是直接拒绝，而是挂起等用户回答：task 进入 awaiting_approval，
+  // 引擎把这个状态映射成工单的「待确认」，前端就是一次弹窗。
+  const pendingAccess = new Map();
+  // 同一任务里，同一个位置只问一次：批准之后同一路径（及其子路径）不再弹窗。
+  const grantedAccess = new Map();
+  const grantedFor = taskId => {
+    if (!grantedAccess.has(taskId)) grantedAccess.set(taskId, new Set());
+    return grantedAccess.get(taskId);
+  };
+  const ACCESS_TIMEOUT_MS = 5 * 60 * 1000;
+  const MODE_LABELS = { read: '读取', write: '写入', delete: '删除', command: '执行命令' };
+
+  function requestAccess(task, request) {
+    const id = `acc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    task.accessRequest = { id, ...request, at: new Date().toISOString() };
+    task.status = 'awaiting_approval';
+    task.updatedAt = new Date().toISOString();
+    pushActivity(task, {
+      kind: 'waiting',
+      text: `请求${MODE_LABELS[request.mode] || '访问'}：${shortPath(request.path)}`,
+      detail: request.reason || '',
+    });
+    return new Promise(resolve => {
+      const finish = answer => {
+        clearTimeout(timer);
+        pendingAccess.delete(task.id);
+        resolve(answer);
+      };
+      const timer = setTimeout(() => {
+        pendingAccess.delete(task.id);
+        resolve({ allow: false, reason: '等待用户确认超时（5 分钟），按拒绝处理' });
+      }, ACCESS_TIMEOUT_MS);
+      if (typeof timer.unref === 'function') timer.unref();
+      pendingAccess.set(task.id, { resolve: finish, request });
+    });
+  }
+
+  // 统一入口：命中已知目录直接放行；越界先问；危险动作（递归删除、白名单外命令）也先问。
+  async function guardAccess(task, { absolute, known }, mode, reason) {
+    if (known) return { allow: true };
+    if ([...grantedFor(task.id)].some(root => insideRoot(root, absolute))) return { allow: true };
+    const answer = await requestAccess(task, { path: absolute, mode, reason });
+    // 不管允许还是拒绝都要回到 running 并清掉请求：拒绝的结论通过工具错误回给模型。
+    task.status = 'running';
+    delete task.accessRequest;
+    task.updatedAt = new Date().toISOString();
+    persist(task);
+    if (!answer.allow) throw new Error(`用户拒绝了${MODE_LABELS[mode] || '访问'}权限：${absolute}${answer.reason ? `（${answer.reason}）` : ''}`);
+    grantedFor(task.id).add(absolute);
+    return answer;
+  }
+
+  async function runTool(task, name, args, guard, { write, confirmDanger }) {
+    const writeTools = WRITE_TOOLS;
+    if (writeTools.has(name) && !write) throw new Error('当前任务没有写权限');
+    if (name === 'list_files') {
+      await guardAccess(task, guard.resolve(args?.path), 'read');
+      return listFiles(guard, args?.path);
+    }
+    if (name === 'read_file') {
+      await guardAccess(task, guard.resolve(args?.path), 'read');
+      return readFile(guard, args?.path, args?.offset, args?.limit);
+    }
+    if (name === 'search_code') {
+      await guardAccess(task, guard.resolve(args?.path), 'read');
+      return searchCode(guard, text(args?.pattern, 200) || '.', args?.path);
+    }
     if (name === 'write_file') {
-      if (!write) throw new Error('当前任务没有写权限');
-      return writeFile(runWorkspace, args?.path, args?.content);
+      await guardAccess(task, guard.resolve(args?.path), 'write');
+      return writeFile(guard, args?.path, args?.content);
+    }
+    if (name === 'replace_in_file') {
+      await guardAccess(task, guard.resolve(args?.path), 'write');
+      return replaceInFile(guard, args?.path, { find: args?.find, replace: args?.replace, all: args?.all === true });
+    }
+    if (name === 'move_path') {
+      await guardAccess(task, guard.resolve(args?.from), 'write');
+      await guardAccess(task, guard.resolve(args?.to), 'write');
+      return movePath(guard, args?.from, args?.to);
     }
     if (name === 'delete_path') {
-      if (!write) throw new Error('当前任务没有写权限');
-      return deletePath(runWorkspace, args?.path, { recursive: args?.recursive === true, dryRun: args?.dryRun === true });
+      const resolved = guard.resolve(args?.path);
+      await guardAccess(task, resolved, 'delete');
+      const recursive = args?.recursive === true;
+      // 递归删除不可恢复：即使目录已授权，也只在「危险操作需要确认」开着时再问一次。
+      if (recursive && confirmDanger && args?.dryRun !== true) {
+        const answer = await requestAccess(task, { path: resolved.absolute, mode: 'delete', reason: '递归删除整个目录，不可恢复' });
+        if (!answer.allow) throw new Error(`用户拒绝了这次删除：${resolved.absolute}`);
+      }
+      return deletePath(guard, args?.path, { recursive, dryRun: args?.dryRun === true });
     }
-    if (name === 'run_command') return runCommand(runWorkspace, args?.command);
+    if (name === 'run_command') {
+      const value = text(args?.command, 300);
+      if (!READ_COMMAND.test(value)) {
+        const answer = await requestAccess(task, { path: value, mode: 'command', reason: '不在只读白名单内，需要确认后执行' });
+        if (!answer.allow) throw new Error('用户拒绝了这条命令，请不要绕道执行');
+        return runCommand(guard, value, { approved: true });
+      }
+      return runCommand(guard, value);
+    }
     throw new Error(`未知工具：${name}`);
   }
 
   async function execute(task, input, runWorkspace) {
+    const guard = pathGuard(runWorkspace, input.roots);
     const messages = [
-      { role: 'system', content: modelSystemPrompt({ maxSteps: input.maxSteps, write: input.write }) },
+      { role: 'system', content: modelSystemPrompt({ maxSteps: input.maxSteps, write: input.write, roots: guard.extras }) },
       { role: 'user', content: `任务：${input.prompt}\n\n工作目录：${runWorkspace}` },
     ];
     const usage = {};
@@ -390,8 +566,9 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       pushActivity(task, { kind: 'tool', text: describeCall(parsed.tool, parsed.args) });
       let output;
       try {
-        output = runTool(parsed.tool, parsed.args, runWorkspace, input.write);
-        if (parsed.tool === 'write_file') files = [...new Set([...files, output.path])];
+        output = await runTool(task, parsed.tool, parsed.args, guard, { write: input.write, confirmDanger: input.confirmDanger !== false });
+        if (parsed.tool === 'write_file' || parsed.tool === 'replace_in_file') files = [...new Set([...files, output.path])];
+        if (parsed.tool === 'move_path') files = [...new Set([...files, `${output.from} → ${output.to}`])];
         if (parsed.tool === 'delete_path' && output.removed) files = [...new Set([...files, `${output.path}（已删除）`])];
         messages.push({ role: 'user', content: `工具结果（${parsed.tool}）：\n${JSON.stringify(output).slice(0, 6000)}` });
         pushActivity(task, { kind: 'observation', text: `${TOOL_LABELS[parsed.tool] || parsed.tool} 完成`, detail: describeOutput(parsed.tool, output) });
@@ -473,6 +650,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
         artifacts: {},
         ...(normalized.profileId ? { profileId: normalized.profileId } : {}),
         ...(normalized.effort ? { effort: normalized.effort } : {}),
+        ...(normalized.roots?.length ? { roots: normalized.roots } : {}),
       };
       persist(task);
       running.set(task.id, true);
@@ -492,12 +670,37 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
             startedAt,
           });
         })
-        .finally(() => running.delete(task.id));
+        .finally(() => { running.delete(task.id); grantedAccess.delete(task.id); });
       return task;
     },
     get: taskId => (taskId && store.get('task', taskId)) || null,
+    // 越界访问的确认：引擎把 task.status=awaiting_approval 映射成工单待确认，
+    // 用户点「批准」就走 approve，点「退回」走 reject。
+    approval(task) {
+      const request = task?.accessRequest;
+      if (!request || task.status !== 'awaiting_approval') return undefined;
+      return { version: 1, kind: 'access', requestId: request.id, path: request.path, mode: request.mode };
+    },
+    approve(task, input) {
+      if (!task) return;
+      const pending = pendingAccess.get(task.id);
+      if (!pending) return;
+      const allow = input?.decision !== 'deny';
+      task.status = 'running';
+      persist(task);
+      pending.resolve({ allow, reason: allow ? '' : '用户在确认弹窗里拒绝了这次请求' });
+    },
+    reject(task) {
+      const pending = task ? pendingAccess.get(task.id) : null;
+      if (!pending) return;
+      task.status = 'running';
+      persist(task);
+      pending.resolve({ allow: false, reason: '用户退回了这次请求' });
+    },
     stop(task) {
       if (!task) return;
+      const pending = pendingAccess.get(task.id);
+      if (pending) pending.resolve({ allow: false, reason: '任务已停止' });
       task.cancelled = true;
       task.status = 'cancelled';
       task.endedAt = new Date().toISOString();

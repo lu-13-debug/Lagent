@@ -162,13 +162,20 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 | `read_file {path,offset?,limit?}` | 读文本文件，单文件上限 400KB，默认返回 8000 字符，超出返回 `truncated:true` |
 | `search_code {pattern,path?}` | 正则搜索，跳过 >200KB 与二进制文件，最多 40 条命中，返回 `{file,line,text}` |
 | `write_file {path,content}` | 仅在 `write:true` 时可用；单次上限 200KB，自动建父目录，返回 `{path,created,before,after}` |
-| `run_command {command}` | 只读白名单：`git status/diff/log/show/branch` 与 `node --check`，不经 shell，15 秒超时 |
+| `replace_in_file {path,find,replace,all?}` | 精确文本替换；命中多处又没传 `all:true` 时报错并提示，0 处命中报「没有找到」 |
+| `move_path {from,to}` | 移动或重命名，目标已存在时报错 |
+| `delete_path {path,recursive?,dryRun?}` | 删除文件或目录；目录必须显式 `recursive:true`，工作目录本身不允许删；`dryRun:true` 只返回将删清单 |
+| `run_command {command}` | 只读白名单：`git status/diff/log/show/branch` 与 `node --check`，不经 shell，15 秒超时；白名单外的命令确认后经系统 shell 执行，60 秒超时，返回 `{command,exitCode,output}` |
 
 - 模型必须每一步只输出一个 JSON：`{"tool":"read_file","args":{...}}` 或 `{"final":{"summary":"...","files":["..."]}}`。解析失败会把原回复与「请只输出 JSON」压回上下文重试；步数上限 12（默认 8）。
-- 所有路径都经 `resolveInside` 双检，越界（`../`、绝对路径、工作目录之外）直接报错；未配置模型或没有 Key 时 `start` 直接 503，不会留下假运行的任务。
-- 执行器输入可带 `profileId` 指定这条工单用哪个模型配置（团队协作里「内置 Agent 用哪个模型」就靠它），不传则用工作流默认模型。
+- **权限分区**：①工作目录内 —— 直接执行；②策略 `limits.extraRoots`（最多 10 个绝对路径，不能是磁盘根）里登记的目录 —— 直接执行；③其余路径 —— 执行器把 `task.status` 置为 `awaiting_approval` 并挂起工具调用，工单变成「待确认」，用户在弹窗里批准（`POST /api/work/tickets/:id/actions {action:'approve'}`）或拒绝（`reject`），5 分钟不回答按拒绝。同一任务里同一位置只问一次；批准结论只对当前任务有效。
+- 危险动作即使目录已授权也要再问一次：递归删除（策略 `limits.confirmDanger`，默认 `true`）与白名单外的命令。
+- 永远拒绝、不给授权机会：系统目录（`C:\Windows`、`Program Files*`、`ProgramData`，POSIX 的 `/etc`、`/usr` 等）、`.git`、`.ssh`、`.env*`、`id_rsa|dsa|ed25519`、`*.pem|p12|pfx|key`，报错「拒绝访问受保护路径」。
+- 访问确认的待确认项带 `kind:'access'`、`accessMode`（`read|write|delete|command`）与 `accessPath`，界面据此弹授权弹窗并从 `options` 取「允许这次…／拒绝」。
+- 所有路径都经 `pathGuard.resolve` 校验（`isForbiddenPath` + 是否在已知根内）；未配置模型或没有 Key 时 `start` 直接 503，不会留下假运行的任务。
+- 执行器输入可带 `profileId` 指定这条工单用哪个模型配置（团队协作里「内置 Agent 用哪个模型」就靠它），不传则用工作流默认模型；也可带 `effort`（`default|low|medium|high|xhigh|max`），供应商不认这个档位时自动按默认档重试一次并在摘要里注明。
 - CLI 类执行器（`claude-code`、`codex`）的 `executorInput.model` 会转成 `--model <id>` / `-m <id>`，用于「同一个 Agent 在不同团队里用不同模型」；其余 CLI 没有统一开关，留空即用它们自己的配置。
-- 写权限由执行器策略 `limits.modelWrites`（默认 `false`）控制：关闭时 `write_file` 不可用，模型只读取与检索并给结论；项目对话还要求 `chat.writable !== false`。
+- 写权限由执行器策略 `limits.modelWrites`（默认 `false`）控制：关闭时 `write_file`/`replace_in_file`/`move_path`/`delete_path` 一律不可用，模型只读取与检索并给结论；项目对话还要求 `chat.writable !== false`。
 - 过程流：执行器把每一步写进 `task.activity`（`{kind:'tool'|'observation'|'error'|'result', text, detail?, at}`，保留 60 条）。`GET /api/work/tickets/:id` 的 `detail` 在有过程时附带 `activity`（最近 40 条）；SSE `GET /api/work/events` 在过程变化时推送 `{type:'activity',ticketId,payload:{activity,status}}`，前端据此渲染时间线。`result` 与「结果」块内容相同，界面只显示 `tool/observation/error`。
 
 - `GET /api/work/projects` → `{projects:[ProjectWorkspace]}`；`POST /api/work/projects {path,name?}` → `201/200 {project,created}`。path 必须是存在的绝对目录，服务端取 realpath 后拒绝磁盘根目录与 `Windows`、`Program Files*`、`ProgramData`；同路径重复导入返回 `created:false` 与原记录。只保存记录，不复制、移动或删除本地文件。最多 100 个项目。

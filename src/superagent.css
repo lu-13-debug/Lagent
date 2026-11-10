@@ -2377,6 +2377,69 @@ html[data-theme="dark"] .sa-newchat kbd {
   border-top: 1px solid var(--sa-line);
 }
 
+/* 额外授权目录：一行一个绝对路径，右侧移除；下面是添加框。 */
+.sa-policy-roots {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--sa-line);
+}
+
+.sa-policy-roots-head strong {
+  display: block;
+  font-size: var(--sa-fs-xs);
+  font-weight: 560;
+  color: var(--sa-text);
+}
+
+.sa-policy-roots-head em {
+  display: block;
+  margin-top: 3px;
+  font-style: normal;
+  font-size: var(--sa-fs-2xs);
+  line-height: 1.5;
+  color: var(--sa-text-3);
+}
+
+.sa-policy-root-list {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sa-policy-root-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface-2);
+}
+
+.sa-policy-root-list code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-policy-root-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.sa-policy-root-add input {
+  flex: 1;
+  min-width: 0;
+}
+
 .sa-policy-budgets label {
   display: flex;
   flex-direction: column;
@@ -2623,6 +2686,51 @@ html[data-theme="dark"] .sa-newchat kbd {
   color: var(--sa-text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* 权限确认弹窗：路径可能很长，等宽 + 换行，不撑破弹窗。 */
+.sa-access {
+  display: grid;
+  gap: 10px;
+  padding: 0 20px;
+}
+
+.sa-access-line {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--sa-r-md);
+  border: 1px solid var(--sa-line);
+  background: var(--sa-surface-2);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-sm);
+  line-height: 1.6;
+  color: var(--sa-text);
+  overflow-wrap: anywhere;
+}
+
+.sa-access-mode {
+  flex: none;
+  font-family: var(--sa-font);
+  font-size: var(--sa-fs-2xs);
+  font-weight: 600;
+  letter-spacing: .02em;
+  color: var(--sa-accent-ink);
+  background: var(--sa-accent-soft);
+  border: 1px solid var(--sa-accent-line);
+  border-radius: var(--sa-r-full);
+  padding: 0 7px;
+  height: 18px;
+  line-height: 16px;
+  margin-top: 1px;
+}
+
+.sa-access-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 20px 20px;
 }
 
 .sa-detail-project {

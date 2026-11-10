@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 export const workEnabled = options => options?.workEnabled === true || (options?.workEnabled === undefined && process.env.DATAAGENT_WORK_ENABLED === '1');
 
 export const EXTERNAL_EXECUTORS = Object.freeze([
@@ -26,7 +28,7 @@ const defaults = Object.freeze({
   allowedExecutors: Object.freeze(['analysis', 'terminal']),
   requireApproval: true,
   budgets: Object.freeze({ maxConcurrent: 2, maxCallsPerTicket: 12, maxRuntimeMs: 3600000, maxTokensPerTicket: 200000 }),
-  limits: Object.freeze({ browserHosts: Object.freeze([]), githubRepos: Object.freeze([]), acpWrites: true, modelWrites: false })
+  limits: Object.freeze({ browserHosts: Object.freeze([]), githubRepos: Object.freeze([]), acpWrites: true, modelWrites: false, extraRoots: Object.freeze([]), confirmDanger: true })
 });
 
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -71,6 +73,15 @@ const githubRepo = value => {
   if (!/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(repo)) fail('githubRepos 必须使用 owner/repo 格式');
   return repo;
 };
+// 额外可访问目录：必须是本机绝对路径，规范化后去掉结尾分隔符，避免同一目录写成两种样子。
+const extraRoot = value => {
+  const raw = value.trim();
+  if (!raw || raw.length > 400 || raw.includes('\0')) fail('extraRoots 包含无效路径');
+  if (!path.isAbsolute(raw)) fail(`extraRoots 必须是绝对路径：${raw}`);
+  const resolved = path.resolve(raw);
+  if (resolved === path.parse(resolved).root) fail('extraRoots 不能是磁盘根目录');
+  return resolved;
+};
 
 export function defaultPolicy() { return clone(defaults); }
 
@@ -86,14 +97,18 @@ export function normalizePolicy(input = {}, base = defaults) {
   const budgets = input.budgets === undefined ? clone(base.budgets) : object(input.budgets, 'budgets');
   if (input.budgets !== undefined) onlyKeys(budgets, ['maxConcurrent', 'maxCallsPerTicket', 'maxRuntimeMs', 'maxTokensPerTicket'], 'budgets');
   const limits = input.limits === undefined ? clone(base.limits) : object(input.limits, 'limits');
-  if (input.limits !== undefined) onlyKeys(limits, ['browserHosts', 'githubRepos', 'acpWrites', 'modelWrites'], 'limits');
+  if (input.limits !== undefined) onlyKeys(limits, ['browserHosts', 'githubRepos', 'acpWrites', 'modelWrites', 'extraRoots', 'confirmDanger'], 'limits');
   if (limits.acpWrites !== undefined && typeof limits.acpWrites !== 'boolean') fail('acpWrites 必须是布尔值');
   if (limits.modelWrites !== undefined && typeof limits.modelWrites !== 'boolean') fail('modelWrites 必须是布尔值');
+  if (limits.confirmDanger !== undefined && typeof limits.confirmDanger !== 'boolean') fail('confirmDanger 必须是布尔值');
   const browserHosts = limits.browserHosts === undefined ? clone(base.limits.browserHosts) : normalizedList(limits.browserHosts, 'browserHosts', 50, browserHost);
   const githubRepos = limits.githubRepos === undefined ? clone(base.limits.githubRepos) : normalizedList(limits.githubRepos, 'githubRepos', 100, githubRepo);
+  const extraRoots = limits.extraRoots === undefined ? clone(base.limits.extraRoots || []) : normalizedList(limits.extraRoots, 'extraRoots', 10, extraRoot);
   const acpWrites = limits.acpWrites === undefined ? (base.limits?.acpWrites !== false) : limits.acpWrites === true;
   // 模型 Agent 默认只读，写权限必须显式打开。
   const modelWrites = limits.modelWrites === undefined ? base.limits?.modelWrites === true : limits.modelWrites === true;
+  // 危险操作（递归删除、白名单外的命令等）默认逐次询问，用户可以在设置里关掉。
+  const confirmDanger = limits.confirmDanger === undefined ? base.limits?.confirmDanger !== false : limits.confirmDanger === true;
   return {
     mode: 'personal',
     acceptMode: 'explicit',
@@ -109,7 +124,9 @@ export function normalizePolicy(input = {}, base = defaults) {
       browserHosts,
       githubRepos,
       acpWrites,
-      modelWrites
+      modelWrites,
+      extraRoots,
+      confirmDanger
     }
   };
 }

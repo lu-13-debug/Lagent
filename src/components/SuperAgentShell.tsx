@@ -31,6 +31,8 @@ const statusNames: Record<string, string> = {
 };
 const reportKindNames: Record<string, string> = { ready: '已就绪', failed: '失败', blocked: '受阻', cancelled: '已停止' };
 const proposalNames: Record<string, string> = { proposed: '待决策', needsApproval: '需确认', accepted: '已接受', rejected: '已拒绝' };
+// 越权访问弹窗里的动作名：与执行器里的 mode 对应。
+const accessModeNames: Record<string, string> = { read: '读取', write: '写入', delete: '删除', command: '执行命令' };
 const quickCommands = ['检查 GitHub 仓库状态', '浏览网页并总结', '运行终端命令'];
 const executorIds = ['terminal', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'browser', 'github', 'window'];
 const executorNames: Record<string, string> = { analysis: '数据分析', terminal: '受控终端', codex: 'Codex CLI', 'claude-code': 'Claude Code', 'claude-acp': 'Claude ACP', 'codex-acp': 'Codex ACP', 'dsh-acp': 'DSH ACP', opencode: 'OpenCode', gemini: 'Gemini CLI', qwen: 'Qwen Code', 'cursor-agent': 'Cursor Agent', dsh: 'DSH CLI', codebuddy: 'CodeBuddy', qoder: 'Qoder', iflow: 'iFlow', kimi: 'Kimi CLI', model: '模型 Agent', browser: '浏览器', github: 'GitHub', window: '窗口 Agent' };
@@ -170,6 +172,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     window.history.replaceState(null, '', url);
   }, [view, folderState.chatId, folderState.projectId]);
   const [planDetail, setPlanDetail] = useState<WorkPlan | null>(null);
+  // 越权访问的确认用弹窗打断：用户没回答之前，Agent 是停在那里等的。
+  const [dismissedAccess, setDismissedAccess] = useState<string[]>([]);
   const [handoffExecutor, setHandoffExecutor] = useState('');
   const [handoffText, setHandoffText] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -257,6 +261,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     return () => { source?.close(); eventRef.current?.close(); if (timer) clearInterval(timer); };
   }, []);
   const attention = work?.attention || [];
+  const accessAsk = attention.find(item => item.kind === 'access' && !dismissedAccess.includes(item.ticketId));
   const tickets = work?.tickets || [];
   const datasets = work?.datasets || [];
   const agents = work?.agents || [];
@@ -339,6 +344,22 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     finally { setExecutorBusy(''); }
   };
   const setBudget = (key: 'maxConcurrent' | 'maxCallsPerTicket' | 'maxRuntimeMs' | 'maxTokensPerTicket', value: number) => setPolicy(previous => previous ? { ...previous, budgets: { ...(previous.budgets || { maxConcurrent: 2, maxCallsPerTicket: 12, maxRuntimeMs: 3600000, maxTokensPerTicket: 200000 }), [key]: value } } : previous);
+  const [rootDraft, setRootDraft] = useState('');
+  // 额外授权目录：登记之后这些目录里的读写不再逐个弹窗（工作目录始终隐式授权）。
+  const addExtraRoot = () => {
+    const value = rootDraft.trim().replace(/[\\/]+$/, '');
+    if (!value) return;
+    if (!/^(?:[a-zA-Z]:[\\/]|\\\\|\/)/.test(value)) { notify('请填绝对路径，例如 D:\\shared\\assets', true); return; }
+    setPolicy(previous => {
+      if (!previous) return previous;
+      const list = previous.limits?.extraRoots || [];
+      if (list.includes(value)) { notify('这个目录已经在授权列表里。', true); return previous; }
+      if (list.length >= 10) { notify('最多登记 10 个额外目录。', true); return previous; }
+      return { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), extraRoots: [...list, value] } };
+    });
+    setRootDraft('');
+  };
+  const removeExtraRoot = (value: string) => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), extraRoots: (previous.limits?.extraRoots || []).filter(root => root !== value) } } : previous);
   const [mobilePair, setMobilePair] = useState<{ code: string; expiresAt: string } | null>(null);
   const [mobileDevices, setMobileDevices] = useState<{ id: string; name: string; createdAt: string; expiresAt: string }[]>([]);
   const [mobileBusy, setMobileBusy] = useState('');
@@ -1347,6 +1368,12 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     {policy ? <><div className="sa-policy-executors">{executorIds.map(id => <label key={id}><input type="checkbox" checked={(policy.allowedExecutors || []).includes(id)} onChange={() => toggleExecutor(id)} />{executorNames[id]}</label>)}</div>
       <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.acpWrites !== false} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), acpWrites: event.target.checked } } : previous)} /><span>项目内 ACP 可写<em>关闭后 ACP Agent 在项目里只能读文件；终端调用始终拒绝。</em></span></label>
       <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.modelWrites === true} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), modelWrites: event.target.checked } } : previous)} /><span>模型 Agent 可写项目文件<em>默认只读。打开后它能在工作目录里改文件、删文件；删除不可恢复，且每个任务执行前仍要你批准。</em></span></label>
+      <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.confirmDanger !== false} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), confirmDanger: event.target.checked } } : previous)} /><span>危险操作再确认<em>递归删除、白名单外的命令，即使目录已授权也会再弹一次窗。</em></span></label>
+      <div className="sa-policy-roots">
+        <div className="sa-policy-roots-head"><strong>额外授权的目录</strong><em>工作目录之外的目录。登记后里面的读写直接执行、不再逐个弹窗；最多 10 个，系统目录、.git、.ssh、密钥与 .env 始终不开放。</em></div>
+        {(policy.limits?.extraRoots || []).length > 0 ? <ul className="sa-policy-root-list">{policy.limits?.extraRoots?.map(root => <li key={root}><code>{root}</code><button type="button" className="sa-link" onClick={() => removeExtraRoot(root)}>移除</button></li>)}</ul> : <p className="sa-inline-note">还没有额外目录。模型 Agent 碰到工作目录之外的路径时，会逐次弹窗问你。</p>}
+        <div className="sa-policy-root-add"><input value={rootDraft} placeholder="D:\shared\assets" onChange={event => setRootDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addExtraRoot(); } }} /><button type="button" className="sa-button" disabled={!rootDraft.trim()} onClick={addExtraRoot}>添加目录</button></div>
+      </div>
       <div className="sa-policy-budgets">
         <label>并发<input type="number" min={1} max={8} value={policy.budgets?.maxConcurrent ?? 2} onChange={event => setBudget('maxConcurrent', Number(event.target.value))} /></label>
         <label>每单调用<input type="number" min={1} max={50} value={policy.budgets?.maxCallsPerTicket ?? 12} onChange={event => setBudget('maxCallsPerTicket', Number(event.target.value))} /></label>
@@ -1365,7 +1392,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     <div className="sa-code-note"><span>Claude Code 示例</span><code>claude mcp add --transport http dataagent {location.origin}/api/mcp --header "Authorization: Bearer &lt;令牌&gt;"</code></div>
   </article></div></section>;
 
-  const page = view === 'command' ? conversationPage : view === 'inbox' ? inboxPage : view === 'project' ? <ProjectsPanel mode="project" notify={notify} onOpenTicket={id => void openCard(id)} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => setView('projects')} onBackToProjects={() => setView('projects')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'chat' ? <ProjectsPanel mode="chat" notify={notify} onOpenTicket={id => void openCard(id)} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => openFolder(folderState.projectId || '')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'projects' ? <ProjectsPanel mode="manage" notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
+  const page = view === 'command' ? conversationPage : view === 'inbox' ? inboxPage : view === 'project' ? <ProjectsPanel mode="project" notify={notify} onOpenTicket={id => void openCard(id)} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => setView('projects')} onBackToProjects={() => setView('projects')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'chat' ? <ProjectsPanel mode="chat" notify={notify} onOpenTicket={id => void openCard(id)} onApprove={id => void act(id, 'approve')} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => openFolder(folderState.projectId || '')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'projects' ? <ProjectsPanel mode="manage" notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
 
   return <div className={`sa-shell ${railCollapsed ? 'sa-rail-collapsed' : ''} ${inspectorOpen ? 'sa-inspector-open' : ''}`} style={sidebarWidth ? { '--sa-sidebar': `${sidebarWidth}px` } as React.CSSProperties : undefined}>
     <a className="skip-link" href="#sa-main">跳到主内容</a>
@@ -1506,6 +1533,16 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           </div>
         </aside>
       : <button type="button" className="sa-inspector-tab" aria-label="展开工作详情" title="展开工作详情" onClick={() => setInspectorOpen(true)}>AGENTS</button>)}
+    {accessAsk && <Modal title="模型 Agent 需要你的授权" subtitle="工作目录之外的读写、以及危险命令，都会先停在这里问你一次。" close={() => setDismissedAccess(previous => [...previous, accessAsk.ticketId])}>
+      <div className="sa-access">
+        <p className="sa-access-line"><span className="sa-access-mode">{accessModeNames[accessAsk.accessMode || ''] || '访问'}</span>{accessAsk.accessPath || accessAsk.question}</p>
+        <p className="sa-inline-note">允许之后，这个任务里同一个位置不再重复询问；想长期免问，可以到「设置 → 执行器策略 → 额外授权的目录」里登记它。</p>
+      </div>
+      <div className="sa-access-actions">
+        <button type="button" className="sa-button" onClick={() => { setDismissedAccess(previous => [...previous, accessAsk.ticketId]); void act(accessAsk.ticketId, 'reject'); }}>拒绝</button>
+        <button type="button" className="sa-button sa-primary" onClick={() => { setDismissedAccess(previous => [...previous, accessAsk.ticketId]); void act(accessAsk.ticketId, 'approve'); }}><Check size={15} />允许这次</button>
+      </div>
+    </Modal>}
     {planDetail && <Modal title={planDetail.goal} subtitle={`多步计划${planDetail.autoRun ? ' · 自动执行' : ''} · ${planDetail.status === 'active' ? '进行中' : planDetail.status === 'completed' ? '已完成' : planDetail.status === 'cancelled' ? '已取消' : '已失败'} · ${planDetail.totalSteps} 步`} close={() => setPlanDetail(null)}>
       <div className="sa-plan-graph">{planDetail.steps.map(step => <div className="sa-plan-graph-step" key={step.index}>
         <span className="sa-plan-index">{step.index + 1}</span>

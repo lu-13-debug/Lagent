@@ -20,6 +20,8 @@ type Props = {
   onOpenChat?: (projectId: string, chatId: string) => void;
   onExitChat?: () => void;
   onBackToProjects?: () => void;
+  // 对话页里直接确认待审批的工单，不用先打开详情弹窗。
+  onApprove?: (ticketId: string) => void;
 };
 
 const EXECUTOR_LABELS: Record<string, string> = {
@@ -58,7 +60,7 @@ const STATUS_LABELS: Record<string, string> = {
   recorded: '已记录'
 };
 
-export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onExitChat, onBackToProjects }: Props) {
+export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onExitChat, onBackToProjects, onApprove }: Props) {
   const chatMode = mode === 'chat';
   const projectMode = mode === 'project';
   const [projects, setProjects] = useState<WorkProject[]>([]);
@@ -598,11 +600,14 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   });
   const thread = project && chat ? <div className="pj-thread pj-thread-full">
     <div className="pj-messages">
-      {threadTickets.length ? threadTickets.map(ticket => <button type="button" className="pj-message" key={ticket.id} onClick={() => onOpenTicket(ticket.id)}>
-        <span className="pj-message-head"><span>{STATUS_LABELS[ticket.status] || ticket.status}</span><time>{new Date(ticket.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></span>
-        <span className="pj-message-text">{ticket.title}</span>
-        {ticket.summary && <span className="pj-message-summary">{ticket.summary}</span>}
-      </button>) : <p className="pj-empty">还没有消息。在下方描述任务，确认后才会发送给 Agent。</p>}
+      {threadTickets.length ? threadTickets.map(ticket => <div className="pj-message-row" key={ticket.id}>
+        <button type="button" className="pj-message" onClick={() => onOpenTicket(ticket.id)}>
+          <span className="pj-message-head"><span>{STATUS_LABELS[ticket.status] || ticket.status}</span><time>{new Date(ticket.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></span>
+          <span className="pj-message-text">{ticket.title}</span>
+          {ticket.summary && <span className="pj-message-summary">{ticket.summary}</span>}
+        </button>
+        {ticket.status === 'awaiting_review' && onApprove && <button type="button" className="pj-btn pj-primary pj-small pj-message-approve" onClick={() => onApprove(ticket.id)}><Check size={13} />确认执行</button>}
+      </div>) : <p className="pj-empty">还没有消息。在下方描述任务，确认后才会发送给 Agent。</p>}
     </div>
     <div className="pj-composer">
       <textarea value={chatDraft} onChange={event => setChatDraft(event.target.value)} rows={3} maxLength={3000} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} placeholder={chat.executorId === 'window' ? '描述要发送到该窗口 Agent 会话的指令…' : '描述要在该项目中完成的任务，例如：修复首页布局在窄屏下的溢出'} />
