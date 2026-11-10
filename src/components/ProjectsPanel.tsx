@@ -22,6 +22,8 @@ type Props = {
   onBackToProjects?: () => void;
   // 对话页里直接确认待审批的工单，不用先打开详情弹窗。
   onApprove?: (ticketId: string) => void;
+  // 消息被删除后通知外层：右侧「执行详情」是主壳自己的一份快照，不刷新会留着已删的卡片。
+  onTicketsChanged?: () => void;
 };
 
 const EXECUTOR_LABELS: Record<string, string> = {
@@ -61,7 +63,7 @@ const STATUS_LABELS: Record<string, string> = {
   recorded: '已记录'
 };
 
-export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onExitChat, onBackToProjects, onApprove }: Props) {
+export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onExitChat, onBackToProjects, onApprove, onTicketsChanged }: Props) {
   const chatMode = mode === 'chat';
   const projectMode = mode === 'project';
   const [projects, setProjects] = useState<WorkProject[]>([]);
@@ -662,6 +664,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       setTickets(current => current.filter(item => !result.ids.includes(item.id)));
       setExpandedTurns(current => { const next = { ...current }; result.ids.forEach(id => delete next[id]); return next; });
       notify(result.planRemoved ? `已删除这条消息和它的 ${result.ids.length} 个步骤。` : '已删除这条消息。');
+      onTicketsChanged?.();
     }
   });
 

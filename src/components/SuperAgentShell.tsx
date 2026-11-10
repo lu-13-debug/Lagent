@@ -480,6 +480,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       if (view === 'chat' && folderState.chatId === target.chat.id) setView('projects');
       notify(`已删除对话「${target.chat.title}」。`);
       await reloadProjects();
+      // 这段对话名下的工单也一并从快照里去掉，右侧「执行详情」不会留着它们的卡片。
+      void load();
     } catch (cause) { notify((cause as Error).message, true); }
   };
   const commitFolderRename = async () => {    if (!folderRename) return;
@@ -1051,7 +1053,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const chatChildren = view === 'chat' && folderState.chatId
     ? (folderState.projects.find(project => project.id === folderState.projectId)?.chats || []).filter(chat => chat.parentChatId === folderState.chatId)
     : [];
-  const inspectorRows = chatTickets.length
+  const inspectorRows = view === 'chat'
+    // 对话页只看这个对话里的消息；删光了就显示空态，别把别的对话的记录混进来。
     ? chatTickets.slice(0, 8).map(ticket => ({ id: ticket.id, executorId: ticket.executor }))
     : activeGroup
       ? activeGroup.ticketIds.map((id, index) => ({ id, executorId: activeGroup.agentIds[index] || '' }))
@@ -1392,7 +1395,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     <div className="sa-code-note"><span>Claude Code 示例</span><code>claude mcp add --transport http dataagent {location.origin}/api/mcp --header "Authorization: Bearer &lt;令牌&gt;"</code></div>
   </article></div></section>;
 
-  const page = view === 'command' ? conversationPage : view === 'inbox' ? inboxPage : view === 'project' ? <ProjectsPanel mode="project" notify={notify} onOpenTicket={id => void openCard(id)} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => setView('projects')} onBackToProjects={() => setView('projects')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'chat' ? <ProjectsPanel mode="chat" notify={notify} onOpenTicket={id => void openCard(id)} onApprove={id => void act(id, 'approve')} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => openFolder(folderState.projectId || '')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'projects' ? <ProjectsPanel mode="manage" notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
+  const page = view === 'command' ? conversationPage : view === 'inbox' ? inboxPage : view === 'project' ? <ProjectsPanel mode="project" notify={notify} onOpenTicket={id => void openCard(id)} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => setView('projects')} onBackToProjects={() => setView('projects')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'chat' ? <ProjectsPanel mode="chat" notify={notify} onOpenTicket={id => void openCard(id)} onApprove={id => void act(id, 'approve')} onTicketsChanged={() => { void load(); void reloadProjects(); }} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => openFolder(folderState.projectId || '')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'projects' ? <ProjectsPanel mode="manage" notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
 
   return <div className={`sa-shell ${railCollapsed ? 'sa-rail-collapsed' : ''} ${inspectorOpen ? 'sa-inspector-open' : ''}`} style={sidebarWidth ? { '--sa-sidebar': `${sidebarWidth}px` } as React.CSSProperties : undefined}>
     <a className="skip-link" href="#sa-main">跳到主内容</a>
@@ -1529,7 +1532,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
                 </article>;
               })}
             </div>}
-            {inspectorRows.length ? inspectorRows.map(inspectorCard) : chatChildren.length ? null : <p className="sa-inspector-empty">还没有工作。在左侧描述一个目标开始。</p>}
+            {inspectorRows.length ? inspectorRows.map(inspectorCard) : chatChildren.length ? null : <p className="sa-inspector-empty">{view === 'chat' ? '这个对话还没有消息。在下面描述任务开始。' : '还没有工作。在左侧描述一个目标开始。'}</p>}
           </div>
         </aside>
       : <button type="button" className="sa-inspector-tab" aria-label="展开工作详情" title="展开工作详情" onClick={() => setInspectorOpen(true)}>AGENTS</button>)}

@@ -1129,6 +1129,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         db.put('project-chat',{...chat,lastTicketId:rest[0]?.id||null,updatedAt:now()});
       }
       audit(id,'delete','project/chat','allowed',planRemoved?'删除计划与全部步骤':'删除单条消息');
+      // 删完推一条事件，让所有打开的窗口（含手机）立刻丢掉这条消息，而不是等下次轮询。
+      publish({type:'delete',ticketId:id,payload:{ids:targets,chatId,planRemoved}});
       return {id,removed:targets.length,ids:targets,planRemoved};
     },
     renameProjectChat(id,input){return projects.renameChat(id,input);},

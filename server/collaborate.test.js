@@ -23,13 +23,14 @@ function harness(t) {
     context: () => ({ settings: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' }, key: 'test-key', maxTokens: 800, timeoutMs: 5000 }),
     fetchImpl: async () => { throw new Error('测试不应该真的调用模型'); }
   });
-  const engine = createWorkEngine(store, createExecutorRegistry([claude, codex, model]), () => {}, {
+  const events = [];
+  const engine = createWorkEngine(store, createExecutorRegistry([claude, codex, model]), event => events.push(event), {
     policy: { allowedExecutors: ['claude-code', 'codex', 'model'] },
     env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home
   });
   t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
-  return { engine, store };
+  return { engine, store, events };
 }
 
 test('团队协作：内置模型先拆解，再分派外部 Agent，最后由内置模型收拢', async t => {
@@ -115,7 +116,7 @@ test('对话消息可指定模型与思考强度，并落进执行器输入', as
 });
 
 test('删除对话里的一条消息会连同执行记录一起清掉', async t => {
-  const { engine, store } = harness(t);
+  const { engine, store, events } = harness(t);
   const projectDir = join(tmpdir(), `dataagent-chat-delete-${Date.now()}`);
   mkdirSync(projectDir, { recursive: true });
   t.after(() => rmSync(projectDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
@@ -135,6 +136,9 @@ test('删除对话里的一条消息会连同执行记录一起清掉', async t 
   assert.equal(store.get('work-control', ticket.id) ?? null, null, '控制记录被删除');
   assert.equal(store.list('work-ticket').filter(row => row.id === ticket.id).length, 0);
   assert.equal(engine.getProject(project.id).chats.find(item => item.id === chat.id).lastTicketId ?? null, null, '对话的最后一条消息指针被清掉');
+  // 其它窗口（含手机端）靠这条事件立刻丢掉卡片，否则右侧「执行详情」要等下次轮询才消失。
+  assert.ok(events.some(event => event.type === 'delete' && event.ticketId === ticket.id), '删除后要推一条 delete 事件');
+  assert.deepEqual(events.find(event => event.type === 'delete').payload.ids, [ticket.id]);
 });
 
 test('不属于任何对话的工单不能从对话页删除', async t => {
