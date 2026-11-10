@@ -723,7 +723,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   function startPlan(input) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw workError('计划参数必须为对象');
     const goal = typeof input.goal === 'string' ? input.goal.trim() : '';
-    if (!goal || goal.length > 300) throw workError('计划目标须为 1–300 字');
+    if (!goal || goal.length > 4000) throw workError('计划目标须为 1–4000 字');
     if (!Array.isArray(input.steps) || input.steps.length < 2 || input.steps.length > 5) throw workError('计划必须包含 2–5 个步骤');
     const clientRequestId = typeof input.clientRequestId === 'string' ? input.clientRequestId.trim() : '';
     // 显式传 autoRun 时以它为准；否则「先批准再执行」模式下逐步等确认，其余模式一路跑完。
@@ -789,6 +789,11 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           title: parentChat ? step.text : ''
         });
       }
+      // 计划里的每一步都只负责自己那一块。内置 Agent 容易把「整件事没做完」当成自己的失败，
+      // 于是在别的步骤还没跑的时候就把自己判成未完成，整条计划跟着塌。这里把范围写清楚。
+      if (step.targetId === 'model' || step.chat?.executorId === 'model') {
+        step.text = `${step.text}\n\n【范围】这一步只做你负责的部分：你该写的文件都写好了，就写 done:true。别的 Agent 负责任务里的文件还没出现，不算你这一步没完成。`;
+      }
       step.executorInput = step.chat
         ? normalizeExecutorInput(step.targetId, step.target, projectExecutorInput(step.chat, projectRecord, step.text, step.rawInput, step.target), step.text)
         : normalizeExecutorInput(step.targetId, step.target, step.rawInput, step.text);
@@ -845,12 +850,25 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       return publicPlan(plan);
     });
     if (autoRun && created?.id === planId) {
-      for (const ticket of tickets.filter(item => item.status === 'queued')) {
-        try { start(privateTicket(ticket.id), {}, undefined); }
-        catch { /* start 会写入失败/阻塞工单。 */ }
-      }
+      for (const ticket of tickets.filter(item => item.status === 'queued')) launchStep(ticket.id);
     }
     return created;
+  }
+  // 启动计划里的某一步。执行器并发满、命令被限流等都会让 start 抛错；
+  // 早先这里直接吞掉异常，步骤就永远停在「排队中」，整条计划卡死。
+  // 现在退回 waiting 并写清原因，下一次推进还会再试。
+  function launchStep(ticketId) {
+    try {
+      start(privateTicket(ticketId), {}, undefined);
+      return true;
+    } catch (error) {
+      const ticket = db.get('ticket', ticketId);
+      if (ticket && ['queued', 'working'].includes(ticket.status)) {
+        const waiting = { ...ticket, status: 'waiting', attention: undefined, summary: `等待执行器空闲：${String(error?.message || '启动失败').slice(0, 80)}`, updatedAt: now() };
+        write(waiting);
+      }
+      return false;
+    }
   }
   function advancePlan(planId) {
     const plan = db.get('plan', planId);
@@ -937,10 +955,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         else if (status === 'failed') audit(planId, 'plan/fail', 'plan', 'failed');
       }
     });
-    for (const id of autoReady) {
-      try { start(privateTicket(id), {}, undefined); }
-      catch { /* start 写入失败/阻塞工单。 */ }
-    }
+    for (const id of autoReady) launchStep(id);
   }
   function revivePlan(planId, stepIndex) {
     const plan = db.get('plan', planId);
@@ -1339,7 +1354,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       // 内置模型 Agent 的能力取决于权限模式，文案不能说「只读」。
       const modelCopy=executorInput?.write===true?'执行中（会在项目目录内读写文件）':'执行中（只读项目文件）';
       const confirmCopy=activeId==='browser'?'请确认受控浏览器读取后批准执行':activeId==='github'?'请确认 GitHub 只读查询后批准执行':activeId==='terminal'?'请确认终端命令后批准执行':activeId==='model'?modelCopy:cli?'请确认只读 CLI 任务后批准执行':'请选择数据集并批准开始';
-      const record={id:randomUUID(),title:(typeof input?.title==='string'&&input.title.trim()?input.title.trim():trigger.text).slice(0,100),status:auto?'queued':'awaiting_review',stage:direct?(auto?'launch':'approval'):'dataset',source:'manual',executor:activeId,summary:auto?(activeId==='model'?modelCopy:activeId==='terminal'?'终端命令执行中':cli?'CLI 执行中':'执行中'):confirmCopy,attention:auto?undefined:review(reviewQuestion(activeId,project?(project.chat.executorId==='window'?'window':'write'):undefined)),createdAt:stamp,updatedAt:stamp,command:trigger.text,clientRequestId:trigger.clientRequestId,datasetId,executorInput,...(project?{projectChatId:project.chat.id}:{})};
+      // 标题只取第一行：把整段多行需求塞进标题会让侧栏和工单卡片变成一大坨。
+      const headline=trigger.text.split('\n').map(line=>line.trim()).find(Boolean)||trigger.text;
+      const record={id:randomUUID(),title:(typeof input?.title==='string'&&input.title.trim()?input.title.trim():headline).slice(0,60),status:auto?'queued':'awaiting_review',stage:direct?(auto?'launch':'approval'):'dataset',source:'manual',executor:activeId,summary:auto?(activeId==='model'?modelCopy:activeId==='terminal'?'终端命令执行中':cli?'CLI 执行中':'执行中'):confirmCopy,attention:auto?undefined:review(reviewQuestion(activeId,project?(project.chat.executorId==='window'?'window':'write'):undefined)),createdAt:stamp,updatedAt:stamp,command:trigger.text,clientRequestId:trigger.clientRequestId,datasetId,executorInput,...(project?{projectChatId:project.chat.id}:{})};
       // write() 返回的是 publicTicket（会剥掉 executorInput），直接执行必须用原始记录，否则会写回一份空的执行输入。
       const created=write(record);
       if(project)touchProjectChat(project.chat,{lastTicketId:created.id});
@@ -1350,7 +1367,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     },
     async suggestPlan(input){
       const goal=typeof input?.goal==='string'?input.goal.trim():'';
-      if(!goal||goal.length>300)throw workError('计划目标须为 1–300 字');
+      if(!goal||goal.length>4000)throw workError('计划目标须为 1–4000 字');
       if(typeof options.planner!=='function')throw workError('请先在模型设置中配置规划模型',503);
       const project=projectContext(input?.projectChatId);
       let projectRow=project?project.project:null;
@@ -1416,7 +1433,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     },
     async analyze(input){
       const goal=typeof input?.goal==='string'?input.goal.trim():'';
-      if(!goal||goal.length>300)throw workError('任务描述须为 1–300 字');
+      if(!goal||goal.length>4000)throw workError('任务描述须为 1–4000 字');
       const projectChat=projectContext(input?.projectChatId);
       let projectRow=projectChat?projectChat.project:null;
       if(!projectRow&&typeof input?.projectId==='string'&&input.projectId.trim())projectRow=db.get('project',input.projectId.trim())||null;
@@ -1461,7 +1478,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     // 最后由内置 Agent 收拢结果、指出下一步该转交给谁。
     async collaborate(input){
       const goal=typeof input?.goal==='string'?input.goal.trim():'';
-      if(!goal||goal.length>300)throw workError('协作目标须为 1–300 字');
+      if(!goal||goal.length>4000)throw workError('协作目标须为 1–4000 字');
       const projectChatId=typeof input?.projectChatId==='string'?input.projectChatId.trim():'';
       const projectId=typeof input?.projectId==='string'?input.projectId.trim():'';
       const scope={...(projectChatId?{projectChatId}:{}),...(projectId&&!projectChatId?{projectId}:{})};

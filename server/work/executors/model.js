@@ -2,12 +2,12 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { workError } from '../domain.js';
-import { modelRequest, readModelResponse, providerUsage, visibleReply } from '../../model-protocol.js';
+import { modelRequest, readModelResponse, providerUsage, toolCallsOf, visibleReply } from '../../model-protocol.js';
 
 // 模型 Agent：用已经接入的模型自己推理 + 调工具，把一个任务在项目目录里做完。
 // 与 CLI 执行器不同，它的每一步都写进 task.activity，界面因此能像看 dsh 一样看到过程。
 const statusError = (message, status = 400) => Object.assign(workError(message, status), { status });
-const MAX_STEPS = 12;
+const MAX_STEPS = 20;
 const READ_LIMIT = 8000;
 const LIST_LIMIT = 120;
 const HITS_LIMIT = 40;
@@ -22,6 +22,8 @@ const PERMISSIONS = ['read', 'workspace', 'full'];
 const PERMISSION_LABELS = { read: '仅查看', workspace: '仅工作区内修改', full: '完全权限' };
 // 模型明确说「没做成」的措辞：一个文件都没改、结论却是这些，就按失败上报。
 const REFUSAL = /无法(执行|完成|删除|修改|写入|创建)|未执行|没有(?:写)?权限|无权限|不能(删除|修改|写入|创建)|未完成/;
+// 「只做了一部分」也算没完成：用户看到的「已完成」必须是真做完了，不能是半成品。
+const PARTIAL = /只完成(?:了)?部分|部分工作|还不能|没(?:有)?机会|尚未完成|没能完成|只做了/;
 
 const text = (value, limit) => (typeof value === 'string' ? value.trim().slice(0, limit) : '');
 
@@ -32,7 +34,7 @@ export function normalizeModelInput(input, { maxPromptBytes = 16 * 1024 } = {}) 
   if (prompt.includes('\0')) throw statusError('prompt 不允许 NUL 字符');
   if (Buffer.byteLength(prompt) > maxPromptBytes) throw statusError(`prompt 不能超过 ${maxPromptBytes} 字节`);
   // 8 步太紧：列目录 + 逐项删除 + 复查就刚好用光，连给结论的余量都没有。
-  const steps = input.maxSteps === undefined ? 10 : input.maxSteps;
+  const steps = input.maxSteps === undefined ? 12 : input.maxSteps;
   if (!Number.isInteger(steps) || steps < 1 || steps > MAX_STEPS) throw statusError(`maxSteps 必须是 1-${MAX_STEPS} 的整数`);
   const workspace = typeof input.workspace === 'string' ? input.workspace.trim() : '';
   if (workspace && (!path.isAbsolute(workspace) || workspace.length > 500)) throw statusError('workspace 必须是有效的工作目录绝对路径');
@@ -159,13 +161,38 @@ function searchCode(guard, pattern, target) {
   return { pattern, count: hits.length, hits };
 }
 
-function writeFile(guard, target, content) {
+// 写完 JS 立刻做一次语法检查：模型经常写出「缺一个函数声明」这类错，
+// 等它自己想起来跑 node --check 往往已经用完步数（实测就是这样交了半成品）。
+function syntaxCheck(absolute) {
+  if (!/\.(?:c|m)?js$/i.test(absolute)) return null;
+  try {
+    execFileSync(process.execPath, ['--check', absolute], { encoding: 'buffer', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] });
+    return null;
+  } catch (error) {
+    const raw = `${error?.stdout ? decodeOutput(error.stdout) : ''}${error?.stderr ? decodeOutput(error.stderr) : ''}`.trim();
+    const line = raw.split(/\r?\n/).find(item => /SyntaxError|Unexpected|Error:/.test(item)) || raw.split(/\r?\n/)[0] || '';
+    return line.trim().slice(0, 200) || '语法检查没通过';
+  }
+}
+
+function writeFile(guard, target, content, { append = false } = {}) {
   const absolute = guard.resolve(target).absolute;
   if (typeof content !== 'string') throw new Error('content 必须是字符串');
   if (Buffer.byteLength(content) > 200 * 1024) throw new Error('单次写入不能超过 200KB');
   fs.mkdirSync(path.dirname(absolute), { recursive: true });
   const existed = fs.existsSync(absolute);
   const before = existed ? fs.readFileSync(absolute, 'utf8') : '';
+  // append：大文件分几次写。模型一次输出有上限，长文件必须先写骨架再往后追加。
+  if (append) {
+    fs.appendFileSync(absolute, content, 'utf8');
+    return {
+      path: guard.display(absolute),
+      created: !existed,
+      appended: true,
+      before: before.length,
+      after: before.length + content.length,
+    };
+  }
   fs.writeFileSync(absolute, content, 'utf8');
   return {
     path: guard.display(absolute),
@@ -343,14 +370,16 @@ export function modelSystemPrompt({ maxSteps, write, permission = write ? 'works
     '你是 DataAgent 的模型 Agent，在一个本地工作目录里独立完成任务。',
     '每一步只输出一个 JSON 对象，不要输出任何其它文字、不要用代码块包裹：',
     '· 调用工具：{"tool":"read_file","args":{"path":"src/app.tsx"}}',
-    '· 结束任务：{"final":{"summary":"做了什么、结论是什么","files":["改动过的文件"]}}',
+    '· 结束任务：{"final":{"done":true,"summary":"做了什么、结论是什么","files":["改动过的文件"]}}',
+    '· 只有确实全部做完才写 done:true；没做完、缺东西、需要人接手，写 done:false 并在 summary 里说清还差什么。',
     '',
-    `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content}、replace_in_file{path,find,replace,all?}、move_path{from,to}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command,shell?}。`,
+    `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content,append?}、replace_in_file{path,find,replace,all?}、move_path{from,to}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command,shell?}。`,
     '注意：环境是 Windows。要跑 PowerShell 就写 run_command{command:"<脚本本体>",shell:"powershell"}，command 直接给脚本，不要自己再拼 powershell -Command 和引号。',
     '路径可以写相对工作目录的路径，也可以写绝对路径。',
+    '每次工具调用的 content 控制在一两百行以内：输出有长度上限，写长文件就先 write_file 骨架，再用 write_file{path,content:"<后续片段>",append:true} 一段段追加，最后 read_file 复核。',
     `当前权限档位：${PERMISSION_LABELS[mode]}（${mode}）。`,
     write
-      ? '你被允许修改文件：先读再改，一次改一处，改动要小、要能说清理由。小改用 replace_in_file，整文件重写才用 write_file。删除不可恢复：只有用户明确要求删除时才做，先 delete_path{path,dryRun:true} 看清将删掉什么，再真正删；dryRun 只是预览，确认要删就**去掉 dryRun 再调一次**。删目录必须显式传 recursive:true；工作目录本身不许删。删除文件和目录优先用 delete_path，不要用 run_command 拼 Remove-Item。'
+      ? '你被允许修改文件：先读再改，一次改一处，改动要小、要能说清理由。小改用 replace_in_file，整文件重写才用 write_file；文件较长时先写上半段，再 append 追加下半段，不要一次写完整个大文件（会被输出上限截断）。删除不可恢复：只有用户明确要求删除时才做，先 delete_path{path,dryRun:true} 看清将删掉什么，再真正删；dryRun 只是预览，确认要删就**去掉 dryRun 再调一次**。删目录必须显式传 recursive:true；工作目录本身不许删。删除文件和目录优先用 delete_path，不要用 run_command 拼 Remove-Item。'
       : '你没有写权限：不要尝试 write_file、replace_in_file、move_path 或 delete_path，只读取与检索，最后给出结论和改动建议。',
     mode === 'full'
       ? `权限规则：当前是完全权限，工作目录内外都可直接读写，不再逐次询问。受保护路径（系统目录、.git、.ssh、.env、密钥）仍然拒绝。${extra}`
@@ -365,6 +394,75 @@ export function modelSystemPrompt({ maxSteps, write, permission = write ? 'works
   ].join('\n');
 }
 
+// 模型输出 JSON 经常不严格：包一层代码块、字符串里有没转义的换行、末尾多个逗号。
+// 直接 JSON.parse 会失败并要求重试，一次重试就浪费一步（实测写游戏时 8 步里废掉 4 步），
+// 所以这里做一层容错修复，能救回来的就不重试。
+function repairJson(source) {
+  const body = source.trim().replace(/^```[a-zA-Z]*\s*/, '').replace(/```$/, '').trim();
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (const char of body) {
+    if (inString) {
+      if (escaped) { out += char; escaped = false; continue; }
+      if (char === '\\') { out += char; escaped = true; continue; }
+      if (char === '"') { inString = false; out += char; continue; }
+      // 字符串里的裸换行/制表符必须转义，否则整段 JSON 不合法。
+      if (char === '\n') { out += '\\n'; continue; }
+      if (char === '\r') { out += '\\r'; continue; }
+      if (char === '\t') { out += '\\t'; continue; }
+      out += char;
+      continue;
+    }
+    if (char === '"') { inString = true; out += char; continue; }
+    out += char;
+  }
+  // 去掉对象/数组里多余的尾逗号。
+  return out.replace(/,\s*([}\]])/g, '$1');
+}
+
+// 写文件时最容易坏的地方是 content 里带了没转义的双引号（HTML 属性、JS 字符串），
+// 整段 JSON 因此不合法。这种情况不该浪费一步重试：直接从 "content":" 取到最后一个引号当正文。
+function salvageWrite(raw) {
+  const toolHit = raw.match(/"tool"\s*:\s*"([a-z_]+)"/);
+  if (!toolHit) return null;
+  const tool = toolHit[1];
+  const field = name => {
+    const hit = raw.match(new RegExp(`"${name}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+    return hit ? hit[1].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\') : '';
+  };
+  const flag = name => {
+    const hit = raw.match(new RegExp(`"${name}"\\s*:\\s*(true|false)`));
+    return hit ? hit[1] === 'true' : undefined;
+  };
+  const args = {};
+  for (const name of ['path', 'from', 'to', 'pattern', 'command', 'find', 'replace', 'shell']) {
+    const value = field(name);
+    if (value) args[name] = value;
+  }
+  for (const name of ['recursive', 'dryRun', 'append', 'all']) {
+    const value = flag(name);
+    if (value !== undefined) args[name] = value;
+  }
+  // 正文单独取：从 content 的开引号一直到最后一条引号，中间的引号都当正文。
+  const contentHit = raw.match(/"content"\s*:\s*"/);
+  if (contentHit) {
+    const start = contentHit.index + contentHit[0].length;
+    const end = raw.lastIndexOf('"');
+    if (end > start) {
+      args.content = raw.slice(start, end)
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\r')
+        .replace(/\\t/g, '\t')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\');
+    }
+  }
+  const known = ['write_file', 'read_file', 'list_files', 'search_code', 'replace_in_file', 'move_path', 'delete_path', 'run_command'];
+  if (!known.includes(tool) || !Object.keys(args).length) return null;
+  return { type: 'tool', tool, args, salvaged: true };
+}
+
 export function parseModelStep(reply) {
   const raw = String(reply || '').trim();
   if (!raw) return null;
@@ -372,10 +470,27 @@ export function parseModelStep(reply) {
   const end = raw.lastIndexOf('}');
   if (start < 0 || end <= start) return null;
   let parsed;
-  try { parsed = JSON.parse(raw.slice(start, end + 1)); } catch { return null; }
+  const candidate = raw.slice(start, end + 1);
+  try {
+    parsed = JSON.parse(candidate);
+  } catch {
+    try {
+      parsed = JSON.parse(repairJson(candidate));
+    } catch {
+      const salvaged = salvageWrite(raw);
+      if (salvaged) return salvaged;
+      return null;
+    }
+  }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   if (parsed.final && typeof parsed.final === 'object') {
-    return { type: 'final', summary: text(parsed.final.summary, 4000), files: Array.isArray(parsed.final.files) ? parsed.final.files.filter(item => typeof item === 'string').slice(0, 40) : [] };
+    return {
+      type: 'final',
+      summary: text(parsed.final.summary, 4000),
+      files: Array.isArray(parsed.final.files) ? parsed.final.files.filter(item => typeof item === 'string').slice(0, 40) : [],
+      // done:false 明确表示「没做完」——比在摘要里猜措辞可靠，用于决定工单成败。
+      done: typeof parsed.final.done === 'boolean' ? parsed.final.done : undefined,
+    };
   }
   if (typeof parsed.tool === 'string' && parsed.tool.trim()) {
     const args = parsed.args && typeof parsed.args === 'object' && !Array.isArray(parsed.args) ? parsed.args : {};
@@ -395,6 +510,45 @@ const TOOL_LABELS = {
   delete_path: '删除',
   run_command: '运行命令',
 };
+
+// 原生工具调用的声明。声明了它，模型就不用把文件内容塞进手写 JSON 的字符串里，
+// 长文件也不会因为一个没转义的双引号整段作废（实测这是最常坏的一环）。
+export const TOOL_SCHEMAS = [
+  { type: 'function', function: { name: 'list_files', description: '列出目录里的文件与子目录', parameters: { type: 'object', properties: { path: { type: 'string', description: '相对工作目录的路径，省略表示根目录' } } } } },
+  { type: 'function', function: { name: 'read_file', description: '读取文本文件内容', parameters: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'number', description: '从第几行开始（1 起）' }, limit: { type: 'number', description: '最多读多少行' } }, required: ['path'] } } },
+  { type: 'function', function: { name: 'search_code', description: '在项目里按正则搜索文本', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' } }, required: ['pattern'] } } },
+  { type: 'function', function: { name: 'write_file', description: '写入文件；append=true 时追加到末尾，适合分多次写长文件', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, append: { type: 'boolean' } }, required: ['path', 'content'] } } },
+  { type: 'function', function: { name: 'replace_in_file', description: '把文件里的一段原文替换成新内容', parameters: { type: 'object', properties: { path: { type: 'string' }, find: { type: 'string' }, replace: { type: 'string' }, all: { type: 'boolean', description: '有多处时是否全部替换' } }, required: ['path', 'find', 'replace'] } } },
+  { type: 'function', function: { name: 'move_path', description: '移动或重命名文件/目录', parameters: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] } } },
+  { type: 'function', function: { name: 'delete_path', description: '删除文件或目录；dryRun 只预览不删，删目录必须 recursive=true', parameters: { type: 'object', properties: { path: { type: 'string' }, recursive: { type: 'boolean' }, dryRun: { type: 'boolean' } }, required: ['path'] } } },
+  { type: 'function', function: { name: 'run_command', description: '执行命令。查看类命令（Get-ChildItem/dir/ls 等）直接跑；其它命令需要用户确认。要跑 PowerShell 脚本就传 shell="powershell"', parameters: { type: 'object', properties: { command: { type: 'string' }, shell: { type: 'string', enum: ['powershell'] } }, required: ['command'] } } },
+];
+
+// 有些模型会把工具调用当文本吐出来（内部标记 + 一串 XML）。解析不出来就白丢一步，
+// 所以这里按纯 ASCII 片段兜底识别：能认出来就照常执行。
+export function parseMarkupCalls(text) {
+  if (typeof text !== 'string' || !/invoke name="/.test(text)) return [];
+  const calls = [];
+  const pattern = /invoke name="([a-z_]+)"[\s\S]*?parameter name="args"[^>]*>([\s\S]*?)<\/parameter>/g;
+  let hit;
+  while ((hit = pattern.exec(text)) !== null) {
+    let args = {};
+    try { args = JSON.parse(repairJson(hit[2])); } catch { try { args = salvageArgs(hit[2]); } catch { args = {}; } }
+    if (args && typeof args === 'object') calls.push({ id: `markup-${calls.length}`, name: hit[1], args });
+  }
+  return calls;
+}
+
+function salvageArgs(raw) {
+  const args = {};
+  const pattern = /name="([a-z_]+)"[^>]*>([\s\S]*?)<\/parameter>/g;
+  let hit;
+  while ((hit = pattern.exec(raw)) !== null) {
+    if (hit[1] === 'args') continue;
+    args[hit[1]] = hit[2].trim();
+  }
+  return args;
+}
 
 function shortPath(value) {
   return String(value || '.').replace(/\\/g, '/').slice(0, 120);
@@ -448,7 +602,7 @@ export function describeOutput(tool, output = {}) {
   return '';
 }
 
-export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fetch, perCallTimeoutMs = 60000, totalTimeoutMs = 300000 }) {  if (!store || typeof cwd !== 'string' || !cwd) throw new TypeError('model 执行器需要 store 和 cwd');
+export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fetch, perCallTimeoutMs = 120000, totalTimeoutMs = 900000 }) {  if (!store || typeof cwd !== 'string' || !cwd) throw new TypeError('model 执行器需要 store 和 cwd');
   const workspace = path.resolve(cwd);
   const running = new Map();
   const persist = task => { store.put('task', task); return task; };
@@ -465,7 +619,11 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
     const ctx = profileId && typeof contextFor === 'function' ? contextFor(profileId, effort) : (typeof context === 'function' ? context() : context);
     if (!ctx?.key || !ctx?.settings?.model) throw statusError('还没有可用的模型：请在「设置 → 规划设置」里配置并选择默认模型', 503);
     task.modelLabel = ctx.profileName || ctx.settings.model;
-    const request = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, Math.min(4096, Number(ctx.maxTokens) || 4096), false, { ...ctx.settings, sessionId: task.projectChatId || task.id });
+    // 写文件动辄几千字，4096 的输出预算经常不够；先按 8192 要，供应商不认再退回 4096。
+    const budget = Math.min(8192, Number(ctx.maxTokens) || 8192);
+    // 原生工具调用优先：协议支持就声明，供应商拒绝（有的兼容接口不认 tools）就退回文本 JSON。
+    const toolOptions = task.noTools ? {} : { tools: TOOL_SCHEMAS };
+    const request = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, budget, false, { ...ctx.settings, ...toolOptions, sessionId: task.projectChatId || task.id });
     let response;
     try {
       response = await fetchImpl(request.endpoint, {
@@ -485,11 +643,22 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       try {
         detail = (await response.text()).replace(/\s+/g, ' ').trim().slice(0, 300);
       } catch { /* 读取失败就只报状态码 */ }
+      // 有的兼容接口不认 tools 字段：退回纯文本 JSON 协议重试，别让整个任务因为一个可选能力失败。
+      if (!task.noTools && [400, 422].includes(response.status) && /tool|function|unsupported|unknown (?:parameter|field)/i.test(detail)) {
+        task.noTools = true;
+        const retry = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, budget, false, { ...ctx.settings, sessionId: task.projectChatId || task.id });
+        const second = await fetchImpl(retry.endpoint, { method: 'POST', headers: retry.headers, body: JSON.stringify(retry.body), signal, redirect: 'error' });
+        if (second.ok) {
+          const payload = await readModelResponse(second);
+          return { payload, protocol: retry.protocol, usage: providerUsage(payload?.usage, retry.protocol) };
+        }
+        try { detail = (await second.text()).replace(/\s+/g, ' ').trim().slice(0, 300); } catch { /* 同上 */ }
+      }
       // 未验证的思考强度可能被供应商拒绝：自动退回默认档重试一次，并在结果里说明，
       // 避免用户只是选了个档位就整条任务失败。
       if (ctx.settings.effort && ctx.settings.effort !== 'default' && [400, 422].includes(response.status) && /effort|reasoning/i.test(detail)) {
         task.effortFallback = true;
-        const retry = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, Math.min(4096, Number(ctx.maxTokens) || 4096), false, { ...ctx.settings, effort: 'default', sessionId: task.projectChatId || task.id });
+        const retry = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, budget, false, { ...ctx.settings, effort: 'default', sessionId: task.projectChatId || task.id });
         const second = await fetchImpl(retry.endpoint, { method: 'POST', headers: retry.headers, body: JSON.stringify(retry.body), signal, redirect: 'error' });
         if (second.ok) {
           const payload = await readModelResponse(second);
@@ -498,14 +667,57 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
         try { detail = (await second.text()).replace(/\s+/g, ' ').trim().slice(0, 300); } catch { /* 同上 */ }
         throw statusError(`模型接口返回 HTTP ${second.status}${detail ? `：${detail}` : ''}`, 502);
       }
+      // 有些供应商的输出上限比 8192 低：被拒时按 4096 再试一次，而不是让整个任务失败。
+      if (budget > 4096 && [400, 422].includes(response.status) && /max_tokens|max output|too (?:large|long)|exceed/i.test(detail)) {
+        const retry = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, 4096, false, { ...ctx.settings, sessionId: task.projectChatId || task.id });
+        const third = await fetchImpl(retry.endpoint, { method: 'POST', headers: retry.headers, body: JSON.stringify(retry.body), signal, redirect: 'error' });
+        if (third.ok) {
+          const payload = await readModelResponse(third);
+          return { payload, protocol: retry.protocol, usage: providerUsage(payload?.usage, retry.protocol) };
+        }
+        try { detail = (await third.text()).replace(/\s+/g, ' ').trim().slice(0, 300); } catch { /* 同上 */ }
+        throw statusError(`模型接口返回 HTTP ${third.status}${detail ? `：${detail}` : ''}`, 502);
+      }
       throw statusError(`模型接口返回 HTTP ${response.status}${detail ? `：${detail}` : ''}`, 502);
     }
-    const payload = await readModelResponse(response);
+    let payload;
+    try {
+      payload = await readModelResponse(response);
+    } catch (error) {
+      // 网关偶尔回空正文 / 推理模型把预算全花在 thinking 上：各重试一次，比让任务直接失败有用。
+      const retryable = ['REASONING_ONLY', 'EMPTY_RESPONSE'].includes(error?.code);
+      if (retryable) {
+        const settings = error.code === 'REASONING_ONLY' ? { ...ctx.settings, thinking: 'off' } : ctx.settings;
+        const retry = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, budget, false, { ...settings, sessionId: task.projectChatId || task.id });
+        const second = await fetchImpl(retry.endpoint, { method: 'POST', headers: retry.headers, body: JSON.stringify(retry.body), signal, redirect: 'error' });
+        if (second.ok) {
+          task.emptyRetry = true;
+          const retried = await readModelResponse(second);
+          return { payload: retried, protocol: retry.protocol, usage: providerUsage(retried?.usage, retry.protocol) };
+        }
+      }
+      throw error;
+    }
     return { payload, protocol: request.protocol, usage: providerUsage(payload?.usage, request.protocol) };
   }
 
   function replyOf(payload, protocol) {
     return visibleReply(payload, protocol);
+  }
+
+  // 一步的产出可能是原生工具调用、也可能仍是文本（JSON 或模型自己写的调用标记）。
+  // 统一成 { calls, text }：有调用就先执行调用，文本留作兜底解析。
+  function envelopeOf(payload, protocol) {
+    const native = toolCallsOf(payload, protocol);
+    if (native.length) {
+      const message = payload?.choices?.[0]?.message;
+      const text = protocol === 'anthropic' || typeof message?.content !== 'string' ? '' : message.content;
+      return { calls: native, text: typeof text === 'string' ? text : '' };
+    }
+    const text = replyOf(payload, protocol);
+    const marked = parseMarkupCalls(text);
+    if (marked.length) return { calls: marked, text };
+    return { calls: [], text };
   }
 
   // 越界访问不是直接拒绝，而是挂起等用户回答：task 进入 awaiting_approval，
@@ -579,11 +791,23 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
     }
     if (name === 'write_file') {
       await guardAccess(task, guard.resolve(args?.path), 'write', undefined, permission);
-      return writeFile(guard, args?.path, args?.content);
+      const written = writeFile(guard, args?.path, args?.content, { append: args?.append === true });
+      const syntaxError = syntaxCheck(guard.resolve(args?.path).absolute);
+      if (syntaxError) {
+        pushActivity(task, { kind: 'error', text: `${shortPath(written.path)} 语法检查没通过`, detail: syntaxError });
+        return { ...written, syntaxError, hint: '文件已写入但语法不对：读一下报错那一带，用 replace_in_file 修掉再继续。' };
+      }
+      return written;
     }
     if (name === 'replace_in_file') {
       await guardAccess(task, guard.resolve(args?.path), 'write', undefined, permission);
-      return replaceInFile(guard, args?.path, { find: args?.find, replace: args?.replace, all: args?.all === true });
+      const replaced = replaceInFile(guard, args?.path, { find: args?.find, replace: args?.replace, all: args?.all === true });
+      const syntaxError = syntaxCheck(guard.resolve(args?.path).absolute);
+      if (syntaxError) {
+        pushActivity(task, { kind: 'error', text: `${shortPath(replaced.path)} 改完语法没通过`, detail: syntaxError });
+        return { ...replaced, syntaxError, hint: '改完语法不对：再读一遍这一带，用 replace_in_file 修正。' };
+      }
+      return replaced;
     }
     if (name === 'move_path') {
       await guardAccess(task, guard.resolve(args?.from), 'write', undefined, permission);
@@ -605,8 +829,10 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       const value = text(args?.command, 4000);
       const shell = args?.shell === 'powershell' ? 'powershell' : '';
       if (!value) throw new Error('command 不能为空');
-      // 只读的查看类命令（列目录/看文件）不该每次都弹窗——用户已经抱怨过"点不完"。
-      const readable = READ_COMMAND.test(value) || SAFE_READ.test(value);
+      // 模型爱把只读命令包一层 powershell -Command：剥出脚本本体再判断，否则 node --check 也要弹窗。
+      const body = shell ? value : (unwrapPowerShell(value)?.script || value);
+      // 只读的查看类命令（列目录/看文件/语法检查）不该每次都弹窗——用户已经抱怨过"点不完"。
+      const readable = READ_COMMAND.test(body) || SAFE_READ.test(body);
       if (readable) return runCommand(guard, value);
       if (permission === 'read') throw new Error(`当前是「${PERMISSION_LABELS.read}」模式，只能执行只读命令（查看目录/文件、git status/diff/log/show/branch、node --check）。`);
       if (permission === 'workspace') {
@@ -627,6 +853,8 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
     const usage = {};
     let files = [];
     let summary = '';
+    // 输出被截断只值得重试一次：第二次还截断说明这个任务本身超出了模型的输出预算。
+    let truncationRetried = false;
     const deadline = Date.now() + totalTimeoutMs;
     for (let step = 0; step < input.maxSteps; step += 1) {
       if (task.cancelled) throw statusError('模型 Agent 已停止', 499);
@@ -635,28 +863,70 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), Math.min(perCallTimeoutMs, remaining));
       let reply = '';
+      let envelope = { calls: [], text: '' };
       try {
         const result = await askModel(messages, task, controller.signal, input.profileId, input.effort);
         for (const [key, value] of Object.entries(result.usage || {})) usage[key] = (usage[key] || 0) + (Number(value) || 0);
-        reply = replyOf(result.payload, result.protocol);
+        envelope = envelopeOf(result.payload, result.protocol);
+        reply = envelope.text;
+        task.protocol = result.protocol;
+      } catch (error) {
+        // 输出超上限常见于「一次写整个大文件」：告诉它拆小重来，比直接判失败有用得多。
+        if (error?.code === 'OUTPUT_TRUNCATED' && !truncationRetried) {
+          truncationRetried = true;
+          pushActivity(task, { kind: 'note', text: '这次输出被长度上限截断，让它拆小重来' });
+          messages.push({ role: 'user', content: '上一次输出因为超过长度上限被截断了。请把这一步拆小：每次只输出一个工具调用 JSON；写文件时先写前 60–100 行，再用 write_file{path:"同一个文件",content:"<后续片段>",append:true} 追加剩下的部分；不要一次输出整个大文件。' });
+          step -= 1;
+          continue;
+        }
+        throw error;
       } finally {
         clearTimeout(timer);
+      }
+      // 原生工具调用（可能一次给多个）：直接执行，结果按协议回填，省掉一整层文本解析。
+      if (envelope.calls.length) {
+        const chat = task.protocol === 'chat-completions';
+        if (chat) {
+          messages.push({
+            role: 'assistant',
+            content: reply || '',
+            tool_calls: envelope.calls.map(call => ({ id: call.id, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.args) } })),
+          });
+        }
+        for (const call of envelope.calls) {
+          pushActivity(task, { kind: 'tool', text: describeCall(call.name, call.args) });
+          try {
+            const output = await runTool(task, call.name, call.args, guard, { write: input.write, permission: input.permission, confirmDanger: input.confirmDanger !== false });
+            if (call.name === 'write_file' || call.name === 'replace_in_file') files = [...new Set([...files, output.path])];
+            if (call.name === 'move_path') files = [...new Set([...files, `${output.from} → ${output.to}`])];
+            if (call.name === 'delete_path' && output.removed) files = [...new Set([...files, `${output.path}（已删除）`])];
+            const brief = JSON.stringify(output).slice(0, 6000);
+            messages.push(chat ? { role: 'tool', tool_call_id: call.id, content: brief } : { role: 'user', content: `工具结果（${call.name}）：\n${brief}` });
+            pushActivity(task, { kind: 'observation', text: `${TOOL_LABELS[call.name] || call.name} 完成`, detail: describeOutput(call.name, output) });
+          } catch (error) {
+            const message = error?.message || '工具执行失败';
+            messages.push(chat ? { role: 'tool', tool_call_id: call.id, content: `失败：${message}` } : { role: 'user', content: `工具错误（${call.name}）：${message}` });
+            pushActivity(task, { kind: 'error', text: `${TOOL_LABELS[call.name] || call.name} 失败：${message}` });
+          }
+        }
+        continue;
       }
       const parsed = parseModelStep(reply);
       if (!parsed) {
         messages.push({ role: 'assistant', content: reply.slice(0, 2000) });
         messages.push({ role: 'user', content: '你没有按要求输出 JSON。请只输出一个 JSON 对象：{"tool":"..."} 或 {"final":{...}}。' });
-        pushActivity(task, { kind: 'error', text: '模型回复不是合法 JSON，已要求重试' });
+        // 把坏掉的开头留在过程里：否则只能看到「不是合法 JSON」，没法判断是转义问题还是被截断。
+        pushActivity(task, { kind: 'error', text: '模型回复不是合法 JSON，已要求重试', detail: reply.slice(0, 300).replace(/\s+/g, ' ') });
         continue;
       }
       if (parsed.type === 'final') {
         summary = parsed.summary;
         files = [...new Set([...files, ...parsed.files])];
-        // 模型自己说「没做」时不能对外报成功：一个文件都没改、结论却写着无法执行/没有权限，
-        // 说明任务没达成（常见于权限不足、命令没跑通），标成失败更诚实。
-        const refused = files.length === 0 && REFUSAL.test(summary);
+        // 模型自己说「没做」时不能对外报成功：done:false、或写着只做了一部分/无法完成，
+        // 都说明任务没达成，标成失败比显示「已完成」诚实。
+        const refused = parsed.done === false || PARTIAL.test(summary) || (files.length === 0 && REFUSAL.test(summary));
         pushActivity(task, refused
-          ? { kind: 'error', text: summary || '任务没有完成', detail: '模型明确表示没有执行' }
+          ? { kind: 'error', text: summary || '任务没有完成', detail: '模型表示没有做完' }
           : { kind: 'result', text: summary || '模型 Agent 完成' });
         return { summary, files, usage, steps: step + 1, ...(refused ? { failed: `任务没有完成：${summary.slice(0, 300)}` } : {}) };
       }
@@ -688,7 +958,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
         try {
           const result = await askModel([
             ...messages,
-            { role: 'user', content: '步数已经用完，不能再调用任何工具。请只输出一个 JSON：{"final":{"summary":"已经做完什么、还有什么没做","files":["改动过的文件"]}}' },
+            { role: 'user', content: '步数已经用完，不能再调用任何工具。请只输出一个 JSON：{"final":{"done":false/true,"summary":"已经做完什么、还有什么没做","files":["改动过的文件"]}}。没做完就写 done:false。' },
           ], task, controller.signal, input.profileId, input.effort);
           for (const [key, value] of Object.entries(result.usage || {})) usage[key] = (usage[key] || 0) + (Number(value) || 0);
           reply = replyOf(result.payload, result.protocol);
@@ -699,9 +969,10 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
         if (parsed?.type === 'final') {
           summary = parsed.summary || '步数用完，任务收尾';
           files = [...new Set([...files, ...parsed.files])];
-          const refused = files.length === 0 && REFUSAL.test(summary);
+          // 步数是用完的，本身就说明「不完整」；模型写 done:false 或说部分/没机会，就直接判失败。
+          const refused = parsed.done !== true || PARTIAL.test(summary) || (files.length === 0 && REFUSAL.test(summary));
           pushActivity(task, refused
-            ? { kind: 'error', text: summary, detail: '步数用完，模型表示没有做完' }
+            ? { kind: 'error', text: summary, detail: '步数用完，任务只做了一部分' }
             : { kind: 'result', text: summary });
           return { summary, files, usage, steps: input.maxSteps, ...(refused ? { failed: `任务没有完成：${summary.slice(0, 300)}` } : {}) };
         }

@@ -54,11 +54,31 @@ export function modelRequest(baseUrl, model, messages, key, maxTokens, connectio
   return {
     protocol: 'chat-completions', endpoint: `${baseUrl}/chat/completions`, headers: { 'content-type': 'application/json', authorization: `Bearer ${key}`, ...opencodeSession },
     body: { model, messages, ...(['api.deepseek.com', 'api.openai.com'].includes(hostname) || baseUrl === 'https://opencode.ai/inference/go/openai/v1' || REASONING_MODEL.test(model) ? {} : { temperature: 0.2 }),
+      // 原生工具调用：有了它，模型不必再手写 JSON 文本，长文件也不会因为引号没转义而整段作废。
+      ...(Array.isArray(options.tools) && options.tools.length ? { tools: options.tools, tool_choice: 'auto' } : {}),
       ...(effort === 'default' ? {} : { reasoning_effort: effort }),
+      ...(options.thinking === 'off' && hostname === 'api.deepseek.com' ? { thinking: { type: 'disabled' } } : {}),
       ...(connectionTest && hostname === 'api.deepseek.com' && ['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash'].includes(model) ? { thinking: { type: 'disabled' } } : {}),
       ...(hostname === 'api.openai.com' ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }),
     },
   };
+}
+// 供应商原生返回的工具调用（chat-completions 的 tool_calls / anthropic 的 tool_use），
+// 统一成 {id, name, args}，让执行器不必关心协议差异。
+export function toolCallsOf(payload, protocol) {
+  if (protocol === 'anthropic') {
+    const parts = Array.isArray(payload?.content) ? payload.content : [];
+    return parts.filter(part => part?.type === 'tool_use' && typeof part.name === 'string')
+      .map(part => ({ id: part.id, name: part.name, args: part.input && typeof part.input === 'object' ? part.input : {} }));
+  }
+  const message = payload?.choices?.[0]?.message;
+  const raw = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+  return raw.map(call => {
+    let args = {};
+    try { args = JSON.parse(call?.function?.arguments || '{}'); } catch { args = {}; }
+    if (!args || typeof args !== 'object') args = {};
+    return { id: call?.id, name: call?.function?.name, args };
+  }).filter(call => typeof call.name === 'string' && call.name);
 }
 export function httpModelError(status) {
   if (status === 401) return modelError('INVALID_KEY', '模型 Key 无效或已过期；请重新填写该地址对应的 Key。');
