@@ -146,3 +146,27 @@ test('不属于任何对话的工单不能从对话页删除', async t => {
   const ticket = engine.command({ text: '只回复两个字母：OK', executorId: 'model' });
   assert.throws(() => engine.deleteTicket(ticket.id), /只有项目对话里的消息可以删除/);
 });
+
+test('删除工作文件夹或对话时，名下的工单一起清掉，不留幽灵待确认', async t => {
+  const { engine, store } = harness(t);
+  const projectDir = join(tmpdir(), `dataagent-cascade-${Date.now()}`);
+  mkdirSync(projectDir, { recursive: true });
+  t.after(() => rmSync(projectDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const project = engine.importProject({ path: projectDir }).project;
+  const { chat } = engine.createProjectChat(project.id, { executorId: 'model' });
+  const keepChat = engine.createProjectChat(project.id, { executorId: 'model' }).chat;
+  const ticket = engine.projectChatMessage(chat.id, { text: '看一下目录结构' });
+  const kept = engine.projectChatMessage(keepChat.id, { text: '再来一次' });
+
+  // 先删单个对话：只该清掉它自己的工单。
+  const byChat = engine.deleteProjectChat(chat.id);
+  assert.equal(byChat.removed, 1);
+  assert.equal(store.get('work-ticket', ticket.id) ?? null, null);
+  assert.ok(store.get('work-ticket', kept.id), '别的对话的工单不受影响');
+
+  // 再删整个工作文件夹：剩下的工单也要跟着走。
+  const byProject = engine.deleteProject(project.id);
+  assert.equal(byProject.removed, 1);
+  assert.equal(store.get('work-ticket', kept.id) ?? null, null);
+  assert.equal(store.list('work-ticket').filter(row => row.id === kept.id).length, 0);
+});

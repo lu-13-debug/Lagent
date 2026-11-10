@@ -2733,6 +2733,57 @@ html[data-theme="dark"] .sa-newchat kbd {
   padding: 16px 20px 20px;
 }
 
+/* 执行前确认：原来的收件箱卡片搬进了弹窗，一次只问一条。 */
+.sa-approve {
+  display: grid;
+  gap: 10px;
+  padding: 2px 20px 0;
+}
+
+.sa-approve-title {
+  margin: 0;
+  font-size: var(--sa-fs-lg);
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--sa-text);
+  overflow-wrap: anywhere;
+}
+
+.sa-approve-question {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--sa-r-md);
+  border: 1px solid var(--sa-line);
+  background: var(--sa-surface-2);
+  font-size: var(--sa-fs-sm);
+  line-height: 1.65;
+  color: var(--sa-text-2);
+  overflow-wrap: anywhere;
+}
+
+.sa-approve-meta {
+  margin: 0;
+  font-size: var(--sa-fs-xs);
+  color: var(--sa-text-3);
+}
+
+.sa-approve-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 20px 20px;
+}
+
+@media (max-width: 560px) {
+  .sa-approve-actions {
+    flex-direction: column-reverse;
+  }
+
+  .sa-approve-actions .sa-button {
+    width: 100%;
+  }
+}
+
 .sa-detail-project {
   display: flex;
   align-items: center;

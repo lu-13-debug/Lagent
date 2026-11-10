@@ -63,6 +63,9 @@ const STATUS_LABELS: Record<string, string> = {
   recorded: '已记录'
 };
 
+// 还没走完的状态：有这些消息时对话页会自己轮询，批准后的状态变化不用手动刷新。
+const ACTIVE_TICKET_STATUS = new Set(['queued', 'working', 'awaiting_review', 'waiting', 'pending', 'running']);
+
 // 编排运行的状态文案；步骤状态复用执行器的那套，避免多一套词。
 const RUN_STATUS_LABELS: Record<string, string> = {
   drafting: '分析中',
@@ -235,10 +238,22 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   useEffect(() => {
     let cancelled = false;
     if (!chat) { setTickets([]); return () => { cancelled = true; }; }
-    api.workProjectChatTickets(chat.id)
-      .then(result => { if (!cancelled) setTickets(result.tickets); })
-      .catch(() => { if (!cancelled) setTickets([]); });
-    return () => { cancelled = true; };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // 消息还在跑的时候自己轮询：批准之后状态要立刻从「待确认」变成「执行中」，不能等刷新页面。
+    const load = async () => {
+      try {
+        const result = await api.workProjectChatTickets(chat.id);
+        if (cancelled) return;
+        setTickets(result.tickets);
+        if (result.tickets.some(ticket => ACTIVE_TICKET_STATUS.has(ticket.status))) {
+          timer = setTimeout(() => void load(), 2500);
+        }
+      } catch {
+        if (!cancelled) setTickets([]);
+      }
+    };
+    void load();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [chat?.id, chat?.lastTicketId]);
 
   // 编排器是否启用：只有启用时才显示「深度编排」开关。

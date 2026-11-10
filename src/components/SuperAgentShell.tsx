@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FolderGit2, GitBranch, Globe, Inbox, Menu, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Users, Wrench, X } from 'lucide-react';
+import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FolderGit2, GitBranch, Globe, Menu, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Users, Wrench, X } from 'lucide-react';
 import { api } from '../api';
 import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
@@ -13,9 +13,9 @@ import { SettingsModal } from './ModelSettings';
 import { Logo, Modal, Toast } from './ui';
 import '../superagent.css';
 
-type ShellView = 'command' | 'inbox' | 'chat' | 'project' | 'projects' | 'agents' | 'tools' | 'memory' | 'settings';
+type ShellView = 'command' | 'chat' | 'project' | 'projects' | 'agents' | 'tools' | 'memory' | 'settings';
+// 收件箱已并入对话：待确认的事项直接在对话里弹窗问，不再需要单独一页去点。
 const navItems: { id: ShellView; label: string; icon: typeof Terminal }[] = [
-  { id: 'inbox', label: '收件箱', icon: Inbox },
   { id: 'projects', label: '全部项目', icon: FolderGit2 },
   { id: 'agents', label: 'Agent', icon: Bot },
   { id: 'tools', label: '工具', icon: Wrench },
@@ -137,7 +137,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [view, setView] = useState<ShellView>(() => {
     const params = new URLSearchParams(window.location.search);
     const raw = params.get('view');
-    const known: ShellView[] = ['command', 'inbox', 'chat', 'project', 'projects', 'agents', 'tools', 'memory', 'settings'];
+    const known: ShellView[] = ['command', 'chat', 'project', 'projects', 'agents', 'tools', 'memory', 'settings'];
     if (known.includes(raw as ShellView)) return raw as ShellView;
     return params.get('project') ? 'projects' : 'command';
   });
@@ -174,6 +174,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [planDetail, setPlanDetail] = useState<WorkPlan | null>(null);
   // 越权访问的确认用弹窗打断：用户没回答之前，Agent 是停在那里等的。
   const [dismissedAccess, setDismissedAccess] = useState<string[]>([]);
+  // 普通「执行前确认」也走弹窗：点过「稍后」的记在这里，下次刷新会再问一次。
+  const [dismissedApprovals, setDismissedApprovals] = useState<string[]>([]);
   const [handoffExecutor, setHandoffExecutor] = useState('');
   const [handoffText, setHandoffText] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -949,9 +951,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     finally { setSynthesizing(false); }
   };
 
-  const [inboxFilter, setInboxFilter] = useState('');
-  // 待确认事项本身不带项目信息，按 ticketId → projectChatId 反查所属工作文件夹再分组。
-  const inboxRows = useMemo(() => {
+  // 待确认事项本身不带项目信息，按 ticketId → projectChatId 反查所属工作文件夹，弹窗里好显示是哪个项目。
+  const attentionRows = useMemo(() => {
     const chatOwners = new Map<string, WorkProject>();
     for (const project of folderState.projects) for (const chat of project.chats) chatOwners.set(chat.id, project);
     return attention.map(item => {
@@ -960,27 +961,11 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       return { item, ticket, project };
     });
   }, [attention, tickets, folderState.projects]);
-  const inboxProjects = useMemo(() => {
-    const counts = new Map<string, { id: string; name: string; count: number }>();
-    for (const row of inboxRows) {
-      if (!row.project) continue;
-      const entry = counts.get(row.project.id) || { id: row.project.id, name: row.project.name, count: 0 };
-      entry.count += 1;
-      counts.set(row.project.id, entry);
-    }
-    return [...counts.values()].sort((left, right) => right.count - left.count);
-  }, [inboxRows]);
-  const inboxGroups = useMemo(() => {
-    const rows = inboxFilter ? inboxRows.filter(row => row.project?.id === inboxFilter) : inboxRows;
-    const groups = new Map<string, typeof inboxRows>();
-    for (const row of rows) {
-      const key = row.project ? row.project.name : '未绑定工作文件夹';
-      const list = groups.get(key) || [];
-      list.push(row);
-      groups.set(key, list);
-    }
-    return [...groups.entries()].map(([label, items]) => ({ label, items }));
-  }, [inboxRows, inboxFilter]);
+  // 一次只问一条：批准/退回后自动轮到下一条，不必自己去列表里找。
+  const approvalAsk = attentionRows.find(row => row.item.kind !== 'access' && !dismissedApprovals.includes(row.item.ticketId));
+  const approvalTicket = approvalAsk?.ticket;
+  const approvalNeedsDataset = approvalAsk ? (!approvalTicket?.executor || approvalTicket.executor === 'analysis') : false;
+  const approvalDataset = approvalAsk ? (attentionDatasets[approvalAsk.item.ticketId] || approvalTicket?.datasetId || (datasets.length === 1 ? datasets[0].id : '')) : '';
 
   const renderAttention = (items: WorkInboxItem[]) => <div className="sa-attention-list">{items.map(item => {
     const ticket = tickets.find(candidate => candidate.id === item.ticketId);
@@ -1244,19 +1229,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     </div>
   </div>;
 
-  const inboxPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">ATTENTION</p><h1>收件箱<span className="sa-count">{attention.length}</span></h1><p>只有需要你决定的事项会出现在这里。</p></div></header>
-    {attention.length ? <>
-      {inboxProjects.length > 0 && <div className="sa-inbox-filters" role="group" aria-label="按工作文件夹筛选">
-        <button type="button" className={`sa-chip ${inboxFilter ? '' : 'on'}`} aria-pressed={!inboxFilter} onClick={() => setInboxFilter('')}>全部<span>{attention.length}</span></button>
-        {inboxProjects.map(project => <button type="button" key={project.id} className={`sa-chip ${inboxFilter === project.id ? 'on' : ''}`} aria-pressed={inboxFilter === project.id} onClick={() => setInboxFilter(inboxFilter === project.id ? '' : project.id)}>{project.name}<span>{project.count}</span></button>)}
-      </div>}
-      {inboxGroups.map(group => <section className="sa-inbox-group" key={group.label}>
-        <div className="sa-group-head"><h2>{group.label}</h2><span>{group.items.length}</span></div>
-        {renderAttention(group.items.map(row => row.item))}
-      </section>)}
-      {!inboxGroups.length && <p className="sa-empty">这个工作文件夹没有待确认事项。</p>}
-    </> : <div className="sa-empty-card"><Check size={22} /><h2>没有需要处理的事项</h2><p>Agent 会继续执行已授权的工作。</p></div>}</section>;
-
   const dshWindow = windows.find(window => /deepseek/i.test(`${window.process} ${window.title}`));
   const windowFallbackFor = (provider: { id: string; name: string }) => /deepseek/i.test(`${provider.id} ${provider.name}`) && dshWindow
     ? `已检出运行中的「${dshWindow.process}」窗口，无需安装 ACP：在左下角选择「窗口 · ${dshWindow.process}」即可直接发送指令。`
@@ -1395,7 +1367,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     <div className="sa-code-note"><span>Claude Code 示例</span><code>claude mcp add --transport http dataagent {location.origin}/api/mcp --header "Authorization: Bearer &lt;令牌&gt;"</code></div>
   </article></div></section>;
 
-  const page = view === 'command' ? conversationPage : view === 'inbox' ? inboxPage : view === 'project' ? <ProjectsPanel mode="project" notify={notify} onOpenTicket={id => void openCard(id)} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => setView('projects')} onBackToProjects={() => setView('projects')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'chat' ? <ProjectsPanel mode="chat" notify={notify} onOpenTicket={id => void openCard(id)} onApprove={id => void act(id, 'approve')} onTicketsChanged={() => { void load(); void reloadProjects(); }} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => openFolder(folderState.projectId || '')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'projects' ? <ProjectsPanel mode="manage" notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
+  const page = view === 'command' ? conversationPage : view === 'project' ? <ProjectsPanel mode="project" notify={notify} onOpenTicket={id => void openCard(id)} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => setView('projects')} onBackToProjects={() => setView('projects')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'chat' ? <ProjectsPanel mode="chat" notify={notify} onOpenTicket={id => void openCard(id)} onApprove={id => void act(id, 'approve')} onTicketsChanged={() => { void load(); void reloadProjects(); }} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => openFolder(folderState.projectId || '')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'projects' ? <ProjectsPanel mode="manage" notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
 
   return <div className={`sa-shell ${railCollapsed ? 'sa-rail-collapsed' : ''} ${inspectorOpen ? 'sa-inspector-open' : ''}`} style={sidebarWidth ? { '--sa-sidebar': `${sidebarWidth}px` } as React.CSSProperties : undefined}>
     <a className="skip-link" href="#sa-main">跳到主内容</a>
@@ -1496,7 +1468,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         {userMenuOpen && <div className="sa-usermenu" role="menu" aria-label="个人工作区">
           {navItems.map(item => <button type="button" key={item.id} role="menuitem" className={view === item.id ? 'active' : ''} onClick={() => { setView(item.id); setNavOpen(false); setUserMenuOpen(false); }}>
             <item.icon size={15} /><span>{item.label}</span>
-            {item.id === 'inbox' && attention.length > 0 && <em>{attention.length}</em>}
           </button>)}
         </div>}
         <button type="button" className="sa-user" aria-haspopup="menu" aria-expanded={userMenuOpen} onClick={() => setUserMenuOpen(value => !value)}>
@@ -1536,6 +1507,27 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           </div>
         </aside>
       : <button type="button" className="sa-inspector-tab" aria-label="展开工作详情" title="展开工作详情" onClick={() => setInspectorOpen(true)}>AGENTS</button>)}
+    {approvalAsk && <Modal
+      title="要我批准后开始吗？"
+      subtitle="执行前停在这里问你一次；关掉这个窗口就是稍后再说，任务会一直等着你。"
+      close={() => setDismissedApprovals(previous => [...previous, approvalAsk.item.ticketId])}
+    >
+      <div className="sa-approve">
+        <p className="sa-approve-title">{approvalTicket?.title || approvalAsk.item.title}</p>
+        <p className="sa-approve-question">{approvalAsk.item.question}</p>
+        <p className="sa-approve-meta">
+          {executorNames[approvalTicket?.executor || ''] || approvalTicket?.executor || 'Agent'}
+          {approvalAsk.project ? ` · ${approvalAsk.project.name}` : ''}
+          {` · ${time(approvalAsk.item.createdAt)}`}
+        </p>
+        {approvalNeedsDataset && datasets.length > 1 && <label className="sa-field"><span>数据集</span><select value={approvalDataset} onChange={event => setAttentionDatasets(previous => ({ ...previous, [approvalAsk.item.ticketId]: event.target.value }))}><option value="">请选择数据集</option>{datasets.map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.name}</option>)}</select></label>}
+        {approvalNeedsDataset && datasets.length === 0 && <p className="sa-inline-note">这条要先用数据集；到「全部项目」里上传后再批准。</p>}
+      </div>
+      <div className="sa-approve-actions">
+        <button type="button" className="sa-button" onClick={() => { setDismissedApprovals(previous => [...previous, approvalAsk.item.ticketId]); void act(approvalAsk.item.ticketId, 'reject'); }}>退回</button>
+        <button type="button" className="sa-button sa-primary" disabled={approvalNeedsDataset && (datasets.length === 0 || (datasets.length > 1 && !approvalDataset))} onClick={() => { setDismissedApprovals(previous => [...previous, approvalAsk.item.ticketId]); void act(approvalAsk.item.ticketId, 'approve', approvalNeedsDataset && approvalDataset ? { datasetId: approvalDataset } : undefined); }}><Check size={15} />批准并开始</button>
+      </div>
+    </Modal>}
     {accessAsk && <Modal title="模型 Agent 需要你的授权" subtitle="工作目录之外的读写、以及危险命令，都会先停在这里问你一次。" close={() => setDismissedAccess(previous => [...previous, accessAsk.ticketId])}>
       <div className="sa-access">
         <p className="sa-access-line"><span className="sa-access-mode">{accessModeNames[accessAsk.accessMode || ''] || '访问'}</span>{accessAsk.accessPath || accessAsk.question}</p>

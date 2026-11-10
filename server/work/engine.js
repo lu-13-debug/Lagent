@@ -71,6 +71,25 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   };
   const get = id => {const ticket=db.get('ticket',id);if(!ticket)throw workError('工单不存在',404);return publicTicket(ticket);};
   const related = (kind,id) => db.list(kind).filter(row=>row.ticketId===id);
+  // 删掉某几个对话名下的全部工单。删除工作文件夹或对话时必须跟着清，
+  // 否则这些工单会以「待确认」的身份永远留在提醒里，点开却已经找不到项目。
+  const purgeChatTickets = chatIds => {
+    const owners = new Set(chatIds.filter(Boolean));
+    if (!owners.size) return 0;
+    const rows = db.list('ticket').filter(ticket => owners.has(store.get('work-control', ticket.id)?.projectChatId));
+    for (const ticket of rows) {
+      for (const row of related('assignment', ticket.id)) {
+        if (row.sessionId) try { store.delete('task', row.sessionId); } catch { /* 任务已不存在。 */ }
+        db.delete('assignment', row.id);
+      }
+      for (const row of related('report', ticket.id)) db.delete('report', row.id);
+      for (const row of store.list('work-event').filter(item => item.ticketId === ticket.id)) store.delete('work-event', row.id);
+      try { store.delete('work-control', ticket.id); } catch { /* 控制记录可能已不存在。 */ }
+      try { store.delete('git-snapshot', ticket.id); } catch { /* 快照可能已不存在。 */ }
+      db.delete('ticket', ticket.id);
+    }
+    return rows.length;
+  };
   // 浏览器「允许域名」以前只被存进策略、执行器从不读取，等于摆设；这里真正拦下来。
   const enforceBrowserHost = (id, executorInput, hosts) => {
     if (id !== 'browser') return;
@@ -1078,7 +1097,11 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     listProjects(){return projects.listProjects();},
     getProject(id){return projects.getProject(id);},
     importProject(input){return projects.importProject(input);},
-    deleteProject(id){return projects.deleteProject(id);},
+    deleteProject(id){
+      const project=projects.getProject(id);
+      const removed=purgeChatTickets(projects.listChats(project.id).map(chat=>chat.id));
+      return {...projects.deleteProject(id),removed};
+    },
     renameProject(id,input){return projects.renameProject(id,input);},
     listDirectory(input){return projects.listDirectory(input);},
     projectBrief(id){return projects.getBrief(id);},
@@ -1103,7 +1126,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       }
       return {chat,project:projects.getProject(projectId)};
     },
-    deleteProjectChat(id){return projects.deleteChat(id);},
+    deleteProjectChat(id){
+      const removed=purgeChatTickets([id]);
+      return {...projects.deleteChat(id),removed};
+    },
     // 对话页里删除一条自己发的消息：连同它的执行记录、报告与快照一起清掉。
     // 属于多步计划的一条消息会连整个计划一起删——留下半个计划比删掉更难解释。
     deleteTicket(id){
