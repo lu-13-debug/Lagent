@@ -113,3 +113,32 @@ test('对话消息可指定模型与思考强度，并落进执行器输入', as
   assert.equal(plainControl.executorInput.profileId, undefined, '不传时沿用默认模型');
   assert.equal(plainControl.executorInput.effort, undefined);
 });
+
+test('删除对话里的一条消息会连同执行记录一起清掉', async t => {
+  const { engine, store } = harness(t);
+  const projectDir = join(tmpdir(), `dataagent-chat-delete-${Date.now()}`);
+  mkdirSync(projectDir, { recursive: true });
+  t.after(() => rmSync(projectDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const project = engine.importProject({ path: projectDir }).project;
+  const { chat } = engine.createProjectChat(project.id, { executorId: 'model' });
+  const ticket = engine.projectChatMessage(chat.id, { text: '看一下目录结构' });
+
+  // 待确认的工单不能删：还在执行的方案删掉会让执行器无处回报。
+  assert.throws(() => engine.deleteTicket(ticket.id), /先停止再删除/);
+
+  engine.action(ticket.id, 'stop');
+  const result = engine.deleteTicket(ticket.id);
+  assert.equal(result.removed, 1);
+  assert.deepEqual(result.ids, [ticket.id]);
+  assert.equal(result.planRemoved, false);
+  assert.equal(store.get('work-ticket', ticket.id) ?? null, null, '工单本身被删除');
+  assert.equal(store.get('work-control', ticket.id) ?? null, null, '控制记录被删除');
+  assert.equal(store.list('work-ticket').filter(row => row.id === ticket.id).length, 0);
+  assert.equal(engine.getProject(project.id).chats.find(item => item.id === chat.id).lastTicketId ?? null, null, '对话的最后一条消息指针被清掉');
+});
+
+test('不属于任何对话的工单不能从对话页删除', async t => {
+  const { engine } = harness(t);
+  const ticket = engine.command({ text: '只回复两个字母：OK', executorId: 'model' });
+  assert.throws(() => engine.deleteTicket(ticket.id), /只有项目对话里的消息可以删除/);
+});

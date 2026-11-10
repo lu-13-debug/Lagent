@@ -1095,6 +1095,42 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       return {chat,project:projects.getProject(projectId)};
     },
     deleteProjectChat(id){return projects.deleteChat(id);},
+    // 对话页里删除一条自己发的消息：连同它的执行记录、报告与快照一起清掉。
+    // 属于多步计划的一条消息会连整个计划一起删——留下半个计划比删掉更难解释。
+    deleteTicket(id){
+      const ticket=db.get('ticket',id);
+      const control=store.get('work-control',id);
+      if(!control?.projectChatId)throw workError('只有项目对话里的消息可以删除',400);
+      if(ticket.status==='working'||ticket.status==='awaiting_review')throw workError('这条消息还在执行，先停止再删除',409);
+      const chatId=control.projectChatId;
+      const targets=[id];
+      let planRemoved=false;
+      if(ticket.planId){
+        const plan=db.get('plan',ticket.planId);
+        if(plan)for(const step of plan.steps)if(step.ticketId&&!targets.includes(step.ticketId))targets.push(step.ticketId);
+        planRemoved=true;
+      }
+      for(const ticketId of targets){
+        const assignmentRows=related('assignment',ticketId);
+        for(const row of assignmentRows){
+          if(row.sessionId)try{store.delete('task',row.sessionId);}catch{/* 任务已不存在。 */}
+          db.delete('assignment',row.id);
+        }
+        for(const row of related('report',ticketId))db.delete('report',row.id);
+        for(const row of store.list('work-event').filter(item=>item.ticketId===ticketId))store.delete('work-event',row.id);
+        try{store.delete('work-control',ticketId);}catch{/* 控制记录可能已不存在。 */}
+        try{store.delete('git-snapshot',ticketId);}catch{/* 快照可能已不存在。 */}
+        db.delete('ticket',ticketId);
+      }
+      if(planRemoved)db.delete('plan',ticket.planId);
+      const chat=projects.getChat(chatId);
+      if(chat?.lastTicketId&&targets.includes(chat.lastTicketId)){
+        const rest=db.list('ticket').filter(row=>store.get('work-control',row.id)?.projectChatId===chatId).sort((left,right)=>String(right.createdAt).localeCompare(String(left.createdAt)));
+        db.put('project-chat',{...chat,lastTicketId:rest[0]?.id||null,updatedAt:now()});
+      }
+      audit(id,'delete','project/chat','allowed',planRemoved?'删除计划与全部步骤':'删除单条消息');
+      return {id,removed:targets.length,ids:targets,planRemoved};
+    },
     renameProjectChat(id,input){return projects.renameChat(id,input);},
     scanProjectSessions(projectId,executorId){return projects.scanSessions(projectId,executorId);},
     importProjectSession(projectId,input){return projects.importSession(projectId,input);},

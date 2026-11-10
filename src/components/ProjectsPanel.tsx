@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AppWindow, Bot, Brain, Check, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users } from 'lucide-react';
+import { AppWindow, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users } from 'lucide-react';
 import { api } from '../api';
 import { Modal } from './ui';
 import { ChatModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
@@ -25,6 +25,7 @@ type Props = {
 };
 
 const EXECUTOR_LABELS: Record<string, string> = {
+  model: '内置 Agent',
   'claude-code': 'Claude Code',
   codex: 'Codex',
   'claude-acp': 'Claude ACP',
@@ -103,7 +104,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const [briefDraft, setBriefDraft] = useState({ goal: '', summary: '', keyPoints: '', decisions: '', constraints: '' });
   const [changes, setChanges] = useState<WorkProjectChange[]>([]);
   const [archiveBusy, setArchiveBusy] = useState('');
-  const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; run: () => Promise<void> } | null>(null);
+  const [confirm, setConfirm] = useState<{ title: string; body?: string; quote?: string; notes?: string[]; label: string; run: () => Promise<void> } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [changeTitle, setChangeTitle] = useState('');
   const [changeSummary, setChangeSummary] = useState('');
@@ -116,6 +117,9 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const [teamworkAgents, setTeamworkAgents] = useState<string[]>([]);
   const [teamworkBusy, setTeamworkBusy] = useState('');
   const [teamworks, setTeamworks] = useState<WorkTeamwork[]>([]);
+  // 对话页：每条 Agent 回复可以展开看它怎么想、怎么做。按工单 id 缓存，避免重复请求。
+  const [expandedTurns, setExpandedTurns] = useState<Record<string, boolean>>({});
+  const [traces, setTraces] = useState<Record<string, { loading?: boolean; error?: string; items?: { kind: string; text: string; detail?: string; at?: string }[] }>>({});
 
   const project = useMemo(() => projects.find(item => item.id === activeProjectId) || null, [projects, activeProjectId]);
   const dispatchExecutors = useMemo(() => DISPATCH_ORDER.filter(id => allowedExecutors.includes(id)), [allowedExecutors]);
@@ -201,6 +205,13 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       .catch(() => { if (!cancelled) setTickets([]); });
     return () => { cancelled = true; };
   }, [chat?.id, chat?.lastTicketId]);
+
+  // 进对话就停在最新一条上（和常见聊天软件一致），否则新消息会藏在输入框下面。
+  useEffect(() => {
+    const list = [...document.querySelectorAll<HTMLElement>('.pj-messages')].find(node => node.getClientRects().length > 0);
+    if (!list) return;
+    list.scrollTop = list.scrollHeight;
+  }, [chat?.id, tickets.length]);
 
   const loadDirectory = async (target = '') => {
     setBrowserBusy(true);
@@ -598,16 +609,111 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     if (left.planId && right.planId && stepDelta !== 0) return stepDelta;
     return String(left.createdAt).localeCompare(String(right.createdAt));
   });
+
+  async function toggleTrace(ticket: WorkTicket) {
+    const open = !expandedTurns[ticket.id];
+    setExpandedTurns(current => ({ ...current, [ticket.id]: open }));
+    if (!open) return;
+    scrollTurn(ticket.id);
+    if (traces[ticket.id]?.items || traces[ticket.id]?.loading) return;
+    setTraces(current => ({ ...current, [ticket.id]: { loading: true } }));
+    try {
+      const detail = await api.workTicket(ticket.id);
+      setTraces(current => ({ ...current, [ticket.id]: { items: (detail.activity || []).slice(0, 120) } }));
+    } catch (error) {
+      setTraces(current => ({ ...current, [ticket.id]: { error: error instanceof Error ? error.message : '读取执行记录失败' } }));
+    }
+    scrollTurn(ticket.id);
+  }
+
+  // 展开过程后把这一轮的回复滚进可视区：整轮比视口高时，优先露出回复的结尾。
+  function scrollTurn(ticketId: string) {
+    window.setTimeout(() => {
+      const node = document.querySelector<HTMLElement>(`[data-turn="${ticketId}"]`);
+      if (!node) return;
+      const list = node.closest<HTMLElement>('.pj-messages');
+      const bubble = node.querySelector<HTMLElement>('.pj-bubble-agent');
+      if (list && bubble) {
+        const gap = bubble.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom;
+        if (gap > 0) {
+          list.scrollTo({ top: list.scrollTop + gap + 10, behavior: 'smooth' });
+          return;
+        }
+        if (node.getBoundingClientRect().top < list.getBoundingClientRect().top) {
+          list.scrollTo({ top: list.scrollTop + node.getBoundingClientRect().top - list.getBoundingClientRect().top - 10, behavior: 'smooth' });
+          return;
+        }
+      }
+      node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, 80);
+  }
+
+  // 删除自己发的一条消息：连同执行记录、报告、快照一起清掉；属于计划的会整条计划一起删。
+  const removeMessage = (ticket: WorkTicket) => setConfirm({
+    title: '删除这条消息？',
+    quote: ticket.title.slice(0, 160),
+    notes: [
+      ticket.planId ? '这条消息属于一个多步计划，整个计划会一起删除。' : '',
+      '它的执行记录、报告与改动快照会一起删除，无法恢复。'
+    ].filter(Boolean),
+    label: '删除',
+    run: async () => {
+      const result = await api.workDeleteTicket(ticket.id);
+      setTickets(current => current.filter(item => !result.ids.includes(item.id)));
+      setExpandedTurns(current => { const next = { ...current }; result.ids.forEach(id => delete next[id]); return next; });
+      notify(result.planRemoved ? `已删除这条消息和它的 ${result.ids.length} 个步骤。` : '已删除这条消息。');
+    }
+  });
+
   const thread = project && chat ? <div className="pj-thread pj-thread-full">
-    <div className="pj-messages">
-      {threadTickets.length ? threadTickets.map(ticket => <div className="pj-message-row" key={ticket.id}>
-        <button type="button" className="pj-message" onClick={() => onOpenTicket(ticket.id)}>
-          <span className="pj-message-head"><span>{STATUS_LABELS[ticket.status] || ticket.status}</span><time>{new Date(ticket.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></span>
-          <span className="pj-message-text">{ticket.title}</span>
-          {ticket.summary && <span className="pj-message-summary">{ticket.summary}</span>}
-        </button>
-        {ticket.status === 'awaiting_review' && onApprove && <button type="button" className="pj-btn pj-primary pj-small pj-message-approve" onClick={() => onApprove(ticket.id)}><Check size={13} />确认执行</button>}
-      </div>) : <p className="pj-empty">还没有消息。在下方描述任务，确认后才会发送给 Agent。</p>}
+    <div className="pj-messages pj-conv">
+      {threadTickets.length ? threadTickets.map(ticket => {
+        const open = expandedTurns[ticket.id] === true;
+        const trace = traces[ticket.id];
+        const items = trace?.items || [];
+        const agentName = EXECUTOR_LABELS[ticket.executor || ''] || EXECUTOR_LABELS[chat.executorId] || ticket.executor || chat.executorId;
+        const stamp = new Date(ticket.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+        return <div className="pj-turn" key={ticket.id} data-turn={ticket.id}>
+          <div className="pj-turn-row pj-turn-user">
+            <div className="pj-bubble pj-bubble-user">
+              <p className="pj-bubble-text">{ticket.title}</p>
+              <div className="pj-bubble-foot">
+                <time>{stamp}</time>
+                <button type="button" className="pj-bubble-delete" title="删除这条消息" aria-label="删除这条消息" onClick={() => removeMessage(ticket)}><Trash2 size={12} /></button>
+              </div>
+            </div>
+          </div>
+          <div className="pj-turn-row pj-turn-agent">
+            <div className="pj-bubble pj-bubble-agent">
+              <div className="pj-bubble-head">
+                <span className="pj-agent-name"><Bot size={13} />{agentName}</span>
+                <span className={`pj-agent-status is-${ticket.status}`}>{STATUS_LABELS[ticket.status] || ticket.status}</span>
+                <time>{stamp}</time>
+              </div>
+              {ticket.summary ? <p className={`pj-bubble-text${open ? '' : ' pj-clamp'}`}>{ticket.summary}</p> : <p className="pj-bubble-text pj-bubble-muted">{ticket.status === 'awaiting_review' ? '等你确认后开始执行。' : ticket.status === 'queued' ? '排队中，还没开始。' : '还没有输出。'}</p>}
+              <div className="pj-bubble-actions">
+                <button type="button" className="pj-link" aria-expanded={open} onClick={() => void toggleTrace(ticket)}>{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{open ? '收起过程' : '展开思考过程'}</button>
+                {ticket.status === 'awaiting_review' && onApprove && <button type="button" className="pj-btn pj-primary pj-small" onClick={() => onApprove(ticket.id)}><Check size={13} />确认执行</button>}
+                <button type="button" className="pj-link" onClick={() => onOpenTicket(ticket.id)}>完整详情</button>
+              </div>
+              {open && <div className="pj-trace">
+                {trace?.loading && <p className="pj-trace-empty">正在读取执行记录…</p>}
+                {trace?.error && <p className="pj-trace-empty">{trace.error}</p>}
+                {!trace?.loading && !trace?.error && (items.length
+                  ? <ol className="pj-trace-list">{items.map((item, index) => <li key={`${ticket.id}-${index}`} className="pj-trace-item">
+                    <span className="pj-trace-index">{index + 1}</span>
+                    <div className="pj-trace-body">
+                      <span className="pj-trace-text">{item.text || item.kind}</span>
+                      {item.detail && <span className="pj-trace-detail">{item.detail}</span>}
+                    </div>
+                    {item.at && <time className="pj-trace-time">{new Date(item.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time>}
+                  </li>)}</ol>
+                  : <p className="pj-trace-empty">{ticket.status === 'queued' || ticket.status === 'awaiting_review' ? '还没开始执行，暂时没有过程记录。' : '这次执行没有留下步骤记录。'}</p>)}
+              </div>}
+            </div>
+          </div>
+        </div>;
+      }) : <p className="pj-empty">还没有消息。在下方描述任务，确认后才会发送给 Agent。</p>}
     </div>
     <div className="pj-composer">
       <textarea value={chatDraft} onChange={event => setChatDraft(event.target.value)} rows={3} maxLength={3000} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} placeholder={chat.executorId === 'window' ? '描述要发送到该窗口 Agent 会话的指令…' : '描述要在该项目中完成的任务，例如：修复首页布局在窄屏下的溢出'} />
@@ -894,9 +1000,10 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
         </footer>
       </div>
     </div>}
-    {confirm && <Modal title={confirm.title} subtitle={confirm.body} close={() => { if (!confirmBusy) setConfirm(null); }}>
+    {confirm && <Modal title={confirm.title} subtitle={confirm.quote ? '这一步无法撤销。' : confirm.body} close={() => { if (!confirmBusy) setConfirm(null); }}>
       <div className="pj-confirm">
-        <p>这一步无法撤销，确认继续？</p>
+        {confirm.quote && <blockquote className="pj-confirm-quote">{confirm.quote}</blockquote>}
+        {confirm.notes && confirm.notes.length > 0 && <ul className="pj-confirm-notes">{confirm.notes.map(note => <li key={note}>{note}</li>)}</ul>}
         <footer>
           <button type="button" className="pj-btn" disabled={confirmBusy} onClick={() => setConfirm(null)}>取消</button>
           <button type="button" className="pj-btn pj-danger" disabled={confirmBusy} onClick={async () => {

@@ -50,6 +50,7 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/plans/:id/cancel',(req,res)=>res.json({plan:engine.cancelPlan(req.params.id)}));
   app.post('/api/work/command',(req,res)=>res.status(201).json({ticket:engine.command(req.body)}));
   app.get('/api/work/tickets/:id',(req,res)=>res.json(engine.detail(req.params.id)));
+  app.delete('/api/work/tickets/:id',(req,res)=>res.json(engine.deleteTicket(req.params.id)));
   app.post('/api/work/tickets/:id/actions',(req,res)=>{
     if(req.body?.action==='handoff'){
       const result=engine.handoff(req.params.id,req.body?.input);
