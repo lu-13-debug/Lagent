@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AppWindow, Bot, Brain, Check, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users } from 'lucide-react';
 import { api } from '../api';
 import { Modal } from './ui';
+import { ChatModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
 import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkTeamwork, WorkTicket } from '../superagent';
 import '../projects.css';
 
@@ -82,6 +83,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [sessions, setSessions] = useState<WorkProjectSession[] | null>(null);
   const [chatDraft, setChatDraft] = useState('');
+  const [chatModel, setChatModel] = useState<ChatModelChoice>({ profileId: '', effort: 'default' });
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [newExecutors, setNewExecutors] = useState<string[]>([]);
   const [newTitle, setNewTitle] = useState('');
@@ -116,6 +118,11 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const project = useMemo(() => projects.find(item => item.id === activeProjectId) || null, [projects, activeProjectId]);
   const dispatchExecutors = useMemo(() => DISPATCH_ORDER.filter(id => allowedExecutors.includes(id)), [allowedExecutors]);
   const chat = useMemo(() => project?.chats.find(item => item.id === activeChatId) || null, [project, activeChatId]);
+  // 每个对话各自的模型与思考强度，切对话时恢复上次的选择。
+  useEffect(() => {
+    if (!activeChatId) return;
+    setChatModel(readChatModel(activeChatId));
+  }, [activeChatId]);
   const planExecutors = useMemo(() => {
     const ids = new Set<string>();
     for (const item of project?.chats || []) ids.add(item.executorId);
@@ -334,7 +341,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     if (!chat || !text) return;
     setBusy('send');
     try {
-      const result = await api.workProjectChatMessage(chat.id, text);
+      const result = await api.workProjectChatMessage(chat.id, text, undefined, chat.executorId === 'model' ? chatModel : undefined);
       setChatDraft('');
       setTickets(current => [...current.filter(item => item.id !== result.ticket.id), result.ticket]);
       await loadProjects(true);
@@ -608,6 +615,12 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
           <button type="button" className="pj-btn pj-primary pj-small" disabled={!dispatchTargets.length || dispatchBusy} onClick={() => void dispatch()}>{dispatchBusy ? '分派中…' : `分派给 ${dispatchTargets.length} 个 Agent`}</button>
         </span>
       </div>}
+      {chat.executorId === 'model' && <ChatModelPicker
+        chatId={chat.id}
+        value={chatModel}
+        onChange={next => { setChatModel(next); writeChatModel(chat.id, next); }}
+        disabled={busy === 'send'}
+      />}
       <div className="pj-composer-actions">
         <button type="button" className="pj-btn" disabled={!chatDraft.trim() || !dispatchExecutors.length} aria-expanded={dispatchOpen} onClick={toggleDispatchPanel}><Users size={14} />并行分派</button>
         <button type="button" className="pj-btn" disabled={!chatDraft.trim() || planBusy === 'suggest'} onClick={() => void startPlan()}><Sparkles size={14} />{planBusy === 'suggest' ? '拆解中…' : '拆成计划'}</button>

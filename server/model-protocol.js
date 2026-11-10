@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 export const modelError = (code, message) => Object.assign(new Error(message), { code, modelFailure: true });
 // 精确型号和协议白名单；兼容接口不代表具备同样的推理参数。
 // 官方依据核查于2026-11-01；其余型号只开放默认档，不进行付费探测。
@@ -35,8 +37,13 @@ export function modelRequest(baseUrl, model, messages, key, maxTokens, connectio
   const protocol = options.protocol ?? (hostname === 'api.anthropic.com' ? 'anthropic' : 'chat-completions');
   if (!['responses', 'anthropic', 'chat-completions'].includes(protocol)) throw modelError('PROTOCOL_ERROR', '模型协议无效。');
   const effort = validateEffort({ baseUrl, model, protocol, effort: options.effort });
+  // opencode 的 go 网关要求每次请求带上会话头，否则直接 400 MissingSessionID；
+  // 会话 ID 由调用方给稳定值（同一对话复用），没给就每次生成一个。
+  const opencodeSession = hostname === 'opencode.ai' || hostname.endsWith('.opencode.ai')
+    ? { 'x-opencode-session': typeof options.sessionId === 'string' && options.sessionId.trim() ? options.sessionId.trim().slice(0, 128) : randomUUID() }
+    : {};
   if (protocol === 'responses') return {
-    protocol, endpoint: `${baseUrl}/responses`, headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+    protocol, endpoint: `${baseUrl}/responses`, headers: { 'content-type': 'application/json', authorization: `Bearer ${key}`, ...opencodeSession },
     body: { model, input: messages, max_output_tokens: maxTokens, ...(effort === 'default' ? {} : { reasoning: { effort } }) },
   };
   if (protocol === 'anthropic') return {
@@ -45,7 +52,7 @@ export function modelRequest(baseUrl, model, messages, key, maxTokens, connectio
     body: { model, max_tokens: maxTokens, system: messages.filter(message => message.role === 'system').map(message => message.content).join('\n'), messages: messages.filter(message => message.role !== 'system').map(({ role, content }) => ({ role, content })), ...(effort === 'default' ? {} : { output_config: { effort }, thinking: { type: 'adaptive' } }) },
   };
   return {
-    protocol: 'chat-completions', endpoint: `${baseUrl}/chat/completions`, headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+    protocol: 'chat-completions', endpoint: `${baseUrl}/chat/completions`, headers: { 'content-type': 'application/json', authorization: `Bearer ${key}`, ...opencodeSession },
     body: { model, messages, ...(['api.deepseek.com', 'api.openai.com'].includes(hostname) || baseUrl === 'https://opencode.ai/inference/go/openai/v1' || REASONING_MODEL.test(model) ? {} : { temperature: 0.2 }),
       ...(effort === 'default' ? {} : { reasoning_effort: effort }),
       ...(connectionTest && hostname === 'api.deepseek.com' && ['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash'].includes(model) ? { thinking: { type: 'disabled' } } : {}),

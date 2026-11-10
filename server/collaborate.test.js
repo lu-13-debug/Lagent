@@ -93,3 +93,23 @@ test('团队协作：只在项目里开一条主对话，其他 Agent 挂成从�
     assert.notEqual(child.executorId, 'model');
   }
 });
+
+test('对话消息可指定模型与思考强度，并落进执行器输入', async t => {
+  const { engine, store } = harness(t);
+  const projectDir = join(tmpdir(), `dataagent-chat-model-${Date.now()}`);
+  mkdirSync(projectDir, { recursive: true });
+  t.after(() => rmSync(projectDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const project = engine.importProject({ path: projectDir }).project;
+  const { chat } = engine.createProjectChat(project.id, { executorId: 'model' });
+
+  const ticket = engine.projectChatMessage(chat.id, { text: '看一下目录结构', profileId: 'profile-abc', effort: 'high' });
+  const control = store.get('work-control', ticket.id);
+  assert.equal(control.executorInput.profileId, 'profile-abc');
+  assert.equal(control.executorInput.effort, 'high');
+  assert.equal(control.executorInput.workspace, projectDir, '工作目录仍锁定在项目内');
+
+  const plain = engine.projectChatMessage(chat.id, { text: '再来一次' });
+  const plainControl = store.get('work-control', plain.id);
+  assert.equal(plainControl.executorInput.profileId, undefined, '不传时沿用默认模型');
+  assert.equal(plainControl.executorInput.effort, undefined);
+});

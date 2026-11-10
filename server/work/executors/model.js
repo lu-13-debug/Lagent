@@ -31,11 +31,15 @@ export function normalizeModelInput(input, { maxPromptBytes = 16 * 1024 } = {}) 
   // 会话级模型：可以指定用哪个已保存的模型配置，不传则用工作流默认模型。
   const profileId = typeof input.profileId === 'string' ? input.profileId.trim() : '';
   if (profileId && !/^[A-Za-z0-9._:-]{1,100}$/.test(profileId)) throw statusError('profileId 无效');
+  // 思考强度也是会话级选项；是否真支持由模型能力表在取上下文时校验。
+  const effort = typeof input.effort === 'string' ? input.effort.trim() : '';
+  if (effort && !/^[a-z]{2,10}$/.test(effort)) throw statusError('effort 无效');
   return {
     prompt,
     maxSteps: steps,
     ...(workspace ? { workspace: path.resolve(workspace) } : {}),
     ...(profileId ? { profileId } : {}),
+    ...(effort ? { effort } : {}),
     write: input.write === true,
   };
 }
@@ -236,11 +240,11 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
     persist(task);
   };
 
-  async function askModel(messages, task, signal, profileId) {
-    const ctx = profileId && typeof contextFor === 'function' ? contextFor(profileId) : (typeof context === 'function' ? context() : context);
+  async function askModel(messages, task, signal, profileId, effort) {
+    const ctx = profileId && typeof contextFor === 'function' ? contextFor(profileId, effort) : (typeof context === 'function' ? context() : context);
     if (!ctx?.key || !ctx?.settings?.model) throw statusError('还没有可用的模型：请在「设置 → 规划设置」里配置并选择默认模型', 503);
     task.modelLabel = ctx.profileName || ctx.settings.model;
-    const request = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, Math.min(4096, Number(ctx.maxTokens) || 4096), false, ctx.settings);
+    const request = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, Math.min(4096, Number(ctx.maxTokens) || 4096), false, { ...ctx.settings, sessionId: task.projectChatId || task.id });
     let response;
     try {
       response = await fetchImpl(request.endpoint, {
@@ -254,7 +258,27 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       if (error?.name === 'AbortError' || error?.name === 'TimeoutError') throw statusError('模型调用超时', 504);
       throw statusError(`模型接口无法访问：${error?.message || '网络错误'}`, 502);
     }
-    if (!response.ok) throw statusError(`模型接口返回 HTTP ${response.status}`, 502);
+    if (!response.ok) {
+      // 把供应商返回的错误正文带出来，否则只剩「HTTP 400」无法判断是参数不被支持还是模型名不存在。
+      let detail = '';
+      try {
+        detail = (await response.text()).replace(/\s+/g, ' ').trim().slice(0, 300);
+      } catch { /* 读取失败就只报状态码 */ }
+      // 未验证的思考强度可能被供应商拒绝：自动退回默认档重试一次，并在结果里说明，
+      // 避免用户只是选了个档位就整条任务失败。
+      if (ctx.settings.effort && ctx.settings.effort !== 'default' && [400, 422].includes(response.status) && /effort|reasoning/i.test(detail)) {
+        task.effortFallback = true;
+        const retry = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, Math.min(4096, Number(ctx.maxTokens) || 4096), false, { ...ctx.settings, effort: 'default', sessionId: task.projectChatId || task.id });
+        const second = await fetchImpl(retry.endpoint, { method: 'POST', headers: retry.headers, body: JSON.stringify(retry.body), signal, redirect: 'error' });
+        if (second.ok) {
+          const payload = await readModelResponse(second);
+          return { payload, protocol: retry.protocol, usage: providerUsage(payload?.usage, retry.protocol) };
+        }
+        try { detail = (await second.text()).replace(/\s+/g, ' ').trim().slice(0, 300); } catch { /* 同上 */ }
+        throw statusError(`模型接口返回 HTTP ${second.status}${detail ? `：${detail}` : ''}`, 502);
+      }
+      throw statusError(`模型接口返回 HTTP ${response.status}${detail ? `：${detail}` : ''}`, 502);
+    }
     const payload = await readModelResponse(response);
     return { payload, protocol: request.protocol, usage: providerUsage(payload?.usage, request.protocol) };
   }
@@ -292,7 +316,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       const timer = setTimeout(() => controller.abort(), Math.min(perCallTimeoutMs, remaining));
       let reply = '';
       try {
-        const result = await askModel(messages, task, controller.signal, input.profileId);
+        const result = await askModel(messages, task, controller.signal, input.profileId, input.effort);
         for (const [key, value] of Object.entries(result.usage || {})) usage[key] = (usage[key] || 0) + (Number(value) || 0);
         reply = replyOf(result.payload, result.protocol);
       } finally {
@@ -342,11 +366,14 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       ...(task.artifacts || {}),
       cli: {
         executorId: 'model',
-        summary: String(summary || (failed ? '模型 Agent 执行失败' : '')).slice(0, 6000),
+        summary: (task.effortFallback ? `（所选思考强度未被该模型接受，已按默认档执行）\n` : '') + String(summary || (failed ? '模型 Agent 执行失败' : '')).slice(0, 6000),
         usage: usage || {},
         error: failed ? String(error).slice(0, 2000) : undefined,
         artifacts: [...new Set(files || [])].slice(0, 100),
         stats: { steps: steps || 0 },
+        modelLabel: typeof task.modelLabel === 'string' ? task.modelLabel : '',
+        effort: typeof task.effort === 'string' ? task.effort : 'default',
+        ...(task.effortFallback ? { effortFallback: true } : {}),
         exitCode: failed ? 1 : 0,
         durationMs: Date.now() - startedAt,
         workspace: task.workspace,
@@ -392,6 +419,8 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
         workspace: runWorkspace,
         activity: [],
         artifacts: {},
+        ...(normalized.profileId ? { profileId: normalized.profileId } : {}),
+        ...(normalized.effort ? { effort: normalized.effort } : {}),
       };
       persist(task);
       running.set(task.id, true);

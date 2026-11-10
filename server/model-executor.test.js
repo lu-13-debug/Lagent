@@ -143,4 +143,25 @@ test('输入校验：空目标、非法步数、相对工作目录都会被拒�
   assert.throws(() => executor.validateInput({ prompt: '' }), /非空字符串/);
   assert.throws(() => executor.validateInput({ prompt: '做点事', maxSteps: 99 }), /maxSteps/);
   assert.throws(() => executor.validateInput({ prompt: '做点事', workspace: 'relative/dir' }), /绝对路径/);
+  assert.throws(() => executor.validateInput({ prompt: '做点事', effort: 'high; rm -rf' }), /effort/);
+});
+
+test('会话级模型与思考强度会一起传给模型中心', async () => {
+  const store = memoryStore();
+  const seen = [];
+  const hub = fakeModelHub(['{"final":{"summary":"好","files":[]}}']);
+  const executor = modelExecutor({
+    store,
+    cwd: process.cwd(),
+    context: () => hub.context(),
+    contextFor: (profileId, effort) => { seen.push([profileId, effort]); return hub.context(); },
+    fetchImpl: fakeFetch(hub),
+  });
+  executor.start({ command: '打个招呼' }, { id: 'assign-5' }, {
+    executorInput: { prompt: '打个招呼', profileId: 'profile-abc', effort: 'high' },
+  });
+  const done = await settle(executor, 'assign-5');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.deepEqual(seen, [['profile-abc', 'high']]);
+  assert.equal(done.artifacts.cli.modelLabel, 'deepseek-chat');
 });

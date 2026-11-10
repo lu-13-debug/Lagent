@@ -206,6 +206,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       maxTurns,
       workspace: project.path,
       write,
+      // 模型 Agent 的会话级模型与思考强度：只在模型执行器上透传，其它 CLI 不认识这些键。
+      ...(isModel && typeof options?.profileId === 'string' && options.profileId.trim() ? { profileId: options.profileId.trim().slice(0, 100) } : {}),
+      ...(isModel && typeof options?.effort === 'string' && options.effort.trim() ? { effort: options.effort.trim().slice(0, 10) } : {}),
       ...(resuming ? { resume: chat.sessionId } : {})
     };
   };
@@ -1092,7 +1095,11 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const chat=projects.getChat(chatId);
       const text=typeof input?.text==='string'?input.text.trim():'';
       if(!text||text.length>3000)throw workError('消息须为 1–3000 字',400);
-      const ticket=api.command({text,executorId:chat.executorId,projectChatId:chat.id,clientRequestId:input?.clientRequestId});
+      // 会话级模型与思考强度：缺省时沿用工作流默认模型。
+      const executorInput={};
+      if(typeof input?.profileId==='string'&&input.profileId.trim())executorInput.profileId=input.profileId.trim();
+      if(typeof input?.effort==='string'&&input.effort.trim())executorInput.effort=input.effort.trim();
+      const ticket=api.command({text,executorId:chat.executorId,projectChatId:chat.id,clientRequestId:input?.clientRequestId,...(Object.keys(executorInput).length?{executorInput}:{})});
       try{projects.adoptTitle(chat.id,text);}catch{/* 改名失败不影响已提交的工单。 */}
       return ticket;
     },

@@ -72,6 +72,13 @@
 .pj-composer { display: grid; gap: 8px; }
 .pj-composer textarea { width: 100%; resize: vertical; padding: 10px 12px; border: 1px solid var(--sa-line, #e5e5ea); border-radius: var(--sa-r-md, 9px); background: var(--sa-canvas, #fff); color: var(--sa-text, #1d1d1f); font: inherit; font-size: var(--sa-fs-sm, 13px); line-height: 1.55; }
 .pj-composer-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* 会话级模型选择：模型 + 思考强度，只在内置模型 Agent 的对话里出现。 */
+.sa-modelbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 7px 10px; border: 1px solid var(--sa-line, #e5e5ea); border-radius: var(--sa-r-md, 9px); background: var(--sa-surface-2, #f5f5f7); }
+.sa-modelbar-field { display: flex; align-items: center; gap: 6px; font-size: var(--sa-fs-2xs, 11px); color: var(--sa-text-3, #86868b); }
+.sa-modelbar-field select { max-width: 220px; height: 26px; padding: 0 6px; border: 1px solid var(--sa-line, #e5e5ea); border-radius: 7px; background: var(--sa-surface, #fff); color: var(--sa-text, #1d1d1f); font: inherit; font-size: var(--sa-fs-xs, 12px); }
+.sa-modelbar-field select:focus-visible { outline: 2px solid var(--sa-accent, #3b46d6); outline-offset: 1px; }
+.sa-modelbar-field select:disabled { color: var(--sa-text-3, #86868b); }
+.sa-modelbar-hint { font-size: var(--sa-fs-2xs, 11px); color: var(--sa-text-3, #86868b); }
 .pj-note { margin: 0; font-size: var(--sa-fs-2xs, 11px); color: var(--sa-text-3, #86868b); }
 .pj-plan { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(0, 0, 0, .28); }
 .pj-plan-card { width: min(560px, 100%); max-height: 80vh; overflow: auto; display: grid; gap: 12px; padding: 18px; border-radius: var(--sa-r-xl, 16px); background: var(--sa-surface, #fff); box-shadow: var(--sa-shadow-lg, 0 24px 60px rgba(0, 0, 0, .22)); }

@@ -11,6 +11,12 @@ const field = (value, label, max, required = true) => {
   return value.trim();
 };
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
+// 思考强度与前端 EFFORTS 同一套取值；'mid' 是旧别名的兼容写法。
+const normalizeEffort = value => {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return 'default';
+  return raw === 'mid' ? 'medium' : raw;
+};
 function freeze(value) {
   if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
   return value;
@@ -152,13 +158,19 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     return { settings: structuredClone(stage.settings), key: vault.decrypt(stage.credentialId, stage.credentialVersion), maxTokens: stage.maxTokens, timeoutMs: stage.timeoutMs, fetchImpl };
   };
   // 会话级模型：允许内置模型 Agent 用指定的模型配置，而不是全局默认模型。
-  const contextForProfile = profileId => {
+  // 思考强度也随会话走：不支持该档位的模型会当场报错，而不是静默降级成默认档。
+  const contextForProfile = (profileId, effort = 'default') => {
     const profile = profileById(field(profileId, '模型配置ID', 100));
     const credential = vault.get(profile.credentialId);
     const config = workflow();
     const stage = config.stages.plan || {};
-    const settings = { ...settingsFor(credential, profile.model), effort: 'default' };
-    assertSettings(settings); validateEffort(settings);
+    const settings = { ...settingsFor(credential, profile.model), effort: normalizeEffort(effort) };
+    assertSettings(settings);
+    // 未在能力表里确认过的档位也允许尝试：执行器在供应商明确拒绝时会退回默认档重试，
+    // 并在结果里标注「已按默认档执行」，所以这里只拦明显非法的取值。
+    if (!['default', 'low', 'medium', 'high', 'xhigh', 'max'].includes(settings.effort)) {
+      throw vaultError('思考强度取值无效');
+    }
     return {
       settings,
       key: vault.decrypt(credential.id, credential.version),
