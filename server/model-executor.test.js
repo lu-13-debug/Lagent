@@ -165,3 +165,73 @@ test('会话级模型与思考强度会一起传给模型中心', async () => {
   assert.deepEqual(seen, [['profile-abc', 'high']]);
   assert.equal(done.artifacts.cli.modelLabel, 'deepseek-chat');
 });
+
+test('写权限打开后可以删文件，试运行只报数量不动手', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-delete-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'a');
+  fs.mkdirSync(path.join(dir, 'sub'));
+  fs.writeFileSync(path.join(dir, 'sub', 'b.txt'), 'b');
+  const hub = fakeModelHub([
+    '{"tool":"delete_path","args":{"path":".","recursive":true,"dryRun":true}}',
+    '{"tool":"delete_path","args":{"path":"a.txt"}}',
+    '{"tool":"delete_path","args":{"path":"sub","recursive":true}}',
+    '{"final":{"summary":"删掉了 a.txt 和 sub 目录","files":[]}}',
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '删掉文件' }, { id: 'assign-del' }, {
+    executorInput: { prompt: '删掉文件', workspace: dir, write: true },
+  });
+  const done = await settle(executor, 'assign-del');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(fs.existsSync(path.join(dir, 'a.txt')), false, 'a.txt 应被删除');
+  assert.equal(fs.existsSync(path.join(dir, 'sub')), false, 'sub 目录应被删除');
+  const observations = done.activity
+    .filter(item => item.kind === 'observation')
+    .map(item => `${item.text || ''} ${item.detail || ''}`);
+  assert.ok(observations.some(text => /试运行/.test(text)), '试运行时要说清没真删');
+  assert.ok(done.artifacts.cli.artifacts.some(name => /已删除/.test(name)), '删除要落进改动清单');
+});
+
+test('删除不能越界，也不能删工作目录本身', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-delete-guard-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outside = path.join(os.tmpdir(), `keep-${Date.now()}.txt`);
+  fs.writeFileSync(outside, 'keep');
+  fs.writeFileSync(path.join(dir, 'keep.txt'), 'keep');
+  const hub = fakeModelHub([
+    JSON.stringify({ tool: 'delete_path', args: { path: '../' + path.basename(outside) } }),
+    '{"tool":"delete_path","args":{"path":"."}}',
+    '{"final":{"summary":"两次都被拒了","files":[]}}',
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '试着乱删' }, { id: 'assign-guard' }, {
+    executorInput: { prompt: '试着乱删', workspace: dir, write: true },
+  });
+  const done = await settle(executor, 'assign-guard');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(fs.existsSync(outside), true, '工作目录外的文件不能被删');
+  assert.equal(fs.existsSync(path.join(dir, 'keep.txt')), true, '工作目录本身不能被删');
+  assert.equal(done.activity.filter(item => item.kind === 'error').length, 2);
+});
+
+test('没有写权限时 delete_path 被拒绝', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-delete-denied-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'a');
+  const hub = fakeModelHub([
+    '{"tool":"delete_path","args":{"path":"a.txt"}}',
+    '{"final":{"summary":"没有权限，没删","files":[]}}',
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '删掉文件' }, { id: 'assign-denied' }, {
+    executorInput: { prompt: '删掉文件', workspace: dir, write: false },
+  });
+  const done = await settle(executor, 'assign-denied');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(fs.existsSync(path.join(dir, 'a.txt')), true);
+  assert.ok(done.activity.some(item => item.kind === 'error'));
+});

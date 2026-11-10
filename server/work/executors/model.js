@@ -13,7 +13,7 @@ const LIST_LIMIT = 120;
 const HITS_LIMIT = 40;
 const ACTIVITY_LIMIT = 60;
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.dataagent', 'data', '.venv', '__pycache__', 'coverage']);
-const WRITE_TOOLS = new Set(['write_file']);
+const WRITE_TOOLS = new Set(['write_file', 'delete_path']);
 const READ_COMMAND = /^(git\s+(status|diff|log|show|branch)\b[^|;&<>]*|node\s+--check\s+\S+)$/i;
 
 const text = (value, limit) => (typeof value === 'string' ? value.trim().slice(0, limit) : '');
@@ -135,6 +135,47 @@ function writeFile(workspace, target, content) {
   };
 }
 
+// 删除是不可恢复的：先算清楚要删什么，再动手；工作目录本身永远不许删。
+function deletePath(workspace, target, { recursive = false, dryRun = false } = {}) {
+  const root = path.resolve(workspace);
+  const absolute = resolveInside(workspace, target);
+  const atRoot = absolute === root;
+  let stat;
+  try {
+    stat = fs.lstatSync(absolute);
+  } catch {
+    throw new Error(`路径不存在：${relativeTo(workspace, absolute)}`);
+  }
+  const isDirectory = stat.isDirectory();
+  if (atRoot && dryRun !== true) throw new Error('不能删除工作目录本身；要清空它就只能逐个删里面的条目');
+  if (isDirectory && !recursive) {
+    throw new Error('这是一个目录；确认要连同目录内的全部内容一起删除时，请传 recursive: true');
+  }
+  // 统计范围（有上限，避免在大目录上卡住）；dryRun 只报告不删。
+  let files = 0;
+  let dirs = 0;
+  const sample = [];
+  const walk = directory => {
+    let entries;
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        dirs += 1;
+        if (dirs + files <= 500) walk(path.join(directory, entry.name));
+      } else {
+        files += 1;
+      }
+      if (sample.length < 20) sample.push(relativeTo(workspace, path.join(directory, entry.name)) + (entry.isDirectory() ? '/' : ''));
+    }
+  };
+  if (isDirectory) walk(absolute);
+  else files = 1;
+  const summary = { path: relativeTo(workspace, absolute) || '.', kind: isDirectory ? 'dir' : 'file', recursive: isDirectory ? recursive === true : false, files, dirs, sample };
+  if (dryRun) return { ...summary, dryRun: true, ...(atRoot ? { note: '工作目录本身不会被删除，这里只是它内容的清单' } : {}) };
+  fs.rmSync(absolute, { recursive, force: false });
+  return { ...summary, removed: true };
+}
+
 function runCommand(workspace, command) {
   const value = text(command, 300);
   if (!READ_COMMAND.test(value)) throw new Error('只允许只读的 git 命令（status/diff/log/show/branch）或 node --check');
@@ -151,10 +192,10 @@ export function modelSystemPrompt({ maxSteps, write }) {
     '· 调用工具：{"tool":"read_file","args":{"path":"src/app.tsx"}}',
     '· 结束任务：{"final":{"summary":"做了什么、结论是什么","files":["改动过的文件"]}}',
     '',
-    `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content}' : ''}、run_command{command}。`,
+    `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command}。`,
     write
-      ? '你被允许修改这个目录内的文件：先读再改，一次写一个文件，改动要小、要能说清理由。'
-      : '你没有写权限：不要尝试 write_file，只读取与检索，最后给出结论和改动建议。',
+      ? '你被允许修改这个目录内的文件：先读再改，一次写一个文件，改动要小、要能说清理由。删除不可恢复：只有用户明确要求删除时才做，先 delete_path{path,dryRun:true} 看清将删掉什么，再真正删；删目录必须显式传 recursive:true；工作目录本身不许删。'
+      : '你没有写权限：不要尝试 write_file 或 delete_path，只读取与检索，最后给出结论和改动建议。',
     '规则：不要编造文件、函数或结论；只访问工作目录内的路径；读不懂就先 list_files / search_code。',
     `最多 ${maxSteps} 步，步数用完必须给出 final。`,
   ].join('\n');
@@ -185,6 +226,7 @@ const TOOL_LABELS = {
   read_file: '读文件',
   search_code: '搜代码',
   write_file: '写文件',
+  delete_path: '删除',
   run_command: '运行命令',
 };
 
@@ -198,6 +240,7 @@ export function describeCall(tool, args = {}) {
   if (tool === 'read_file') return `${label} ${shortPath(args.path)}`;
   if (tool === 'search_code') return `${label} ${String(args.pattern || '').slice(0, 60)}`;
   if (tool === 'write_file') return `${label} ${shortPath(args.path)}`;
+  if (tool === 'delete_path') return `${label} ${shortPath(args.path)}${args.recursive === true ? '（递归）' : ''}${args.dryRun === true ? '（试运行）' : ''}`;
   if (tool === 'run_command') return `${label} ${String(args.command || '').slice(0, 80)}`;
   return tool;
 }
@@ -219,6 +262,10 @@ export function describeOutput(tool, output = {}) {
   }
   if (tool === 'write_file') {
     return `${shortPath(output.path)} · ${output.created ? '新建' : '覆盖'} · ${output.after || 0} 字符`;
+  }
+  if (tool === 'delete_path') {
+    const scope = `${output.files || 0} 个文件${output.dirs ? `、${output.dirs} 个目录` : ''}`;
+    return `${shortPath(output.path)} · ${scope}${output.dryRun ? '（试运行，未删除）' : ' 已删除'}`;
   }
   if (tool === 'run_command') {
     const first = String(output.output || '').trim().split(/\r?\n/)[0] || '';
@@ -295,6 +342,10 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       if (!write) throw new Error('当前任务没有写权限');
       return writeFile(runWorkspace, args?.path, args?.content);
     }
+    if (name === 'delete_path') {
+      if (!write) throw new Error('当前任务没有写权限');
+      return deletePath(runWorkspace, args?.path, { recursive: args?.recursive === true, dryRun: args?.dryRun === true });
+    }
     if (name === 'run_command') return runCommand(runWorkspace, args?.command);
     throw new Error(`未知工具：${name}`);
   }
@@ -341,6 +392,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       try {
         output = runTool(parsed.tool, parsed.args, runWorkspace, input.write);
         if (parsed.tool === 'write_file') files = [...new Set([...files, output.path])];
+        if (parsed.tool === 'delete_path' && output.removed) files = [...new Set([...files, `${output.path}（已删除）`])];
         messages.push({ role: 'user', content: `工具结果（${parsed.tool}）：\n${JSON.stringify(output).slice(0, 6000)}` });
         pushActivity(task, { kind: 'observation', text: `${TOOL_LABELS[parsed.tool] || parsed.tool} 完成`, detail: describeOutput(parsed.tool, output) });
       } catch (error) {
