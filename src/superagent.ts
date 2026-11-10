@@ -62,6 +62,8 @@ export interface WorkProjectChat {
   lastTicketId?: string; lastSummary?: string; window?: { handle: number; process: string; title: string };
   // 占位标题标记：第一条消息到达后由后端改成消息摘要。
   autoTitle?: boolean;
+  // 团队协作产生的从属会话会指向上级对话；侧栏只列上级对话，右栏再展开各个 Agent。
+  parentChatId?: string;
   ticketCount?: number; pendingCount?: number; lastTicketStatus?: string; lastTicketAt?: string;
   createdAt: string; updatedAt: string;
 }

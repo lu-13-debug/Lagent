@@ -14,10 +14,11 @@ type Props = {
   requestImport?: number;
   onState?: (state: { projects: WorkProject[]; projectId: string | null; chatId: string | null }) => void;
   onFocusProject?: (id: string | null) => void;
-  // chat：只显示一个对话（独立页面）；manage：项目管理（文件夹、档案、记忆、对话列表）。
-  mode?: 'manage' | 'chat';
+  // chat：只显示一个对话（独立页面）；project：单个项目自己的页面；manage：全部项目（导入、浏览、删除）。
+  mode?: 'manage' | 'chat' | 'project';
   onOpenChat?: (projectId: string, chatId: string) => void;
   onExitChat?: () => void;
+  onBackToProjects?: () => void;
 };
 
 const EXECUTOR_LABELS: Record<string, string> = {
@@ -56,8 +57,9 @@ const STATUS_LABELS: Record<string, string> = {
   recorded: '已记录'
 };
 
-export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onExitChat }: Props) {
+export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onExitChat, onBackToProjects }: Props) {
   const chatMode = mode === 'chat';
+  const projectMode = mode === 'project';
   const [projects, setProjects] = useState<WorkProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
@@ -615,9 +617,22 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     </div>
   </div> : null;
 
-  return <section className={`pj-page${chatMode ? ' pj-chatpage' : ''}`}>
+  return <section className={`pj-page${chatMode ? ' pj-chatpage' : ''}${projectMode ? ' pj-projectpage' : ''}`}>
     {chatMode && <>{chatHeader}{thread || <div className="pj-empty-block pj-placeholder"><p>选择一个对话。</p></div>}</>}
-    {!chatMode && <header className="pj-head">
+    {projectMode && <header className="pj-head">
+      <div>
+        <p className="pj-eyebrow"><FolderGit2 size={13} /> PROJECT</p>
+        <h1>{project?.name || '项目'}</h1>
+        <p className="pj-sub">{project ? `${project.path}${project.gitBranch ? ` · ${project.gitBranch}` : ''} · ${project.chatCount} 个对话` : '这个项目已不在列表里。'}</p>
+      </div>
+      <div className="pj-head-actions">
+        <button type="button" className="pj-btn" onClick={() => onBackToProjects?.()}><ChevronLeft size={14} />全部项目</button>
+        {project && <button type="button" className="pj-btn" onClick={() => void openSessions()} disabled={busy === 'sessions'}><Inbox size={14} />导入已有会话</button>}
+        {project && <button type="button" className="pj-btn pj-primary" onClick={() => void openNewChat()}><Plus size={14} />新建对话</button>}
+        <button type="button" className="pj-btn" onClick={() => void loadProjects()} disabled={loading}><RefreshCw size={14} className={loading ? 'pj-spin' : ''} />刷新</button>
+      </div>
+    </header>}
+    {!chatMode && <header className="pj-head" hidden={projectMode}>
       <div>
         <p className="pj-eyebrow"><FolderGit2 size={13} /> PROJECTS</p>
         <h1>项目</h1>
@@ -638,8 +653,8 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       </div>
     </form>}
 
-    {!chatMode && <div className="pj-layout">
-      <aside className="pj-projects">
+    {!chatMode && <div className={`pj-layout${projectMode ? ' pj-layout-single' : ''}`}>
+      {!projectMode && <aside className="pj-projects">
         <div className="pj-side-title"><span>已导入的项目</span><span>{projects.length}</span></div>
         {loading ? <p className="pj-empty">载入中…</p> : projects.length ? <ul>
           {projects.map(item => <li key={item.id}>
@@ -651,11 +666,11 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
             <button type="button" className="pj-icon" aria-label={`移除 ${item.name}`} disabled={busy === `delete-${item.id}`} onClick={() => void removeProject(item)}><Trash2 size={13} /></button>
           </li>)}
         </ul> : <div className="pj-empty-block"><p>还没有导入项目。</p><p>选择本地文件夹，或粘贴绝对路径。</p></div>}
-      </aside>
+      </aside>}
 
       <div className="pj-main">
         {!project ? <div className="pj-empty-block pj-placeholder"><FolderGit2 size={26} /><p>导入一个本地文件夹开始。</p></div> : <>
-          <div className="pj-project-head">
+          {!projectMode && <div className="pj-project-head">
             <div>
               <h2>{project.name}</h2>
               <p>{project.path}{project.gitBranch ? ` · ${project.gitBranch}` : ''}</p>
@@ -664,7 +679,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
               <button type="button" className="pj-btn" onClick={() => void openSessions()} disabled={busy === 'sessions'}><Inbox size={14} />导入已有会话</button>
               <button type="button" className="pj-btn" onClick={() => void openNewChat()}><Plus size={14} />新建对话</button>
             </div>
-          </div>
+          </div>}
 
 
 

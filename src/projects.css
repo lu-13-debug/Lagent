@@ -885,3 +885,22 @@
     display: none;
   }
 }
+
+/* 单个项目自己的页面：不再并排显示项目列表，内容占满宽度。 */
+.pj-page.pj-projectpage {
+  max-width: 1080px;
+}
+
+.pj-layout.pj-layout-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pj-projectpage .pj-main {
+  border: 0;
+  padding: 0;
+  background: none;
+}
+
+.pj-head[hidden] {
+  display: none;
+}
