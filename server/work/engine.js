@@ -1332,8 +1332,57 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const plan=startPlan({goal,steps:suggestion.steps,...scope,autoRun:input?.autoRun===true,clientRequestId:typeof input?.clientRequestId==='string'?input.clientRequestId:''});
       return {plan,steps:plan.steps,analysis:suggestion.analysis||null};
     },
-    commanderReport(id){return commanderReport(id);},
-    detail(id){
+    // 团体协作：内置模型 Agent 先理解与拆解，再把任务并行分派给所选的外部 Agent，
+    // 最后由内置 Agent 收拢结果、指出下一步该转交给谁。
+    async collaborate(input){
+      const goal=typeof input?.goal==='string'?input.goal.trim():'';
+      if(!goal||goal.length>300)throw workError('协作目标须为 1–300 字');
+      const projectChatId=typeof input?.projectChatId==='string'?input.projectChatId.trim():'';
+      const projectId=typeof input?.projectId==='string'?input.projectId.trim():'';
+      const scope={...(projectChatId?{projectChatId}:{}),...(projectId&&!projectChatId?{projectId}:{})};
+      const profileId=typeof input?.profileId==='string'?input.profileId.trim():'';
+      const requested=Array.isArray(input?.agentIds)?input.agentIds.filter(id=>typeof id==='string'&&id.trim()).map(id=>id.trim()).slice(0,4):[];
+      if(!requested.length)throw workError('团队协作至少选择一个 Agent',400);
+      const models=input?.models&&typeof input.models==='object'&&!Array.isArray(input.models)?input.models:{};
+      const analysis=await api.analyze({goal,executors:requested.length?requested:undefined,...scope});
+      const planned=(analysis.steps||[]).filter(step=>step.executorId&&step.executorId!=='model').slice(0,3);
+      const chosen=planned.length?planned:[{executorId:requested[0]||'claude-code',title:'执行任务',scope:[]}];
+      const brief=[goal,...(analysis.understanding||[]).slice(0,4)].join('\n');
+      const steps=[{
+        executorId:'model',
+        text:`理解并拆解：${goal}`,
+        executorInput:{prompt:[
+          '你在一个多 Agent 团队里担任协调者，负责先把任务想清楚再分派，这一步不要修改任何文件。',
+          `目标：${goal}`,
+          brief&&brief!==goal?`我的初步理解：\n${brief}`:'',
+          `接下来会并行交给：${chosen.map(step=>`${step.executorId}（${step.title}）`).join('、')}。`,
+          '请先用两三句话说明你如何理解这个任务，再逐条写清每个执行者要做什么、交付什么、验收标准是什么。',
+        ].filter(Boolean).join('\n\n'),...(profileId?{profileId}:{})}
+      }];
+      chosen.forEach(step=>{
+        const model=typeof models[step.executorId]==='string'?models[step.executorId].trim():'';
+        steps.push({
+          executorId:step.executorId,
+          text:step.title||'执行任务',
+          ...(Array.isArray(step.scope)&&step.scope.length?{scope:step.scope}:{}),
+          dependsOn:[0],
+          ...(model?{executorInput:{prompt:step.title||'执行任务',model}}:{}),
+        });
+      });
+      steps.push({
+        executorId:'model',
+        text:'汇总结果与下一步',
+        dependsOn:chosen.map((_,index)=>index+1),
+        executorInput:{prompt:[
+          '你是团队的协调者。前面几位 Agent 已经把结果交回给你（见上方材料）。',
+          '请写一份团队汇总：每个人做了什么、结果是否达成目标、还有什么没做完或不可靠，',
+          '并明确「下一步建议交给谁、做什么」，方便继续分派。只依据给定材料，不要编造。',
+        ].join('\n'),...(profileId?{profileId}:{})}
+      });
+      const plan=startPlan({goal,steps,...scope,autoRun:input?.autoRun===true,clientRequestId:typeof input?.clientRequestId==='string'?input.clientRequestId:''});
+      return {plan,steps:plan.steps,analysis};
+    },
+    commanderReport(id){return commanderReport(id);},    detail(id){
       const ticket=get(id);
       const assignment=latest(id);
       const activeId=assignmentExecutorId(ticket,assignment);

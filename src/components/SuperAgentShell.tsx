@@ -190,6 +190,11 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   // 任务理解：写目标时先本地拆一遍（谁做、改哪儿、会不会冲突），再交给规划器。
   const [commanderAnalysis, setCommanderAnalysis] = useState<WorkTaskAnalysis | null>(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
+  // 团队协作：内置模型 Agent 先拆解、再分派、最后收拢；每一步用的模型可以不同。
+  const [teamMode, setTeamMode] = useState(false);
+  const [teamProfiles, setTeamProfiles] = useState<{ id: string; name: string; model: string }[]>([]);
+  const [teamProfile, setTeamProfile] = useState('');
+  const [teamModels, setTeamModels] = useState<Record<string, string>>({});
   // 新对话绑定的工作文件夹：选中后指令会作为项目任务分派，Agent 在该目录内读写。
   const [newFolder, setNewFolder] = useState<string>(() => { try { return localStorage.getItem('dataagent.newchatfolder.v1') || ''; } catch { return ''; } });
   useEffect(() => { try { localStorage.setItem('dataagent.newchatfolder.v1', newFolder); } catch { /* 存储禁用时仅当前会话生效。 */ } }, [newFolder]);
@@ -526,6 +531,16 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [commanderGoal, commanderProject, commanderAgents, crossCapable, allowedExecutors, view]);
 
+  // 团队协作模式下才需要模型清单：只在首次打开时拉一次，失败就只用默认模型。
+  useEffect(() => {
+    if (!teamMode || teamProfiles.length) return;
+    let alive = true;
+    api.modelHub()
+      .then(state => { if (alive) setTeamProfiles((state.profiles || []).map(item => ({ id: item.id, name: item.name, model: item.model }))); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [teamMode, teamProfiles.length]);
+
   const activeGroup = useMemo(() => crossChecks.find(group => group.id === activeGroupId) || null, [crossChecks, activeGroupId]);
   const groupStatusOf = (group: CrossCheck) => {
     const statuses = group.ticketIds.map(id => groupDetails[id]?.ticket.status || tickets.find(ticket => ticket.id === id)?.status || 'waiting');
@@ -762,6 +777,29 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     if (problem) { notify(problem, true); return; }
     // 新对话绑定了工作文件夹：走项目分派，工单在项目目录内执行。
     const scope = isLanding ? folderState.projects.find(item => item.id === newFolder) : undefined;
+    // 团队协作：先由内置模型 Agent 理解与拆解，再并行分派给所选 Agent，最后收拢结果。
+    if (teamMode) {
+      const execs = [...new Set(chosen.filter(id => !id.startsWith('win:')).map(execIdFor))];
+      if (!execs.length) { notify('团队协作需要至少一个可执行的外部 Agent。', true); return; }
+      setSending(true);
+      try {
+        const models = Object.fromEntries(Object.entries(teamModels).filter(([id, value]) => execs.includes(id) && value.trim()));
+        const result = await api.workCollaborate(value, execs, {
+          ...(scope ? { projectId: scope.id } : {}),
+          ...(teamProfile ? { profileId: teamProfile } : {}),
+          ...(Object.keys(models).length ? { models } : {}),
+        });
+        setCommand('');
+        setActiveTicketId(null);
+        setActiveGroupId(null);
+        setCommanderPlan(result.plan);
+        setView('parallel');
+        notify(`内置 Agent 已拆解任务，并分派给 ${execs.length} 个 Agent；确认后开始执行。`);
+        void refresh();
+      } catch (cause) { notify((cause as Error).message, true); }
+      setSending(false);
+      return;
+    }
     if (scope) {
       const execs = chosen.filter(id => !id.startsWith('win:') && projectExecutors.includes(id));
       if (!execs.length) { notify('这个工作文件夹只接受 Claude Code、Codex、ACP 或窗口 Agent，请重新选择 Agent。', true); return; }
@@ -1212,6 +1250,26 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             {sortedFolders.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
           <span className="sa-scope-hint">{newFolder ? 'Agent 会在这个目录里读写文件，工单仍需你确认' : work?.workspace ? `不选则在 ${work.workspace} 里读写文件` : '选择一个文件夹，Agent 才能改项目里的文件'}</span>
+        </div>}
+        {selectedAgents.length > 0 && <div className="sa-team">
+          <label className="sa-team-toggle">
+            <input type="checkbox" checked={teamMode} onChange={event => setTeamMode(event.target.checked)} />
+            <Sparkles size={12} />内置 Agent 统筹
+          </label>
+          {teamMode && <select className="sa-team-select" value={teamProfile} onChange={event => setTeamProfile(event.target.value)} aria-label="内置 Agent 使用的模型">
+            <option value="">{teamProfiles.length ? '默认模型' : '尚未配置模型'}</option>
+            {teamProfiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+          </select>}
+          {teamMode && !teamProfiles.length && <span className="sa-team-hint">还没有模型配置，内置 Agent 会先按本地规则拆解。</span>}
+          {teamMode && selectedAgents.filter(id => !id.startsWith('win:')).length > 0 && <details className="sa-team-models">
+            <summary>分配模型</summary>
+            <div className="sa-team-model-list">
+              {selectedAgents.filter(id => !id.startsWith('win:')).map(id => <label key={id}>
+                <span>{executorNames[id] || id}</span>
+                <input value={teamModels[id] || ''} onChange={event => setTeamModels(previous => ({ ...previous, [id]: event.target.value }))} placeholder="留空用该 CLI 自己的模型" aria-label={`${executorNames[id] || id} 使用的模型`} />
+              </label>)}
+            </div>
+          </details>}
         </div>}
         {dispatchToggle && <div className="sa-composer-modes">{dispatchToggle}<span className="sa-inline-note">已选 {selectedAgents.length} 个 Agent，{dispatchMode === 'split' ? '任务会先拆成子任务' : '各自独立作答'}</span></div>}
         <textarea id="sa-command" value={command} maxLength={3000} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} rows={2} placeholder={selectedAgents.length > 1 ? (dispatchMode === 'split' ? '描述目标，例如：重构鉴权模块，一个 Agent 改代码、一个写测试、一个更新文档' : '描述要对比的问题，例如：审查这段鉴权逻辑是否有漏洞？') : '描述目标，例如：检查 DataAgent 仓库的 CI，修复失败项并开 PR'} />

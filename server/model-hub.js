@@ -151,6 +151,24 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     assertSettings(stage.settings); validateEffort(stage.settings);
     return { settings: structuredClone(stage.settings), key: vault.decrypt(stage.credentialId, stage.credentialVersion), maxTokens: stage.maxTokens, timeoutMs: stage.timeoutMs, fetchImpl };
   };
+  // 会话级模型：允许内置模型 Agent 用指定的模型配置，而不是全局默认模型。
+  const contextForProfile = profileId => {
+    const profile = profileById(field(profileId, '模型配置ID', 100));
+    const credential = vault.get(profile.credentialId);
+    const config = workflow();
+    const stage = config.stages.plan || {};
+    const settings = { ...settingsFor(credential, profile.model), effort: 'default' };
+    assertSettings(settings); validateEffort(settings);
+    return {
+      settings,
+      key: vault.decrypt(credential.id, credential.version),
+      maxTokens: Number.isSafeInteger(stage.maxTokens) ? stage.maxTokens : 8192,
+      timeoutMs: Number.isSafeInteger(stage.timeoutMs) ? Math.min(stage.timeoutMs, 300000) : 300000,
+      fetchImpl,
+      profileId: profile.id,
+      profileName: profile.name
+    };
+  };
   // Express 5处理async异常；统一输入错误为400，避免错误诊断暴露密钥。
   const route = handler => async (req, res) => {
     if (['POST', 'PUT'].includes(req.method) && req.body !== undefined && !object(req.body)) throw vaultError('请求内容须为对象');
@@ -177,6 +195,10 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     assertSettings(checked);
     const profile = { id: previous?.id ?? randomUUID(), name, credentialId, model: checked.model, version: (previous?.version || 0) + 1 };
     store.config(profileKey, [...storedProfiles().filter(item => item.id !== profile.id), profile]);
+    // 第一个模型配置自动成为默认模型：否则用户得再进「规划设置」手动选一次，
+    // 而这正是内置模型 Agent 一直显示「未就绪」的常见原因。
+    const config = workflow();
+    if (!config.defaultProfileId) { config.defaultProfileId = profile.id; store.config(workflowKey, config); }
     return profiles().find(item => item.id === profile.id);
   };
   app.post('/api/model-profiles', route((req, res) => {
@@ -188,7 +210,10 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     profileById(req.params.id); const config = workflow();
     if (config.defaultProfileId === req.params.id) config.defaultProfileId = null;
     for (const stage of Object.values(config.stages)) if (stage.profileId === req.params.id) stage.profileId = null;
-    store.config(profileKey, storedProfiles().filter(item => item.id !== req.params.id)); store.config(workflowKey, config); res.json({ ok: true });
+    store.config(profileKey, storedProfiles().filter(item => item.id !== req.params.id));
+    // 删掉默认配置后补一个，避免整个工作流突然「没有默认模型」。
+    if (!config.defaultProfileId) { const rest = storedProfiles(); if (rest.length) config.defaultProfileId = rest[0].id; }
+    store.config(workflowKey, config); res.json({ ok: true });
   }));
   app.post('/api/model-profiles/:id/test', route(async (req, res) => {
     const profile = profileById(req.params.id), credential = vault.get(profile.credentialId), settings = settingsFor(credential, profile.model);
@@ -232,5 +257,5 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     for (const [stageId, stage] of Object.entries(config.stages)) if (stage.skillId === previous.id) stage.skillId = STAGE_DEFINITIONS.find(([id]) => id === stageId)[3];
     store.config(skillKey, privateSkills().filter(skill => skill.id !== previous.id)); store.config(workflowKey, config); res.json({ ok: true });
   }));
-  return { publicState, captureWorkflow, context, suggestWorkPlan, reviewerContext, subagentContext: (stage,index) => { if(stage.ownerId !== ownerId || !['insights','report'].includes(stage.stageId) || !Number.isInteger(index) || !stage.subagents?.[index]) throw vaultError('子智能体快照无效',403); return context({...stage.subagents[index],stageId:stage.stageId}); } };
+  return { publicState, captureWorkflow, context, contextForProfile, suggestWorkPlan, reviewerContext, subagentContext: (stage,index) => { if(stage.ownerId !== ownerId || !['insights','report'].includes(stage.stageId) || !Number.isInteger(index) || !stage.subagents?.[index]) throw vaultError('子智能体快照无效',403); return context({...stage.subagents[index],stageId:stage.stageId}); } };
 }

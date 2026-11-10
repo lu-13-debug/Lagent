@@ -210,6 +210,8 @@ export function createApp(options = {}) {
         const stage=captured?.stages?.plan;
         return stage?modelHub.context(stage):null;
       },
+      // 会话级模型：允许这一步用指定的模型配置，而不是全局默认模型。
+      contextFor:profileId=>modelHub.contextForProfile(profileId),
       fetchImpl:options.fetchImpl||fetch,
     });
     const mobileOwnerId=options.userId||'local';

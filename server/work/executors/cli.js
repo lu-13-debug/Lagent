@@ -45,11 +45,15 @@ export function normalizeCliInput(input, { defaultMaxTurns = 5, maxTurns = 20, m
   }
   const resume = typeof input.resume === 'string' ? input.resume.trim() : '';
   if (resume && !/^[A-Za-z0-9._:-]{1,128}$/.test(resume)) throw statusError('resume 会话 id 无效');
+  // 个别 CLI 支持用 --model 指定模型；不传就沿用该 CLI 自己的配置。
+  const model = typeof input.model === 'string' ? input.model.trim() : '';
+  if (model && !/^[A-Za-z0-9._:/-]{1,120}$/.test(model)) throw statusError('model 名称无效');
   return {
     prompt,
     maxTurns: turns,
     ...(workspace ? { workspace: path.resolve(workspace) } : {}),
     ...(resume ? { resume } : {}),
+    ...(model ? { model } : {}),
     ...(input.write === true ? { write: true } : {})
   };
 }

@@ -71,6 +71,7 @@ export function claudeCodeExecutor({
       String(input.maxTurns)
     ];
     if (input.resume) args.push('--resume', input.resume);
+    if (input.model) args.push('--model', input.model);
     args.push('--permission-mode', input.write === true ? 'acceptEdits' : 'plan');
     args.push(input.write === true ? writablePrompt(input) : readOnlyPrompt(input));
     return args;

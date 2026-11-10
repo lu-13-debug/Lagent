@@ -5818,3 +5818,143 @@ html[data-theme="dark"] .sa-brand-mono {
     right: 6px;
   }
 }
+
+/* 团队协作条：内置 Agent 统筹 + 各自模型（与计划详情里的 .sa-team 同名，这里显式覆盖方向） */
+.sa-team {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  gap: 8px;
+  padding: 0 2px 2px;
+  font-size: var(--sa-fs-xs);
+  color: var(--sa-text-3);
+}
+
+.sa-team-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--sa-line);
+  border-radius: 999px;
+  color: var(--sa-text-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.sa-team-toggle:hover {
+  border-color: var(--sa-line-strong);
+  color: var(--sa-text);
+}
+
+.sa-team-toggle input {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: var(--sa-accent);
+}
+
+.sa-team-toggle:has(input:checked) {
+  border-color: var(--sa-text-3);
+  background: var(--sa-surface-2);
+  color: var(--sa-text);
+}
+
+.sa-team-select {
+  height: 24px;
+  max-width: 190px;
+  padding: 0 6px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface);
+  color: var(--sa-text-2);
+  font: inherit;
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-team-hint {
+  color: var(--sa-text-3);
+}
+
+.sa-team-models {
+  position: relative;
+}
+
+.sa-team-models > summary {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--sa-line);
+  border-radius: 999px;
+  line-height: 22px;
+  color: var(--sa-text-2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.sa-team-models > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sa-team-model-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 24;
+  display: grid;
+  gap: 6px;
+  width: 320px;
+  margin-top: 0;
+  padding: 10px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface);
+  box-shadow: var(--sa-shadow-lg);
+}
+
+.sa-team-model-list label {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.sa-team-model-list label > span {
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-team-model-list input {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface);
+  color: var(--sa-text);
+  font: inherit;
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-team-model-list input:focus-visible {
+  outline: none;
+  border-color: var(--sa-accent);
+  box-shadow: var(--sa-ring);
+}
+
+@media (max-width: 760px) {
+  .sa-team-hint {
+    display: none;
+  }
+
+  .sa-team-model-list {
+    width: min(280px, calc(100vw - 40px));
+  }
+}

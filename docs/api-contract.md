@@ -166,6 +166,8 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 
 - 模型必须每一步只输出一个 JSON：`{"tool":"read_file","args":{...}}` 或 `{"final":{"summary":"...","files":["..."]}}`。解析失败会把原回复与「请只输出 JSON」压回上下文重试；步数上限 12（默认 8）。
 - 所有路径都经 `resolveInside` 双检，越界（`../`、绝对路径、工作目录之外）直接报错；未配置模型或没有 Key 时 `start` 直接 503，不会留下假运行的任务。
+- 执行器输入可带 `profileId` 指定这条工单用哪个模型配置（团队协作里「内置 Agent 用哪个模型」就靠它），不传则用工作流默认模型。
+- CLI 类执行器（`claude-code`、`codex`）的 `executorInput.model` 会转成 `--model <id>` / `-m <id>`，用于「同一个 Agent 在不同团队里用不同模型」；其余 CLI 没有统一开关，留空即用它们自己的配置。
 - 写权限由执行器策略 `limits.modelWrites`（默认 `false`）控制：关闭时 `write_file` 不可用，模型只读取与检索并给结论；项目对话还要求 `chat.writable !== false`。
 - 过程流：执行器把每一步写进 `task.activity`（`{kind:'tool'|'observation'|'error'|'result', text, detail?, at}`，保留 60 条）。`GET /api/work/tickets/:id` 的 `detail` 在有过程时附带 `activity`（最近 40 条）；SSE `GET /api/work/events` 在过程变化时推送 `{type:'activity',ticketId,payload:{activity,status}}`，前端据此渲染时间线。`result` 与「结果」块内容相同，界面只显示 `tool/observation/error`。
 
@@ -211,6 +213,15 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 - `DELETE /api/work/projects/:id/memory/:memoryId` → `{removed:boolean}`。
 - 执行期的冲突闸门：`advancePlan` 放行一个有 `scope` 的步骤前，会先看同一计划里是否还有另一个带 `scope` 的步骤在 `working`/`awaiting_review`/`queued` 且目录重叠；有就继续等，避免两个 Agent 同时改同一批文件。
 
+### 团队协作（内置 Agent 统筹 → 分派 → 回收）
+
+- `POST /api/work/collaborate {goal,agentIds,projectId?,projectChatId?,profileId?,models?,autoRun?}` → `201 {plan,steps,analysis}`。goal 1–300 字；`agentIds` 去重后 1–4 个，为空返回 400「团队协作至少选择一个 Agent」。服务端先跑一次任务理解（与 `/api/work/analyze` 同一套规则），取前 3 个非 `model` 步骤作为分工，然后固定生成三段式计划：
+  1. **第 0 步 `model`**：理解并拆解（prompt 明确「这一步不要修改任何文件」），`profileId` 指定内置 Agent 用哪个模型配置；
+  2. **中间每步一个外部 Agent**：`dependsOn:[0]`，因此彼此可并行；`models[executorId]` 会写进该步 `executorInput.model`，由 `claude-code`（`--model`）与 `codex`（`-m`）转成 CLI 参数，其它 CLI 没有这个开关、留空即用它们自己的配置；
+  3. **最后一步 `model`**：汇总各步结果，写「每个人做了什么、是否达成、还差什么」，并给出「下一步建议交给谁、做什么」。
+- 计划与工单复用指挥台机制：`autoRun:false`（默认）时全部停在 `awaiting_review` 等你确认；步骤产出照常落盘到 `<项目>/.dataagent/runs/<planId>/`，并在放行下一步时注入 `executorInput.prompt`。
+- 内置 Agent 的模型来自 `profileId`（缺省用工作流默认模型）；未配置模型时 `model` 执行器不可用，接口按执行器校验返回 400/503，不会产生假运行。
+
 
 - `GET /api/work/projects/:id/brief.md` → `{project,brief,changes,markdown}`，markdown 为 `# 项目简报：<名称>` 的只读汇总，含目标、进展、任务要点、关键决定、约束与变更记录。
 - `GET /api/work/projects/:id/changes` → `{changes:[ProjectChange]}`；`POST /api/work/projects/:id/changes {title?,summary?,files?,executorId?,ticketId?}` → `201 {change}`。工单完成/失败时自动写入 `source:'auto'`，同一 ticketId 幂等对应同一条记录；项目工单创建时会用 `git status --porcelain` 拍一张执行前快照，完成后只把**本次新增**的改动文件写进 `files`（调用方显式传 `files` 时以传入值为准，不再异步覆盖）；非项目工单仍按旧的异步采集回填（最多 100 项），采集失败不影响工单。`DELETE /api/work/projects/:id/changes/:changeId` → `{id}`。
@@ -240,7 +251,7 @@ ProjectWorkspace `{id,name,path,gitBranch,createdAt,updatedAt,chatCount,chats:[P
 
 ## 多模型中心与 PDF
 
-`GET /api/model-hub` 返回当前账号的 credentials、profiles、workflow、skills、vault；凭据仅含脱敏尾号，不含明文或密文。`POST/PUT/DELETE /api/model-credentials[/:id]` 管理凭据；`POST /api/model-credentials/:id/models` 检测目录。`POST/PUT/DELETE /api/model-profiles[/:id]` 管理引用凭据的模型配置；`POST /api/model-profiles/:id/test` 触发可能收费的连接测试。
+`GET /api/model-hub` 返回当前账号的 credentials、profiles、workflow、skills、vault；凭据仅含脱敏尾号，不含明文或密文。`POST/PUT/DELETE /api/model-credentials[/:id]` 管理凭据；`POST /api/model-credentials/:id/models` 检测目录。`POST/PUT/DELETE /api/model-profiles[/:id]` 管理引用凭据的模型配置；`POST /api/model-profiles/:id/test` 触发可能收费的连接测试。**第一个模型配置会自动成为工作流默认模型**（`defaultProfileId`），删除默认配置时自动把剩下的第一个补回默认——否则「规划设置」留空、内置模型 Agent 会一直显示「未就绪」。
 
 `PUT /api/workflow-config` 保存 `{version:1,defaultProfileId,stages}`，阶段项为 `{profileId,skillId,effort,maxTokens,timeoutMs}`；defaultProfileId=null关闭新工作流。`POST/PUT/DELETE /api/workflow-skills[/:id]` 管理账号私人文本Skill。服务端验证阶段、模型能力、工具权限、预算和Skill版本，客户端不能覆盖能力表。
 

@@ -28,10 +28,14 @@ export function normalizeModelInput(input, { maxPromptBytes = 16 * 1024 } = {}) 
   if (!Number.isInteger(steps) || steps < 1 || steps > MAX_STEPS) throw statusError(`maxSteps 必须是 1-${MAX_STEPS} 的整数`);
   const workspace = typeof input.workspace === 'string' ? input.workspace.trim() : '';
   if (workspace && (!path.isAbsolute(workspace) || workspace.length > 500)) throw statusError('workspace 必须是有效的工作目录绝对路径');
+  // 会话级模型：可以指定用哪个已保存的模型配置，不传则用工作流默认模型。
+  const profileId = typeof input.profileId === 'string' ? input.profileId.trim() : '';
+  if (profileId && !/^[A-Za-z0-9._:-]{1,100}$/.test(profileId)) throw statusError('profileId 无效');
   return {
     prompt,
     maxSteps: steps,
     ...(workspace ? { workspace: path.resolve(workspace) } : {}),
+    ...(profileId ? { profileId } : {}),
     write: input.write === true,
   };
 }
@@ -219,7 +223,7 @@ export function describeOutput(tool, output = {}) {
   return '';
 }
 
-export function modelExecutor({ store, cwd, context, fetchImpl = fetch, perCallTimeoutMs = 60000, totalTimeoutMs = 300000 }) {  if (!store || typeof cwd !== 'string' || !cwd) throw new TypeError('model 执行器需要 store 和 cwd');
+export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fetch, perCallTimeoutMs = 60000, totalTimeoutMs = 300000 }) {  if (!store || typeof cwd !== 'string' || !cwd) throw new TypeError('model 执行器需要 store 和 cwd');
   const workspace = path.resolve(cwd);
   const running = new Map();
   const persist = task => { store.put('task', task); return task; };
@@ -232,9 +236,10 @@ export function modelExecutor({ store, cwd, context, fetchImpl = fetch, perCallT
     persist(task);
   };
 
-  async function askModel(messages, task, signal) {
-    const ctx = typeof context === 'function' ? context() : context;
+  async function askModel(messages, task, signal, profileId) {
+    const ctx = profileId && typeof contextFor === 'function' ? contextFor(profileId) : (typeof context === 'function' ? context() : context);
     if (!ctx?.key || !ctx?.settings?.model) throw statusError('还没有可用的模型：请在「设置 → 规划设置」里配置并选择默认模型', 503);
+    task.modelLabel = ctx.profileName || ctx.settings.model;
     const request = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, Math.min(4096, Number(ctx.maxTokens) || 4096), false, ctx.settings);
     let response;
     try {
@@ -287,7 +292,7 @@ export function modelExecutor({ store, cwd, context, fetchImpl = fetch, perCallT
       const timer = setTimeout(() => controller.abort(), Math.min(perCallTimeoutMs, remaining));
       let reply = '';
       try {
-        const result = await askModel(messages, task, controller.signal);
+        const result = await askModel(messages, task, controller.signal, input.profileId);
         for (const [key, value] of Object.entries(result.usage || {})) usage[key] = (usage[key] || 0) + (Number(value) || 0);
         reply = replyOf(result.payload, result.protocol);
       } finally {
