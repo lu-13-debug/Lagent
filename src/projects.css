@@ -797,3 +797,91 @@
     gap: 2px;
   }
 }
+
+/* 独立对话页：一个对话一页，正文占满，管理页不再内嵌对话。 */
+.pj-page.pj-chatpage {
+  max-width: 980px;
+  gap: 12px;
+  padding: 20px clamp(16px, 3vw, 32px) 24px;
+  height: 100%;
+  min-height: 0;
+}
+
+.pj-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--sa-line, #e5e5ea);
+}
+
+.pj-chat-head-main {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 2px;
+}
+
+.pj-chat-head-main strong {
+  font-size: var(--sa-fs-md, 15px);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pj-chat-head-main span {
+  font-size: var(--sa-fs-2xs, 11px);
+  color: var(--sa-text-3, #86868b);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pj-chatpage .pj-thread.pj-thread-full {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: minmax(120px, 1fr) auto;
+  border: 0;
+  padding: 0;
+  background: none;
+}
+
+.pj-chatpage .pj-thread-full .pj-messages {
+  max-height: none;
+  padding: 10px 2px;
+}
+
+.pj-work {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pj-chat-title .pj-chat-open {
+  margin-left: auto;
+  color: var(--sa-text-3, #86868b);
+  opacity: 0;
+  transition: opacity var(--sa-fast, 120ms) var(--sa-ease, ease);
+}
+
+.pj-chats li:hover .pj-chat-open,
+.pj-chat:focus-visible .pj-chat-open {
+  opacity: 1;
+}
+
+@media (max-width: 760px) {
+  .pj-chatpage .sa-keyhint {
+    display: none;
+  }
+
+  .pj-chatpage .pj-note-bar {
+    justify-content: flex-start;
+  }
+
+  .pj-chat-head-main strong {
+    font-size: var(--sa-fs-sm, 13px);
+  }
+
+  .pj-chat-head .pj-source {
+    display: none;
+  }
+}

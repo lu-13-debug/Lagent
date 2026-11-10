@@ -13,7 +13,7 @@ import { SettingsModal } from './ModelSettings';
 import { Logo, Modal, Toast } from './ui';
 import '../superagent.css';
 
-type ShellView = 'command' | 'inbox' | 'parallel' | 'projects' | 'agents' | 'tools' | 'memory' | 'settings';
+type ShellView = 'command' | 'inbox' | 'chat' | 'parallel' | 'projects' | 'agents' | 'tools' | 'memory' | 'settings';
 const navItems: { id: ShellView; label: string; icon: typeof Terminal }[] = [
   { id: 'inbox', label: '收件箱', icon: Inbox },
   { id: 'parallel', label: '指挥', icon: Waypoints },
@@ -135,7 +135,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [view, setView] = useState<ShellView>(() => {
     const params = new URLSearchParams(window.location.search);
     const raw = params.get('view');
-    const known: ShellView[] = ['command', 'inbox', 'parallel', 'projects', 'agents', 'tools', 'memory', 'settings'];
+    const known: ShellView[] = ['command', 'inbox', 'chat', 'parallel', 'projects', 'agents', 'tools', 'memory', 'settings'];
     if (known.includes(raw as ShellView)) return raw as ShellView;
     return params.get('project') ? 'projects' : 'command';
   });
@@ -220,6 +220,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [folderRename, setFolderRename] = useState<{ id: string; value: string } | null>(null);
   const [chatRename, setChatRename] = useState<{ projectId: string; chatId: string; value: string } | null>(null);
   const [folderToDelete, setFolderToDelete] = useState<WorkProject | null>(null);
+  const [chatToDelete, setChatToDelete] = useState<{ projectId: string; chat: WorkProjectChat } | null>(null);
   const [dropActive, setDropActive] = useState(false);
   // 侧栏折叠、右侧检查器、底部用户菜单：让主区尽量宽，工作与过程都放在主区
   const [railCollapsed, setRailCollapsed] = useState<boolean>(() => readJson<boolean>(RAIL_COLLAPSED_KEY, false));
@@ -392,7 +393,15 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [githubNumber, setGithubNumber] = useState('');
   const [githubPath, setGithubPath] = useState('');
   useEffect(() => { if (datasets.length === 1) setDatasetId(datasets[0].id); }, [datasets.length, datasets[0]?.id]);
-  const current = useMemo(() => (view === 'projects' ? folderState.projects.find(item => item.id === folderState.projectId)?.name || '工作文件夹' : navItems.find(item => item.id === view)?.label || '新对话'), [view, folderState]);
+  const current = useMemo(() => {
+    if (view === 'projects') return folderState.projects.find(item => item.id === folderState.projectId)?.name || '工作文件夹';
+    if (view === 'chat') {
+      const project = folderState.projects.find(item => item.id === folderState.projectId);
+      const chat = project?.chats.find(entry => entry.id === folderState.chatId);
+      return chat?.title || project?.name || '对话';
+    }
+    return navItems.find(item => item.id === view)?.label || '新对话';
+  }, [view, folderState]);
   const openFolder = (projectId: string) => { setView('projects'); setProjectFocus(projectId); setChatFocus(null); setNavOpen(false); };
   const handleFolderState = useCallback((next: { projects: WorkProject[]; projectId: string | null; chatId: string | null }) => {
     setFolderState(previous => {
@@ -403,7 +412,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   }, []);
   const openFolderChat = (projectId: string, chatId: string) => {
     markChatSeen(chatId);
-    setView('projects');
+    setView('chat');
     setProjectFocus(projectId);
     setChatFocus(chatId);
     setNavOpen(false);
@@ -446,8 +455,15 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     try { await api.workRenameProjectChat(target.chatId, title); await reloadProjects(); }
     catch (cause) { notify((cause as Error).message, true); }
   };
-  const commitFolderRename = async () => {
-    if (!folderRename) return;
+  const removeChat = async (target: { projectId: string; chat: WorkProjectChat }) => {
+    try {
+      await api.workDeleteProjectChat(target.chat.id);
+      if (view === 'chat' && folderState.chatId === target.chat.id) setView('projects');
+      notify(`已删除对话「${target.chat.title}」。`);
+      await reloadProjects();
+    } catch (cause) { notify((cause as Error).message, true); }
+  };
+  const commitFolderRename = async () => {    if (!folderRename) return;
     const name = folderRename.value.trim();
     const target = folderRename;
     setFolderRename(null);
@@ -894,6 +910,16 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     } catch { /* 历史工单可能已被清理，保持摘要即可 */ }
   };
 
+  const openCard = async (ticketId: string) => {
+    setInspectorOpen(true);
+    setCardOpen(previous => ({ ...previous, [ticketId]: true }));
+    if (cardDetails[ticketId]) return;
+    try {
+      const full = await api.workTicket(ticketId);
+      setCardDetails(previous => ({ ...previous, [ticketId]: full }));
+    } catch { /* 历史工单可能已被清理，保持摘要即可 */ }
+  };
+
   // 打开工单时它自己的卡片默认展开
   useEffect(() => {
     if (!activeTicketId) return;
@@ -1095,11 +1121,16 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   ];
 
   // 右侧面板：当前这次工作里被分配到的 Agent，各自展开看过程
-  const inspectorRows = activeGroup
-    ? activeGroup.ticketIds.map((id, index) => ({ id, executorId: activeGroup.agentIds[index] || '' }))
-    : activeTicket
-      ? [{ id: activeTicket.id, executorId: activeTicket.executor }]
-      : tickets.slice(0, 8).map(ticket => ({ id: ticket.id, executorId: ticket.executor }));
+  const chatTickets = view === 'chat' && folderState.chatId
+    ? tickets.filter(ticket => ticket.projectChatId === folderState.chatId)
+    : [];
+  const inspectorRows = chatTickets.length
+    ? chatTickets.slice(0, 8).map(ticket => ({ id: ticket.id, executorId: ticket.executor }))
+    : activeGroup
+      ? activeGroup.ticketIds.map((id, index) => ({ id, executorId: activeGroup.agentIds[index] || '' }))
+      : activeTicket
+        ? [{ id: activeTicket.id, executorId: activeTicket.executor }]
+        : tickets.slice(0, 8).map(ticket => ({ id: ticket.id, executorId: ticket.executor }));
 
   const inspectorCard = (row: { id: string; executorId: string }) => {
     const listed = tickets.find(ticket => ticket.id === row.id);
@@ -1556,7 +1587,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     </section>;
   })();
 
-  const page = view === 'command' ? conversationPage : view === 'inbox' ? inboxPage : view === 'parallel' ? parallelPage : view === 'projects' ? <ProjectsPanel notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
+  const page = view === 'command' ? conversationPage : view === 'inbox' ? inboxPage : view === 'parallel' ? parallelPage : view === 'chat' ? <ProjectsPanel mode="chat" notify={notify} onOpenTicket={id => void openCard(id)} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => openFolder(folderState.projectId || '')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'projects' ? <ProjectsPanel mode="manage" notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
 
   return <div className={`sa-shell ${railCollapsed ? 'sa-rail-collapsed' : ''} ${inspectorOpen ? 'sa-inspector-open' : ''}`} style={sidebarWidth ? { '--sa-sidebar': `${sidebarWidth}px` } as React.CSSProperties : undefined}>
     <a className="skip-link" href="#sa-main">跳到主内容</a>
@@ -1612,11 +1643,14 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
                       onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void commitChatRename(); } if (event.key === 'Escape') setChatRename(null); }} />;
                   }
                   const unread = chatUnread(entry);
-                  return <button type="button" key={entry.id} className={`sa-conv sa-conv-sub ${active ? 'active' : ''} ${unread ? 'has-unread' : ''}`} title={`${executorNames[entry.executorId] || entry.executorId} · 写入 ${item.path}（双击重命名）`} onClick={() => openFolderChat(item.id, entry.id)} onDoubleClick={event => { event.preventDefault(); setChatRename({ projectId: item.id, chatId: entry.id, value: entry.title }); }}>
-                    <span className="sa-conv-body">
-                      <span className="sa-conv-title">{entry.title}{unread && <em className="sa-unread" aria-label="有新的执行结果" />}</span>
-                    </span>
-                  </button>;
+                  return <div className="sa-folder-chat-row" key={entry.id}>
+                    <button type="button" className={`sa-conv sa-conv-sub ${active ? 'active' : ''} ${unread ? 'has-unread' : ''}`} title={`${executorNames[entry.executorId] || entry.executorId} · 写入 ${item.path}（双击重命名）`} onClick={() => openFolderChat(item.id, entry.id)} onDoubleClick={event => { event.preventDefault(); setChatRename({ projectId: item.id, chatId: entry.id, value: entry.title }); }}>
+                      <span className="sa-conv-body">
+                        <span className="sa-conv-title">{entry.title}{unread && <em className="sa-unread" aria-label="有新的执行结果" />}</span>
+                      </span>
+                    </button>
+                    <button type="button" className="sa-folder-chat-del" aria-label={`删除对话 ${entry.title}`} title="删除对话" onClick={() => setChatToDelete({ projectId: item.id, chat: entry })}><X size={11} /></button>
+                  </div>;
                 }) : <p className="sa-folder-empty">还没有会话，点右侧 + 新建一个。</p>}
               </div>}
             </div>;
@@ -1663,10 +1697,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     <div className="sa-main"><header className="sa-topbar"><div className="sa-breadcrumb"><button className="sa-icon sa-menu" aria-label="打开导航" onClick={() => setNavOpen(true)}><Menu size={19} /></button><span>{view === 'command' ? (activeGroup ? '交叉验证' : '个人 Agent') : '个人 Agent'}</span><ChevronRight size={12} /><strong>{view === 'command' ? activeGroup ? activeGroup.prompt : activeTicket?.title || '新对话' : current}</strong>{view === 'command' && activeGroup && <Status status={groupStatusOf(activeGroup)} />}{view === 'command' && activeTicket && <Status status={activeTicket.status} />}</div><div className="sa-topbar-right"><span className="sa-connection" role="status"><span className="online-dot" />{error ? '指挥服务未连接' : runtime.mode === 'cloud' ? '云端已连接' : '本地已连接'}</span><button className="sa-icon" aria-label={appearance.resolvedTheme === 'dark' ? '切换到浅色主题' : '切换到深色主题'} title={appearance.resolvedTheme === 'dark' ? '切换到浅色主题' : '切换到深色主题'} onClick={() => appearance.setTheme(appearance.resolvedTheme === 'dark' ? 'light' : 'dark')}><SunMoon size={17} /></button></div></header>
       <main id="sa-main" className={`sa-content ${view === 'command' ? 'sa-content-chat' : ''}`}>{error && !loading ? <div className="sa-error"><AlertTriangle size={20} /><div><h2>指挥服务尚未连接</h2><p>{error}</p><button className="sa-button" onClick={() => void load()}><RefreshCw size={15} />重试</button></div></div> : loading && !work ? <div className="sa-loading"><RefreshCw size={20} className="sa-spin" /><span>正在载入指挥台…</span></div> : page}</main>
     </div>
-    {view === 'command' && (inspectorOpen
+    {(view === 'command' || view === 'chat') && (inspectorOpen
       ? <aside className="sa-inspector" aria-label="工作详情">
           <header className="sa-inspector-head">
-            <div><span className="sa-eyebrow">AGENTS</span><h2>{activeGroup ? `${inspectorRows.length} 个 Agent` : activeTicket ? '工作详情' : '最近工作'}</h2></div>
+            <div><span className="sa-eyebrow">AGENTS</span><h2>{view === 'chat' ? `${folderState.projects.find(item => item.id === folderState.projectId)?.name || '对话'} · 执行详情` : activeGroup ? `${inspectorRows.length} 个 Agent` : activeTicket ? '工作详情' : '最近工作'}</h2></div>
             <button type="button" className="sa-icon" aria-label="收起工作详情" title="收起工作详情" onClick={() => setInspectorOpen(false)}><ChevronRight size={15} /></button>
           </header>
           <div className="sa-inspector-list">
@@ -1731,6 +1765,12 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       <div className="sa-confirm">
         <p>{folderToDelete.chatCount} 个会话记录也会一起移除。这一步无法撤销，确认继续？</p>
         <div className="sa-confirm-actions"><button type="button" className="sa-button" onClick={() => setFolderToDelete(null)}>取消</button><button type="button" className="sa-button sa-danger" onClick={() => { const target = folderToDelete; setFolderToDelete(null); void removeFolder(target); }}>移除文件夹</button></div>
+      </div>
+    </Modal>}
+    {chatToDelete && <Modal title={`删除对话「${chatToDelete.chat.title}」`} subtitle="只移除软件里的这条对话记录，Agent 端的会话文件不会被删除。" close={() => setChatToDelete(null)}>
+      <div className="sa-confirm">
+        <p>删除后这条对话的历史消息也会一起移除。这一步无法撤销，确认继续？</p>
+        <div className="sa-confirm-actions"><button type="button" className="sa-button" onClick={() => setChatToDelete(null)}>取消</button><button type="button" className="sa-button sa-danger" onClick={() => { const target = chatToDelete; setChatToDelete(null); void removeChat(target); }}>删除对话</button></div>
       </div>
     </Modal>}
     {toast && <Toast message={toast.text} error={toast.error} close={() => setToast(null)} />}

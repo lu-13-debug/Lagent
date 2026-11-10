@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AppWindow, Bot, Brain, Check, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, Hammer, History, Inbox, Layers, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users } from 'lucide-react';
+import { AppWindow, Bot, Brain, Check, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users } from 'lucide-react';
 import { api } from '../api';
 import { Modal } from './ui';
 import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkTeamwork, WorkTicket } from '../superagent';
@@ -14,6 +14,10 @@ type Props = {
   requestImport?: number;
   onState?: (state: { projects: WorkProject[]; projectId: string | null; chatId: string | null }) => void;
   onFocusProject?: (id: string | null) => void;
+  // chat：只显示一个对话（独立页面）；manage：项目管理（文件夹、档案、记忆、对话列表）。
+  mode?: 'manage' | 'chat';
+  onOpenChat?: (projectId: string, chatId: string) => void;
+  onExitChat?: () => void;
 };
 
 const EXECUTOR_LABELS: Record<string, string> = {
@@ -52,7 +56,8 @@ const STATUS_LABELS: Record<string, string> = {
   recorded: '已记录'
 };
 
-export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject }: Props) {
+export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onExitChat }: Props) {
+  const chatMode = mode === 'chat';
   const [projects, setProjects] = useState<WorkProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
@@ -301,6 +306,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       await loadProjects(true);
       setActiveChatId(result.chat.id);
       setNewChatOpen(false);
+      if (!chatMode && onOpenChat) onOpenChat(project.id, result.chat.id);
       notify(task
         ? `已创建与 ${EXECUTOR_LABELS[execs[0]] || execs[0]} 的项目对话，并提交了任务（待确认）。`
         : `已创建与 ${EXECUTOR_LABELS[execs[0]] || execs[0]} 的项目对话。`);
@@ -565,8 +571,47 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     finally { setPlanBusy(''); }
   };
 
-  return <section className="pj-page">
-    <header className="pj-head">
+  const chatHeader = <header className="pj-chat-head">
+    <button type="button" className="pj-btn pj-small" onClick={() => onExitChat?.()}><ChevronLeft size={14} />返回项目</button>
+    <div className="pj-chat-head-main">
+      <strong>{chat?.title || '对话'}</strong>
+      <span>{project ? `${project.name} · ${project.path}` : '工作文件夹'}{chat ? ` · ${EXECUTOR_LABELS[chat.executorId] || chat.executorId}` : ''}</span>
+    </div>
+    {chat && <span className={`pj-source ${chat.executorId !== 'window' && chat.writable ? 'write' : ''}`}>{chat.executorId === 'window' ? '不写文件' : chat.writable ? '可修改项目' : '只读'}</span>}
+  </header>;
+
+  // 独立对话页：只渲染这一个对话的消息与输入框。
+  const thread = project && chat ? <div className="pj-thread pj-thread-full">
+    <div className="pj-messages">
+      {tickets.length ? tickets.map(ticket => <button type="button" className="pj-message" key={ticket.id} onClick={() => onOpenTicket(ticket.id)}>
+        <span className="pj-message-head"><span>{STATUS_LABELS[ticket.status] || ticket.status}</span><time>{new Date(ticket.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></span>
+        <span className="pj-message-text">{ticket.title}</span>
+        {ticket.summary && <span className="pj-message-summary">{ticket.summary}</span>}
+      </button>) : <p className="pj-empty">还没有消息。在下方描述任务，确认后才会发送给 Agent。</p>}
+    </div>
+    <div className="pj-composer">
+      <textarea value={chatDraft} onChange={event => setChatDraft(event.target.value)} rows={3} maxLength={3000} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} placeholder={chat.executorId === 'window' ? '描述要发送到该窗口 Agent 会话的指令…' : '描述要在该项目中完成的任务，例如：修复首页布局在窄屏下的溢出'} />
+      {dispatchOpen && <div className="pj-dispatch">
+        <span className="pj-dispatch-label">并行分派给</span>
+        {dispatchExecutors.map(id => <button type="button" key={id} className={`pj-chip ${dispatchTargets.includes(id) ? 'on' : ''}`} aria-pressed={dispatchTargets.includes(id)} onClick={() => toggleDispatchTarget(id)}>{dispatchTargets.includes(id) ? <Check size={12} /> : <Plus size={12} />}{EXECUTOR_LABELS[id] || id}</button>)}
+        <span className="pj-dispatch-hint">每个 Agent 各建一条待确认工单</span>
+        <span className="pj-dispatch-actions">
+          <button type="button" className="pj-link" onClick={() => setDispatchOpen(false)}>取消</button>
+          <button type="button" className="pj-btn pj-primary pj-small" disabled={!dispatchTargets.length || dispatchBusy} onClick={() => void dispatch()}>{dispatchBusy ? '分派中…' : `分派给 ${dispatchTargets.length} 个 Agent`}</button>
+        </span>
+      </div>}
+      <div className="pj-composer-actions">
+        <button type="button" className="pj-btn" disabled={!chatDraft.trim() || !dispatchExecutors.length} aria-expanded={dispatchOpen} onClick={toggleDispatchPanel}><Users size={14} />并行分派</button>
+        <button type="button" className="pj-btn" disabled={!chatDraft.trim() || planBusy === 'suggest'} onClick={() => void startPlan()}><Sparkles size={14} />{planBusy === 'suggest' ? '拆解中…' : '拆成计划'}</button>
+        <button type="button" className="pj-btn pj-primary" disabled={!chatDraft.trim() || busy === 'send'} onClick={() => void send()}><Send size={14} />{busy === 'send' ? '提交中…' : '发送（需审批）'}</button>
+      </div>
+      <p className="pj-note pj-note-bar">消息会创建待确认工单；批准后 CLI 会在项目目录内修改文件，窗口 Agent 会把指令发到已绑定的窗口。<button type="button" className="pj-link" onClick={openManualPlan}>手动编排计划</button><span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
+    </div>
+  </div> : null;
+
+  return <section className={`pj-page${chatMode ? ' pj-chatpage' : ''}`}>
+    {chatMode && <>{chatHeader}{thread || <div className="pj-empty-block pj-placeholder"><p>选择一个对话。</p></div>}</>}
+    {!chatMode && <header className="pj-head">
       <div>
         <p className="pj-eyebrow"><FolderGit2 size={13} /> PROJECTS</p>
         <h1>项目</h1>
@@ -576,9 +621,9 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
         <button type="button" className="pj-btn" onClick={() => void loadProjects()} disabled={loading}><RefreshCw size={14} className={loading ? 'pj-spin' : ''} />刷新</button>
         <button type="button" className="pj-btn" onClick={() => void pickFolder()} disabled={busy === 'import'}><Plus size={15} />导入文件夹</button>
       </div>
-    </header>
+    </header>}
 
-    {editorOpen && <form className="pj-editor" onSubmit={event => { event.preventDefault(); void importProject(pathDraft, nameDraft); }}>
+    {!chatMode && editorOpen && <form className="pj-editor" onSubmit={event => { event.preventDefault(); void importProject(pathDraft, nameDraft); }}>
       <label>文件夹绝对路径<input value={pathDraft} onChange={event => setPathDraft(event.target.value)} placeholder="例如 D:\\work\\my-project" autoFocus /></label>
       <label>显示名称（可选）<input value={nameDraft} onChange={event => setNameDraft(event.target.value)} placeholder="默认使用文件夹名" /></label>
       <div className="pj-editor-actions">
@@ -587,7 +632,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       </div>
     </form>}
 
-    <div className="pj-layout">
+    {!chatMode && <div className="pj-layout">
       <aside className="pj-projects">
         <div className="pj-side-title"><span>已导入的项目</span><span>{projects.length}</span></div>
         {loading ? <p className="pj-empty">载入中…</p> : projects.length ? <ul>
@@ -611,55 +656,11 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
             </div>
             <div className="pj-head-actions">
               <button type="button" className="pj-btn" onClick={() => void openSessions()} disabled={busy === 'sessions'}><Inbox size={14} />导入已有会话</button>
-              <button type="button" className="pj-btn pj-primary" onClick={() => { setTeamworkOpen(value => !value); setTeamworkAgents(previous => previous.length ? previous : dispatchExecutors.slice(0, 3)); }}><Layers size={14} />分工做一个游戏</button>
               <button type="button" className="pj-btn" onClick={() => void openNewChat()}><Plus size={14} />新建对话</button>
             </div>
           </div>
 
-          {teamworkOpen && <div className="pj-teamwork">
-            <div className="pj-teamwork-head"><Layers size={15} /><div><strong>软件先拆分，再分派</strong><span>拆成玩法规则、画面表现、界面状态三份，各写一个文件；写完由软件验收并组装成一个可运行的游戏。</span></div></div>
-            <label className="pj-teamwork-goal"><span>要做什么样的游戏</span>
-              <textarea rows={3} maxLength={600} value={teamworkGoal} onChange={event => setTeamworkGoal(event.target.value)} placeholder="例如：做一个在浏览器里玩的打砖块，分数、生命和开始/结束界面都要有。" />
-            </label>
-            <div className="pj-teamwork-agents"><span>参与协作</span>
-              <div className="pj-newchat-chips">{dispatchExecutors.map(id => <button key={id} type="button" className={`pj-chip${teamworkAgents.includes(id) ? ' on' : ''}`} onClick={() => setTeamworkAgents(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id])}>{teamworkAgents.includes(id) && <Check size={11} />}{EXECUTOR_LABELS[id] || id}</button>)}</div>
-            </div>
-            <div className="pj-teamwork-actions">
-              <span className="pj-teamwork-hint">按「玩法规则 → 画面表现 → 界面状态」的顺序分派；Agent 少于三份时轮流承担。</span>
-              <button type="button" className="pj-btn" onClick={() => setTeamworkOpen(false)}>取消</button>
-              <button type="button" className="pj-btn pj-primary" disabled={teamworkBusy === 'start'} onClick={() => void startTeamwork()}>{teamworkBusy === 'start' ? '拆分中…' : '拆分并分派'}</button>
-            </div>
-          </div>}
 
-          {teamworks.length > 0 && <section className="pj-teamworks">
-            {teamworks.map(item => {
-              const agents = new Set(item.parts.map(part => part.executorId)).size;
-              const label = item.status === 'assembled' ? '已组装' : item.status === 'blocked' ? '待补齐' : '进行中';
-              return <article className={`pj-teamwork-card is-${item.status}`} key={item.id}>
-                <header>
-                  <div><strong>{item.goal}</strong><span>{item.parts.length} 份 · {agents} 个 Agent · {new Date(item.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span></div>
-                  <em className={`pj-tw-status is-${item.status}`}>{label}</em>
-                </header>
-                <ul className="pj-tw-parts">
-                  {item.parts.map(part => <li key={part.id}>
-                    <span className="pj-tw-name">{part.name}</span>
-                    <span className="pj-tw-agent">{EXECUTOR_LABELS[part.executorId] || part.executorId}</span>
-                    <span className={`pj-tw-part is-${part.status}`}>{STATUS_LABELS[part.status] || part.status}</span>
-                    <span className="pj-tw-file" title={part.file}>{part.file}{part.fileExists ? ` · ${part.fileSize} 字节` : ' · 未落盘'}</span>
-                    {(!part.fileExists || part.status === 'failed') && <button type="button" className="pj-link pj-tw-retry" disabled={teamworkBusy === `${item.id}:${part.id}`} onClick={() => void retryTeamworkPart(item, part.id)}>{teamworkBusy === `${item.id}:${part.id}` ? '重派中…' : '重派这一段'}</button>}
-                  </li>)}
-                </ul>
-                {item.problems.length > 0 && <ul className="pj-tw-problems">{item.problems.map((problem, index) => <li key={index}>{problem.message}</li>)}</ul>}
-                <footer>
-                  <span>{item.assembledAt ? `组装于 ${new Date(item.assembledAt).toLocaleTimeString('zh-CN')} · ${item.outputPath}` : '三份都写完后，由软件组装成一个 index.html'}</span>
-                  <div>
-                    <button type="button" className="pj-btn" disabled={teamworkBusy === item.id} onClick={() => void assembleTeamwork(item)}><Hammer size={13} />{teamworkBusy === item.id ? '组装中…' : '组装成游戏'}</button>
-                    {item.outputPath && <button type="button" className="pj-btn" onClick={() => void openTeamworkFile(item)}>打开预览</button>}
-                  </div>
-                </footer>
-              </article>;
-            })}
-          </section>}
 
           <div className="pj-tabs">
             <button type="button" className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}><Bot size={13} />对话</button>
@@ -781,8 +782,8 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
               <div className="pj-side-title"><span>项目对话</span><span>{project.chats.length}</span></div>
               {project.chats.length ? <ul>
                 {project.chats.map(item => <li key={item.id} className={item.id === activeChatId ? 'active' : ''}>
-                  <button type="button" className="pj-chat" onClick={() => setActiveChatId(item.id)}>
-                    <span className="pj-chat-title"><Bot size={12} />{item.title}</span>
+                  <button type="button" className="pj-chat" onClick={() => onOpenChat ? onOpenChat(project.id, item.id) : setActiveChatId(item.id)}>
+                    <span className="pj-chat-title"><Bot size={12} />{item.title}<ChevronRight size={12} className="pj-chat-open" /></span>
                     <span className="pj-chat-meta">{EXECUTOR_LABELS[item.executorId] || item.executorId} · {item.source === 'imported' ? '已导入会话' : item.executorId === 'window' ? '发送到窗口' : item.writable ? '可修改项目' : '只读'}</span>
                     {item.lastSummary && <span className="pj-chat-summary">{item.lastSummary}</span>}
                   </button>
@@ -791,45 +792,10 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
               </ul> : <p className="pj-empty">还没有项目对话。可导入已有会话，或新建一个。</p>}
             </div>
 
-            <div className="pj-thread">
-              {!chat ? <div className="pj-empty-block pj-placeholder"><p>选择一个项目对话。</p></div> : <>
-                <div className="pj-thread-head">
-                  <div><strong>{chat.title}</strong><span>{EXECUTOR_LABELS[chat.executorId] || chat.executorId} · {chat.sessionId ? '已绑定会话' : '首次消息将创建会话'}</span>{chat.executorId === 'window'
-                    ? <span className="pj-write-path" title={chat.window?.title || ''}><AppWindow size={12} />发送到 {chat.window?.process || '窗口'}{chat.window?.title ? ` · ${chat.window.title}` : ''}</span>
-                    : <span className="pj-write-path" title={project.path}><FolderGit2 size={12} />写入 {project.path}</span>}</div>
-                  <span className={`pj-source ${chat.executorId !== 'window' && chat.writable ? 'write' : ''}`}>{chat.executorId === 'window' ? '不写文件' : chat.writable ? '可修改项目' : '只读'}</span>
-                </div>
-                <div className="pj-messages">
-                  {tickets.length ? tickets.map(ticket => <button type="button" className="pj-message" key={ticket.id} onClick={() => onOpenTicket(ticket.id)}>
-                    <span className="pj-message-head"><span>{STATUS_LABELS[ticket.status] || ticket.status}</span><time>{new Date(ticket.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></span>
-                    <span className="pj-message-text">{ticket.title}</span>
-                    {ticket.summary && <span className="pj-message-summary">{ticket.summary}</span>}
-                  </button>) : <p className="pj-empty">还没有消息。在下方描述任务，确认后才会发送给 Agent。</p>}
-                </div>
-                <div className="pj-composer">
-                  <textarea value={chatDraft} onChange={event => setChatDraft(event.target.value)} rows={3} maxLength={3000} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} placeholder={chat.executorId === 'window' ? '描述要发送到该窗口 Agent 会话的指令…' : '描述要在该项目中完成的任务，例如：修复首页布局在窄屏下的溢出'} />
-                  {dispatchOpen && <div className="pj-dispatch">
-                    <span className="pj-dispatch-label">并行分派给</span>
-                    {dispatchExecutors.map(id => <button type="button" key={id} className={`pj-chip ${dispatchTargets.includes(id) ? 'on' : ''}`} aria-pressed={dispatchTargets.includes(id)} onClick={() => toggleDispatchTarget(id)}>{dispatchTargets.includes(id) ? <Check size={12} /> : <Plus size={12} />}{EXECUTOR_LABELS[id] || id}</button>)}
-                    <span className="pj-dispatch-hint">每个 Agent 各建一条待确认工单</span>
-                    <span className="pj-dispatch-actions">
-                      <button type="button" className="pj-link" onClick={() => setDispatchOpen(false)}>取消</button>
-                      <button type="button" className="pj-btn pj-primary pj-small" disabled={!dispatchTargets.length || dispatchBusy} onClick={() => void dispatch()}>{dispatchBusy ? '分派中…' : `分派给 ${dispatchTargets.length} 个 Agent`}</button>
-                    </span>
-                  </div>}
-                  <div className="pj-composer-actions">
-                    <button type="button" className="pj-btn" disabled={!chatDraft.trim() || !dispatchExecutors.length} aria-expanded={dispatchOpen} onClick={toggleDispatchPanel}><Users size={14} />并行分派</button>
-                    <button type="button" className="pj-btn" disabled={!chatDraft.trim() || planBusy === 'suggest'} onClick={() => void startPlan()}><Sparkles size={14} />{planBusy === 'suggest' ? '拆解中…' : '拆成计划'}</button>
-                    <button type="button" className="pj-btn pj-primary" disabled={!chatDraft.trim() || busy === 'send'} onClick={() => void send()}><Send size={14} />{busy === 'send' ? '提交中…' : '发送（需审批）'}</button>
-                  </div>
-                  <p className="pj-note pj-note-bar">消息会创建待确认工单；批准后 CLI 会在项目目录内修改文件，窗口 Agent 会把指令发到已绑定的窗口。<button type="button" className="pj-link" onClick={openManualPlan}>手动编排计划</button><span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
-                </div>
-              </>}
-            </div>
           </div>}
         </>}
       </div>
-    </div>
+    </div>}
 
     {browserOpen && <div className="pj-plan">
       <div className="pj-plan-card pj-browser">
