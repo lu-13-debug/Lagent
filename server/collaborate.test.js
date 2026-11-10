@@ -115,6 +115,38 @@ test('对话消息可指定模型与思考强度，并落进执行器输入', as
   assert.equal(plainControl.executorInput.effort, undefined);
 });
 
+test('单条对话可以有自己的权限档位，优先于全局设置', async t => {
+  const { engine, store } = harness(t);
+  const projectDir = join(tmpdir(), `dataagent-chat-perm-${Date.now()}`);
+  mkdirSync(projectDir, { recursive: true });
+  t.after(() => rmSync(projectDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const project = engine.importProject({ path: projectDir }).project;
+  const { chat } = engine.createProjectChat(project.id, { executorId: 'model' });
+
+  // 全局设成「仅查看」，这条对话自己设成「完全权限」：以对话为准。
+  engine.updatePolicy({ permission: 'read' });
+  engine.setProjectChatPermission(chat.id, { permission: 'full' });
+  const raised = engine.projectChatMessage(chat.id, { text: '看一下目录结构' });
+  const raisedInput = store.get('work-control', raised.id).executorInput;
+  assert.equal(raisedInput.permission, 'full');
+  assert.equal(raisedInput.write, true, '完全权限下可以写');
+
+  // 反过来：全局「完全权限」，这条对话只要「仅查看」。
+  engine.updatePolicy({ permission: 'full' });
+  engine.setProjectChatPermission(chat.id, { permission: 'read' });
+  const lowered = engine.projectChatMessage(chat.id, { text: '再来一次' });
+  const loweredInput = store.get('work-control', lowered.id).executorInput;
+  assert.equal(loweredInput.permission, 'read');
+  assert.equal(loweredInput.write, false, '仅查看时写被关掉');
+
+  // 清空档位后回到跟随全局设置。
+  engine.setProjectChatPermission(chat.id, { permission: '' });
+  const inherited = engine.projectChatMessage(chat.id, { text: '第三次' });
+  assert.equal(store.get('work-control', inherited.id).executorInput.permission, 'full');
+
+  assert.throws(() => engine.setProjectChatPermission(chat.id, { permission: 'root' }), /permission/);
+});
+
 test('删除对话里的一条消息会连同执行记录一起清掉', async t => {
   const { engine, store, events } = harness(t);
   const projectDir = join(tmpdir(), `dataagent-chat-delete-${Date.now()}`);

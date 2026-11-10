@@ -27,7 +27,11 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/teamworks/:id/assemble',(req,res)=>res.json(engine.teamworkAssemble(req.params.id)));
   app.post('/api/work/teamworks/:id/retry',(req,res)=>res.status(201).json(engine.teamworkRetry(req.params.id,req.body?.partId)));
   app.delete('/api/work/chats/:id',(req,res)=>res.json(engine.deleteProjectChat(req.params.id)));
-  app.patch('/api/work/chats/:id',(req,res)=>res.json({chat:engine.renameProjectChat(req.params.id,req.body)}));
+  app.patch('/api/work/chats/:id',(req,res)=>{
+    // 一个 PATCH 兼容两种改法：只改标题，或只改这条会话自己的权限档位。
+    if(req.body&&Object.hasOwn(req.body,'permission'))return res.json({chat:engine.setProjectChatPermission(req.params.id,req.body)});
+    return res.json({chat:engine.renameProjectChat(req.params.id,req.body)});
+  });
   app.post('/api/work/chats/:id/messages',(req,res)=>res.status(201).json({ticket:engine.projectChatMessage(req.params.id,req.body)}));
   app.get('/api/work/chats/:id/tickets',(req,res)=>res.json({tickets:engine.projectChatTickets(req.params.id)}));
   app.get('/api/work/projects/:id/brief',(req,res)=>res.json({brief:engine.projectBrief(req.params.id)}));

@@ -65,6 +65,8 @@ export interface WorkProjectChat {
   autoTitle?: boolean;
   // 团队协作产生的从属会话会指向上级对话；侧栏只列上级对话，右栏再展开各个 Agent。
   parentChatId?: string;
+  // 这条会话自己的权限档位；没有这个字段表示跟随设置里的全局档位。
+  permission?: 'read' | 'workspace' | 'full';
   ticketCount?: number; pendingCount?: number; lastTicketStatus?: string; lastTicketAt?: string;
   createdAt: string; updatedAt: string;
 }

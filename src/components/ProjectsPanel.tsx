@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AppWindow, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Users, X } from 'lucide-react';
+import { AppWindow, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, ShieldCheck, Sparkles, Trash2, Users, X } from 'lucide-react';
 import { api } from '../api';
 import { Modal } from './ui';
 import { ChatModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
@@ -67,6 +67,11 @@ const STATUS_LABELS: Record<string, string> = {
 const ACTIVE_TICKET_STATUS = new Set(['queued', 'working', 'awaiting_review', 'waiting', 'pending', 'running']);
 
 // 编排运行的状态文案；步骤状态复用执行器的那套，避免多一套词。
+const PERMISSION_LABELS: Record<'read' | 'workspace' | 'full', string> = {
+  read: '仅查看',
+  workspace: '仅工作区内修改',
+  full: '完全权限'
+};
 const RUN_STATUS_LABELS: Record<string, string> = {
   drafting: '分析中',
   awaiting_approval: '等你批准',
@@ -463,6 +468,17 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       try { localStorage.setItem('dataagent.orchestrate.v1', next ? 'on' : 'off'); } catch { /* 隐私模式下忽略 */ }
       return next;
     });
+  };
+  // 每条会话自己的权限档位：留空表示跟随设置里的全局档位。
+  const changePermission = async (next: '' | 'read' | 'workspace' | 'full') => {
+    if (!chat) return;
+    setBusy('permission');
+    try {
+      await api.workChatPermission(chat.id, next);
+      notify(next ? `这条对话的权限改成「${PERMISSION_LABELS[next]}」。` : '这条对话改回跟随设置里的权限档位。');
+      await loadProjects(true);
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setBusy(''); }
   };
   const decideRun = async (run: WorkRun, decision: 'approve' | 'reject') => {
     setRunBusy(`${run.id}:${decision}`);
@@ -904,6 +920,20 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
         disabled={busy === 'send'}
       />}
       <div className="pj-composer-actions">
+        <label className={`pj-perm${chat.permission ? ' is-local' : ''}`} title="只影响这条对话；留空则跟随设置里的全局权限档位">
+          <ShieldCheck size={13} />
+          <span className="pj-perm-label">权限</span>
+          <select
+            value={chat.permission || ''}
+            disabled={busy === 'permission'}
+            onChange={event => void changePermission(event.target.value as '' | 'read' | 'workspace' | 'full')}
+          >
+            <option value="">跟随设置</option>
+            <option value="read">仅查看</option>
+            <option value="workspace">仅工作区内修改</option>
+            <option value="full">完全权限</option>
+          </select>
+        </label>
         {orchestratorOn && <button type="button" className={`pj-chip pj-orch${orchestrate ? ' on' : ''}`} aria-pressed={orchestrate} onClick={toggleOrchestrate} title="开着：先分析任务、拆成步骤、分配 Agent，批准后逐步执行并在验证不过时返工">{orchestrate ? <Check size={12} /> : <Plus size={12} />}深度编排</button>}
         {orchestrate && (
           <label className="pj-orch-template" title="用哪套步骤模板；自动识别按目标里的关键词猜">

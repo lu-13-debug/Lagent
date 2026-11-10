@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { assertWorkAction, workError } from './domain.js';
 import { manualTrigger } from './sources/manual.js';
-import { defaultPolicy, externalExecutorAllowed, normalizePolicy, WORK_POLICY_ID } from './policy.js';
+import { defaultPolicy, externalExecutorAllowed, normalizePolicy, PERMISSIONS, WORK_POLICY_ID } from './policy.js';
 import { workStore } from './store.js';
 import { executorRegistry } from './executors/index.js';
 import { decideTeamProposal, projectTeamTask, reviewTeamNode, teamEventKey } from './team.js';
@@ -218,8 +218,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const resuming = typeof chat.sessionId === 'string' && chat.sessionId;
     // 首条消息给完整项目简报；后续消息只带记忆摘录，避免每轮都塞大段背景。
     const context = resuming ? projectMemoryContext(project) : projectBriefContext(project);
-    // 权限模式决定能不能写：仅查看一律只读，工作区与完全权限都可写。
-    const permission = policy.permission === 'read' || policy.permission === 'workspace' || policy.permission === 'full' ? policy.permission : 'workspace';
+    // 权限模式决定能不能写：会话自己设了档位就用它，否则跟随全局策略；仅查看一律只读。
+    const chatPermission = PERMISSIONS.includes(chat.permission) ? chat.permission : '';
+    const permission = chatPermission || (PERMISSIONS.includes(policy.permission) ? policy.permission : 'workspace');
     const isAcp = Array.isArray(executor.capabilities) && executor.capabilities.includes('acp');
     const isModel = executor?.id === 'model';
     const write = chat.writable !== false && permission !== 'read';
@@ -1170,6 +1171,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       return {id,removed:targets.length,ids:targets,planRemoved};
     },
     renameProjectChat(id,input){return projects.renameChat(id,input);},
+    // 单条会话的权限档位：留空表示回到「跟随全局策略」。
+    setProjectChatPermission(id,input){return projects.setChatPermission(id,input);},
     scanProjectSessions(projectId,executorId){return projects.scanSessions(projectId,executorId);},
     importProjectSession(projectId,input){return projects.importSession(projectId,input);},
     projectChatMessage(chatId,input){

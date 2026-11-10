@@ -71,7 +71,18 @@
 .pj-message-summary { font-size: var(--sa-fs-xs, 12px); color: var(--sa-text-2, #515154); white-space: pre-wrap; }
 .pj-composer { display: grid; gap: 8px; }
 .pj-composer textarea { width: 100%; resize: vertical; padding: 10px 12px; border: 1px solid var(--sa-line, #e5e5ea); border-radius: var(--sa-r-md, 9px); background: var(--sa-canvas, #fff); color: var(--sa-text, #1d1d1f); font: inherit; font-size: var(--sa-fs-sm, 13px); line-height: 1.55; }
-.pj-composer-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.pj-composer-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+/* 这条对话自己的权限档位：靠左，留空表示跟随设置里的全局档位。 */
+.pj-perm { display: inline-flex; align-items: center; gap: 6px; height: 28px; margin-right: auto; padding: 0 4px 0 9px; border: 1px solid var(--sa-line, #e5e5ea); border-radius: var(--sa-r-sm, 7px); background: var(--sa-surface, #fff); color: var(--sa-text-2, #515154); font-size: var(--sa-fs-xs, 12px); cursor: pointer; }
+.pj-perm:hover { border-color: var(--sa-line-strong, #d0d0d6); color: var(--sa-text, #1d1d1f); }
+.pj-perm:focus-within { border-color: var(--sa-accent, #3b46d6); box-shadow: 0 0 0 3px var(--sa-accent-soft, #eef0ff); }
+.pj-perm-label { color: var(--sa-text-3, #86868b); font-size: var(--sa-fs-2xs, 11px); }
+.pj-perm select { height: 22px; padding: 0 4px; border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; font-size: var(--sa-fs-xs, 12px); cursor: pointer; }
+.pj-perm select:focus-visible { outline: none; }
+.pj-perm select:disabled { cursor: progress; color: var(--sa-text-3, #86868b); }
+/* 会话自己设了档位时点亮，避免误以为还在跟随全局。 */
+.pj-perm.is-local { border-color: var(--sa-accent-line, #ccd2ff); background: var(--sa-accent-soft, #eef0ff); color: var(--sa-accent-ink, #2b34a8); }
+.pj-perm.is-local .pj-perm-label { color: var(--sa-accent-ink, #2b34a8); opacity: .8; }
 /* 会话级模型选择：模型 + 思考强度，只在内置模型 Agent 的对话里出现。 */
 .sa-modelbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 7px 10px; border: 1px solid var(--sa-line, #e5e5ea); border-radius: var(--sa-r-md, 9px); background: var(--sa-surface-2, #f5f5f7); }
 .sa-modelbar-field { display: flex; align-items: center; gap: 6px; font-size: var(--sa-fs-2xs, 11px); color: var(--sa-text-3, #86868b); }

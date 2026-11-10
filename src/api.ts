@@ -52,6 +52,8 @@ export const api = {
   workCreateProjectChat: (projectId: string, input: { executorId: string; title?: string; writable?: boolean; handle?: number; process?: string; windowTitle?: string }) => request<{ chat: WorkProjectChat; project: WorkProject }>(`/work/projects/${encodeURIComponent(projectId)}/chats`, { method: 'POST', body: JSON.stringify(input) }),
   workDeleteProjectChat: (id: string) => request<{ id: string }>(`/work/chats/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   workRenameProjectChat: (id: string, title: string) => request<{ chat: WorkProjectChat }>(`/work/chats/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
+  // 每条会话自己的权限档位；传空字符串表示回到「跟随设置」。
+  workChatPermission: (id: string, permission: '' | 'read' | 'workspace' | 'full') => request<{ chat: WorkProjectChat }>(`/work/chats/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ permission }) }),
   workProjectChatMessage: (id: string, text: string, clientRequestId?: string, options?: { profileId?: string; effort?: string }) => request<{ ticket: WorkTicket }>(`/work/chats/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(clientRequestId ? { clientRequestId } : {}), ...(options?.profileId ? { profileId: options.profileId } : {}), ...(options?.effort ? { effort: options.effort } : {}) }) }),
   workProjectChatTickets: (id: string) => request<{ tickets: WorkTicket[] }>(`/work/chats/${encodeURIComponent(id)}/tickets`),
   workProjectTeamworks: (projectId: string) => request<{ teamworks: WorkTeamwork[] }>(`/work/projects/${encodeURIComponent(projectId)}/teamworks`),

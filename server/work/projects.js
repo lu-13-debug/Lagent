@@ -4,6 +4,7 @@ import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, r
 import os from 'node:os';
 import path from 'node:path';
 import { workError } from './domain.js';
+import { PERMISSIONS } from './policy.js';
 
 export const PROJECT_LIMITS = Object.freeze({
   maxProjects: 100,
@@ -176,6 +177,18 @@ export function projectService(db, { environment = process.env, home = os.homedi
     db.put('project-chat', next);
     return next;
   }
+  // 单条会话自己的权限档位：空字符串表示跟随全局策略，其余必须是三档之一。
+  // 放在会话上是为了「这个对话要动文件，别的对话只读」这种局部授权。
+  function setChatPermission(id, input = {}) {
+    const chat = getChat(id);
+    const raw = typeof input?.permission === 'string' ? input.permission.trim() : '';
+    if (raw && !PERMISSIONS.includes(raw)) throw workError('permission 仅支持 read、workspace、full，或留空跟随全局设置', 400);
+    const next = { ...chat, updatedAt: now() };
+    if (raw) next.permission = raw;
+    else delete next.permission;
+    db.put('project-chat', next);
+    return next;
+  }
   // 占位标题的会话在收到第一条消息后自动改名为消息摘要，避免侧栏出现多条同名「datagent · Claude Code」。
   function adoptTitle(id, text) {
     const chat = db.get('project-chat', id);
@@ -302,6 +315,7 @@ export function projectService(db, { environment = process.env, home = os.homedi
       autoTitle: !(typeof input.title === 'string' && input.title.trim()),
       sessionId: '',
       writable: input.writable !== false,
+      ...(PERMISSIONS.includes(input.permission) ? { permission: input.permission } : {}),
       source: 'manual',
       createdAt: stamp,
       updatedAt: stamp
@@ -634,6 +648,7 @@ export function projectService(db, { environment = process.env, home = os.homedi
     createChat,
     deleteChat,
     renameChat,
+    setChatPermission,
     adoptTitle,
     touchChat,
     scanSessions,
