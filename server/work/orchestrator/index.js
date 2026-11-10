@@ -57,16 +57,19 @@ export function createOrchestrator({
 
   // 每个执行器在项目里各有一个子对话：工单必须挂在同执行器的对话上，
   // 这样审批、改动快照、项目记忆都还能按对话追溯。
-  function chatFor(run, executorId) {
+  // writable 要跟着步骤走：只读步骤别建可写对话，否则工单摘要会说「只读」而实际能写。
+  function chatFor(run, executorId, writable = false) {
     if (!run.projectId) return null;
     const project = engine.getProject(run.projectId);
     const chats = project.chats || [];
     const host = chats.find(chat => chat.id === run.chatId) || null;
-    const reuse = chats.find(chat => chat.executorId === executorId && (chat.parentChatId || null) === (host?.id || null));
+    const sameParent = chat => (chat.parentChatId || null) === (host?.id || null);
+    const reuse = chats.find(chat => chat.executorId === executorId && sameParent(chat) && (chat.writable === true) === writable);
     if (reuse) return reuse.id;
     const created = engine.createProjectChat(run.projectId, {
       executorId,
-      title: `编排 · ${executorId}`,
+      title: `编排 · ${executorId}${writable ? '' : '（只读）'}`,
+      writable,
       ...(host ? { parentChatId: host.id } : {})
     });
     publish({ type: 'run-chat', runId: run.id, payload: { chatId: created.chat.id, executorId } });
@@ -92,7 +95,7 @@ export function createOrchestrator({
       runs.note(run, 'decision', `「${step.role}」找不到具备 ${Object.keys(step.need).filter(k => step.need[k]).join('/')} 能力的 Agent，已跳过。`);
       return { status: 'skipped', summary: '没有可用 Agent' };
     }
-    const chatId = chatFor(run, executorId);
+    const chatId = chatFor(run, executorId, step.need?.writes === true);
     const ticket = engine.command({
       text: step.prompt,
       executorId,

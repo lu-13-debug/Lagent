@@ -780,12 +780,21 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
           </div>
           <p className="pj-run-goal">{run.goal}</p>
           {run.steps.length > 0 && <ol className="pj-run-steps">
-            {run.steps.map(step => <li key={`${run.id}-${step.index}`} className={`pj-run-step is-${step.status}`}>
-              <span className="pj-run-step-index">{step.index + 1}</span>
-              <span className="pj-run-step-role">{step.role}</span>
-              <span className="pj-run-step-exec">{step.executorId ? (EXECUTOR_LABELS[step.executorId] || step.executorId) : '待分配'}</span>
-              <span className="pj-run-step-status">{RUN_STEP_LABELS[step.status] || step.status}</span>
-            </li>)}
+            {run.steps.map(step => {
+              const inner = <>
+                <span className="pj-run-step-index">{step.index + 1}</span>
+                <span className="pj-run-step-role">{step.role}</span>
+                <span className="pj-run-step-exec">{step.executorId ? (EXECUTOR_LABELS[step.executorId] || step.executorId) : '待分配'}</span>
+                <span className="pj-run-step-status">{RUN_STEP_LABELS[step.status] || step.status}</span>
+              </>;
+              const ticketId = step.ticketId;
+              // 有工单的步骤点开就能看它到底做了什么（执行记录、改动文件都在详情里）。
+              return <li key={`${run.id}-${step.index}`}>
+                {ticketId
+                  ? <button type="button" className={`pj-run-step pj-run-step-btn is-${step.status}`} title="打开这一步的执行记录" onClick={() => onOpenTicket(ticketId)}>{inner}</button>
+                  : <div className={`pj-run-step is-${step.status}`}>{inner}</div>}
+              </li>;
+            })}
           </ol>}
           {run.board.length > 0 && <ul className="pj-run-board">
             {run.board.slice(-3).map((entry, index) => <li key={`${run.id}-board-${index}`}>{entry.text}</li>)}

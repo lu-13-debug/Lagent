@@ -515,6 +515,15 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     activitySeen.set(ticketId, signature);
     publish({ type: 'activity', ticketId, payload: { activity: list.slice(-40), status: task.status || null } });
   }
+  // CLI 执行器在项目里的对话是否可写：决定摘要说「CLI」还是「只读 CLI」。
+  // 编排器给写步骤建的是可写子对话，摘要却一直写「只读」，看起来像没生效。
+  function cliWritable(ticket) {
+    if (ticket?.executorInput?.write === true) return true;
+    if (!ticket?.projectChatId) return false;
+    const chat = db.get('project-chat', ticket.projectChatId);
+    return chat?.writable === true;
+  }
+
   function sync(ticket, assignment, task) {
     if(!task)return;
     announceActivity(ticket.id, task);
@@ -529,7 +538,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const terminal=activeId==='terminal';
     const cli=active.kind==='cli';
     const tool=active.kind==='tool';
-    const label=terminal?'终端命令':cli?(activeId==='model'?'模型 Agent':'只读 CLI'):tool?(activeId==='browser'?'浏览器':activeId==='github'?'GitHub':active.name):'分析';
+    const label=terminal?'终端命令':cli?(activeId==='model'?'模型 Agent':cliWritable(ticket)?'CLI':'只读 CLI'):tool?(activeId==='browser'?'浏览器':activeId==='github'?'GitHub':active.name):'分析';
     const toolInfo=tool?(task.artifacts?.[activeId]||{}):null;
     const toolSummary=activeId==='github'
       ? (toolInfo?.action==='search'

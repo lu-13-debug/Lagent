@@ -1348,6 +1348,32 @@
   text-align: center;
 }
 
+/* 有工单的步骤整行可点：打开这一步的执行记录。
+   写成 .pj-run .pj-run-step-btn 是为了压过 concise 主题的 button{min-height:44px}。 */
+.pj-run .pj-run-step-btn {
+  all: unset;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 0;
+  padding: 3px 6px;
+  margin: 0 -6px;
+  border-radius: var(--sa-r-xs);
+  font-size: var(--sa-fs-sm);
+  color: var(--sa-text-2);
+  cursor: pointer;
+}
+
+.pj-run .pj-run-step-btn:hover {
+  background: var(--sa-surface-2);
+}
+
+.pj-run .pj-run-step-btn:focus-visible {
+  outline: 2px solid var(--sa-accent);
+  outline-offset: 1px;
+}
+
 .pj-run-step-role {
   color: var(--sa-text);
   overflow: hidden;

@@ -44,7 +44,9 @@ function harness(t, options = {}) {
       return { id, chats: [] };
     },
     createProjectChat(projectId, input) {
-      return { chat: { id: `chat-${input.executorId}`, executorId: input.executorId, projectId } };
+      const chat = { id: `chat-${input.executorId}${input.writable ? '-write' : ''}`, executorId: input.executorId, projectId, ...(input.parentChatId ? { parentChatId: input.parentChatId } : {}), writable: input.writable === true };
+      store.put('work-project-chat', chat);
+      return { chat };
     }
   };
   const orchestrator = createOrchestrator({
@@ -195,6 +197,15 @@ test('运行：项目里每个执行器各有一个子对话，工单挂在对�
   const tickets = store.list('work-ticket');
   assert.ok(tickets.length >= 3);
   for (const ticket of tickets) assert.ok(ticket.projectChatId, '项目运行里的工单要挂在对话上');
+  // 写步骤要拿可写对话，否则工单摘要会说「只读」而实际又能写。
+  const chats = store.list('work-project-chat');
+  const writable = chats.filter(chat => chat.writable === true);
+  assert.ok(writable.length >= 1, '至少有一个可写子对话');
+  for (const ticket of tickets) {
+    const chat = chats.find(row => row.id === ticket.projectChatId);
+    if (chat && chat.writable === true) continue;
+    assert.ok(chat, '工单要挂在本项目新建的子对话上');
+  }
   created.push(run.id);
   assert.ok(created.length === 1);
 });
