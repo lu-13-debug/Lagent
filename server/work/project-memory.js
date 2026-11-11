@@ -55,6 +55,8 @@ export function createProjectMemory(db, { now = () => new Date().toISOString() }
       executorId: text(input.executorId, 60) || null,
       title: text(input.title, MEMORY_LIMITS.titleChars) || '一次执行',
       status: text(input.status, 40) || null,
+      // change：动了文件；note：没动文件但留下了结论（取舍、约束、待办）。
+      kind: input.kind === 'note' ? 'note' : 'change',
       summary: text(input.summary, MEMORY_LIMITS.summaryChars),
       files: textList(input.files, MEMORY_LIMITS.files, 200),
       improvements: textList(input.improvements, MEMORY_LIMITS.items, MEMORY_LIMITS.itemChars),
@@ -100,7 +102,8 @@ export function createProjectMemory(db, { now = () => new Date().toISOString() }
     const lines = [];
     for (const row of rows) {
       const who = row.executorId || 'Agent';
-      lines.push(`- ${dayLabel(row.createdAt)} · ${who} · ${row.title}`);
+      const what = row.kind === 'note' ? '结论' : '改动';
+      lines.push(`- ${dayLabel(row.createdAt)} · ${who} · ${what}：${row.title}`);
       if (row.summary) lines.push(`  做了什么：${row.summary}`);
       if (row.improvements.length) lines.push(`  改进：${row.improvements.join('；')}`);
       if (row.openQuestions.length) lines.push(`  待办：${row.openQuestions.join('；')}`);
@@ -110,7 +113,7 @@ export function createProjectMemory(db, { now = () => new Date().toISOString() }
     for (const row of db.list('project-memory').filter(entry => entry.projectId === projectId)) {
       for (const question of row.openQuestions) if (!open.includes(question)) open.push(question);
     }
-    const body = [`项目记忆（最近 ${rows.length} 条 / 共 ${total} 条）`, ...lines, ...(open.length ? ['还没解决的问题：', ...open.slice(0, 8).map(item => `- ${item}`)] : [])].join('\n');
+    const body = [`项目记忆（最近 ${rows.length} 条 / 共 ${total} 条）`, '只记项目的关键改动：动了文件，或留下了结论；同一项目下的所有对话共享，单次对话的闲聊不写进来。', ...lines, ...(open.length ? ['还没解决的问题：', ...open.slice(0, 8).map(item => `- ${item}`)] : [])].join('\n');
     return body.length > MEMORY_LIMITS.digestChars ? `${body.slice(0, MEMORY_LIMITS.digestChars)}…` : body;
   }
 

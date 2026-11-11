@@ -1403,6 +1403,11 @@
   line-height: 1.6;
   color: var(--sa-text-2);
   overflow-wrap: anywhere;
+  /* 任务书可能很长：卡片里只留四行，完整内容在悬停标题和派单弹窗里。 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
 }
 
 .pj-run-steps {
@@ -1573,5 +1578,124 @@
 
   .pj-run-step-exec {
     display: none;
+  }
+}
+
+/* 派单前的任务书版本：三张卡片，重点是可读、可比较、可一键分发。 */
+.pj-prompts {
+  display: grid;
+  gap: 12px;
+  padding: 4px 20px 18px;
+}
+
+.pj-prompts-goal {
+  margin: 0;
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-sm);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.pj-prompts-warn {
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-warning-soft);
+  color: var(--sa-warning);
+  font-size: var(--sa-fs-xs);
+}
+
+.pj-prompt-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 52vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.pj-prompt-card {
+  display: grid;
+  gap: 8px;
+  padding: 11px 13px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface);
+  transition: border-color var(--sa-t-fast) var(--sa-ease), box-shadow var(--sa-t-fast) var(--sa-ease);
+}
+
+.pj-prompt-card:hover {
+  border-color: var(--sa-accent-line);
+  box-shadow: var(--sa-shadow-sm);
+}
+
+.pj-prompt-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pj-prompt-head strong {
+  font-size: var(--sa-fs-base);
+  color: var(--sa-text);
+}
+
+.pj-prompt-index {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--sa-accent-soft);
+  color: var(--sa-accent-ink);
+  font-size: var(--sa-fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.pj-prompt-focus {
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-xs);
+}
+
+.pj-prompt-body {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-xs);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 170px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.pj-prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pj-prompt-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+@media (max-width: 760px) {
+  .pj-prompts {
+    padding: 2px 12px 14px;
+  }
+
+  .pj-prompt-list {
+    max-height: 46vh;
+  }
+
+  .pj-prompt-card {
+    padding: 10px;
   }
 }

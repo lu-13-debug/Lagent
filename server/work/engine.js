@@ -11,6 +11,7 @@ import { decideTeamProposal, projectTeamTask, reviewTeamNode, teamEventKey } fro
 import { cancelTicketEffects, claimDue, complete, enqueue, fail as failOutbox, recoverRunningEffects, sanitizeOutboxError, WORK_EFFECT_KIND } from './outbox.js';
 import { PROJECT_CHAT_EXECUTORS, projectService } from './projects.js';
 import { createProjectMemory, summarizeExecution } from './project-memory.js';
+import { isKeyChange, normalizePrompts, refineLocal } from './prompt-refiner.js';
 import { analyzeTask } from './task-analyzer.js';
 import * as teamwork from './teamwork.js';
 
@@ -168,6 +169,18 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       return '';
     }
   };
+  /**
+   * 内置 Agent 把项目记忆同步给协作的外部 Agent。
+   * 外部 CLI 不会自己去读记忆库，只能从提示词里拿到这一段，所以要显式带上。
+   */
+  const sharedMemoryBrief = project => {
+    try {
+      const digest = memory.digest(project.id, { limit: 6 });
+      return digest ? `【项目关键改动 · 由内置 Agent 同步给你】\n${digest}` : '';
+    } catch {
+      return '';
+    }
+  };
   // 按工作目录反查项目：执行器只知道自己的 workspace。
   const projectByPath = value => {
     if (typeof value !== 'string' || !value.trim()) return null;
@@ -274,8 +287,11 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const isAcp = Array.isArray(executor.capabilities) && executor.capabilities.includes('acp');
     const isModel = executor?.id === 'model';
     const write = chat.writable !== false && permission !== 'read';
+    // 计划步骤可以带一份已经写好的任务书（协作派单就是这么给的）；
+    // 有就用它当正文，别再退回到一句标题。
+    const body = typeof options?.prompt === 'string' && options.prompt.trim() ? options.prompt.trim() : text;
     return {
-      prompt: context ? `${context}\n${text}` : text,
+      prompt: context ? `${context}\n${body}` : body,
       maxTurns,
       workspace: project.path,
       write,
@@ -559,6 +575,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   }
   /** 把一次完成/失败的执行写成项目记忆；有模型时异步换成更好的总结。 */
   function recordProjectMemory(project, { ticket, status, summary, files, executorId, projectChatId }) {
+    // 记忆只留「关键改动」：真的动了文件，或者留下了能复用的结论。
+    // 只读排查、纯问答不写，否则同一个项目的其他对话会被这些过程噪声淹没。
+    if (!isKeyChange({ summary, files, status })) return null;
     let entry = null;
     try {
       const base = summarizeExecution({
@@ -569,6 +588,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       });
       entry = memory.add(project.id, {
         ...base,
+        // 有文件变化记成 change，只有结论记成 note：摘要里分开显示，读的人一眼能分清。
+        kind: Array.isArray(files) && files.length ? 'change' : 'note',
         ticketId: ticket.id,
         projectChatId: projectChatId || null,
         executorId,
@@ -1534,6 +1555,29 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       }
     },
     plan(input){return startPlan(input);},
+    /**
+     * 把用户「说得不够细」的话改写成三份任务书，交给用户挑一份再分发。
+     * 只在协作/编排入口调用；普通单 Agent 对话不该多一步确认。
+     */
+    async suggestPrompts(input){
+      const goal=typeof input?.goal==='string'?input.goal.trim():'';
+      if(!goal||goal.length>4000)throw workError('任务描述须为 1–4000 字');
+      const agentIds=Array.isArray(input?.agentIds)?input.agentIds.filter(id=>typeof id==='string'&&id.trim()).map(id=>id.trim()).slice(0,4):[];
+      const projectChat=projectContext(input?.projectChatId);
+      let projectRow=projectChat?projectChat.project:null;
+      if(!projectRow&&typeof input?.projectId==='string'&&input.projectId.trim())projectRow=db.get('project',input.projectId.trim())||null;
+      const memoryBrief=projectRow?memory.digest(projectRow.id,{limit:5}):'';
+      const availability=brain?.availability?.()||{ok:false};
+      if(availability.ok){
+        try{
+          const refined=await brain.refine({goal,agents:agentIds,memory:memoryBrief,project:projectRow?{name:projectRow.name,path:projectRow.path}:null});
+          return {prompts:normalizePrompts(refined.prompts,{goal,agents:agentIds}),source:'model',model:refined.model};
+        }catch(error){
+          return {prompts:refineLocal({goal,agents:agentIds,memory:memoryBrief}),source:'local',modelError:error?.message||'模型改写失败，已用本地模板。'};
+        }
+      }
+      return {prompts:refineLocal({goal,agents:agentIds,memory:memoryBrief}),source:'local'};
+    },
     getPlan(id){return readPlan(id);},
     cancelPlan(id){return stopPlan(id);},
     async commander(input){
@@ -1580,6 +1624,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         return match?{...match,executorId:id}:{executorId:id,title:`执行任务第 ${index+1} 部分`,scope:[]};
       });
       const brief=[goal,...(analysis.understanding||[]).slice(0,4)].join('\n');
+      const memoryBrief=projectRecord?sharedMemoryBrief(projectRecord):'';
+      const others=chosen.map(step=>`${step.executorId}（${step.title}）`).join('、');
       const steps=[{
         executorId:'model',
         text:`理解并拆解：${goal}`,
@@ -1587,18 +1633,31 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           '你在一个多 Agent 团队里担任协调者，负责先把任务想清楚再分派，这一步不要修改任何文件。',
           `目标：${goal}`,
           brief&&brief!==goal?`我的初步理解：\n${brief}`:'',
-          `接下来会并行交给：${chosen.map(step=>`${step.executorId}（${step.title}）`).join('、')}。`,
+          memoryBrief,
+          `接下来会并行交给：${others}。`,
           '请先用两三句话说明你如何理解这个任务，再逐条写清每个执行者要做什么、交付什么、验收标准是什么。',
+          '分派时把每个人要写的文件写清楚，避免两个 Agent 抢同一个文件。',
         ].filter(Boolean).join('\n\n'),...(profileId?{profileId}:{})}
       }];
       chosen.forEach(step=>{
         const model=typeof models[step.executorId]==='string'?models[step.executorId].trim():'';
+        // 外部 Agent 拿到的是完整任务书：目标、它的分工、别重复别人做过的、交付与证据要求。
+        // 以前这里只有一行 step.title，Agent 只能靠猜，写完也不知道算不算完成任务。
+        const prompt=[
+          `你是这次协作里的执行者之一，负责其中一部分。`,
+          `整个任务：${goal}`,
+          `你负责的部分：${step.title||'执行任务'}${Array.isArray(step.scope)&&step.scope.length?`（改动范围：${step.scope.join('、')}）`:''}${step.output?`\n期望产出：${step.output}`:''}`,
+          `同时参与的还有：${others}。只做你这一部分，不要替别人改他要负责的文件。`,
+          memoryBrief,
+          '做事要求：先看现状再动手；改完确认真的生效（命令能跑通、页面能看到、语法没错）；',
+          '最后用几句话说清：你改了哪些文件、怎么验证的、还有什么没做完。',
+        ].filter(Boolean).join('\n\n');
         steps.push({
           executorId:step.executorId,
           text:step.title||'执行任务',
           ...(Array.isArray(step.scope)&&step.scope.length?{scope:step.scope}:{}),
           dependsOn:[0],
-          ...(model?{executorInput:{prompt:step.title||'执行任务',model}}:{}),
+          ...(model?{executorInput:{prompt,model}}:{executorInput:{prompt}}),
         });
       });
       steps.push({

@@ -10,6 +10,15 @@ import { claudeCodeExecutor } from './work/executors/claude-code.js';
 import { codexExecutor } from './work/executors/codex.js';
 import { modelExecutor } from './work/executors/model.js';
 
+async function waitFor(predicate, message = '等待条件超时', timeoutMs = 4000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error(message);
+}
+
 function harness(t) {
   const root = mkdtempSync(join(tmpdir(), 'dataagent-collaborate-'));
   const home = join(root, 'home');
@@ -213,4 +222,87 @@ test('删除工作文件夹或对话时，名下的工单一起清掉，不留�
   assert.equal(byProject.removed, 1);
   assert.equal(store.get('work-ticket', kept.id) ?? null, null);
   assert.equal(store.list('work-ticket').filter(row => row.id === kept.id).length, 0);
+});
+
+test('派单前的任务书：没有模型时用本地模板给三版', async t => {
+  const { engine } = harness(t);
+  const result = await engine.suggestPrompts({ goal: '给播放器加一个音量记忆功能', agentIds: ['claude-code'] });
+  assert.equal(result.source, 'local', '测试环境没有可用模型，应回退本地模板');
+  assert.equal(result.prompts.length, 3);
+  assert.deepEqual(result.prompts.map(item => item.id), ['constraints', 'steps', 'acceptance']);
+  for (const item of result.prompts) {
+    assert.match(item.prompt, /给播放器加一个音量记忆功能/);
+    assert.match(item.prompt, /claude-code/);
+  }
+  await assert.rejects(() => engine.suggestPrompts({ goal: '   ' }), /1–4000/);
+});
+
+test('项目记忆按项目隔离，摘要里说明只记关键改动', async t => {
+  const { engine, store } = harness(t);
+  const root = mkdtempSync(join(tmpdir(), 'dataagent-memory-iso-'));
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  mkdirSync(join(root, 'one'), { recursive: true });
+  mkdirSync(join(root, 'two'), { recursive: true });
+  const one = engine.importProject({ path: join(root, 'one'), name: 'one' }).project;
+  const two = engine.importProject({ path: join(root, 'two'), name: 'two' }).project;
+
+  const entry = (id, projectId, title, kind, files) => store.put('work-project-memory', {
+    id,
+    projectId,
+    title,
+    kind,
+    summary: '',
+    files,
+    improvements: [],
+    openQuestions: [],
+    executorId: 'model',
+    source: 'local',
+    createdAt: '2026-11-11T01:00:00.000Z',
+    updatedAt: '2026-11-11T01:00:00.000Z',
+  });
+  entry('mem-one-1', one.id, '新建 player.js 与 styles.css', 'change', ['player.js', 'styles.css']);
+  entry('mem-two-1', two.id, '另一个项目的改动', 'change', ['other.js']);
+
+  const digestOne = engine.projectMemoryDigest(one.id).digest;
+  assert.match(digestOne, /新建 player\.js 与 styles\.css/, '本项目能看到自己的改动');
+  assert.match(digestOne, /改动：/, '条目要标出「改动」还是「结论」');
+  assert.match(digestOne, /同一项目下的所有对话共享/, '摘要里说明共享范围与收录标准');
+  assert.doesNotMatch(digestOne, /另一个项目的改动/, '不同项目不互相污染');
+
+  const digestTwo = engine.projectMemoryDigest(two.id).digest;
+  assert.match(digestTwo, /另一个项目的改动/);
+  assert.doesNotMatch(digestTwo, /player\.js/, '另一个项目看不到本项目文件');
+});
+
+test('协作时把项目关键改动同步给外部 Agent', async t => {
+  const { engine, store } = harness(t);
+  const projectDir = mkdtempSync(join(tmpdir(), 'dataagent-memory-share-'));
+  t.after(() => rmSync(projectDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const project = engine.importProject({ path: projectDir }).project;
+  store.put('work-project-memory', {
+    id: 'mem-share-1',
+    projectId: project.id,
+    title: '约定用 localStorage 存音量',
+    kind: 'note',
+    summary: '播放器的音量不走后端，只存本地。',
+    files: [],
+    improvements: [],
+    openQuestions: [],
+    executorId: 'model',
+    source: 'local',
+    createdAt: '2026-11-11T01:00:00.000Z',
+    updatedAt: '2026-11-11T01:00:00.000Z',
+  });
+
+  const result = await engine.collaborate({
+    goal: '给播放器加音量记忆',
+    projectId: project.id,
+    agentIds: ['claude-code'],
+  });
+  const claudeStep = result.plan.steps.find(step => step.executorId === 'claude-code');
+  const prompt = store.get('work-control', claudeStep.ticketId).executorInput.prompt;
+  assert.match(prompt, /整个任务：给播放器加音量记忆/, '外部 Agent 拿到完整任务书');
+  assert.match(prompt, /项目关键改动/, '项目记忆要同步给协作 Agent');
+  assert.match(prompt, /localStorage/, '记忆里的结论要真的带过去');
+  assert.match(prompt, /你改了哪些文件/, '要求给出交付证据');
 });

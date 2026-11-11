@@ -43,6 +43,21 @@ const SUMMARY_SYSTEM = [
   '只输出 JSON：{"summary":"…","improvements":["…"],"openQuestions":["…"]}',
 ].join('\n');
 
+const REFINE_SYSTEM = [
+  '你是 DataAgent 的派单员。用户要派活给几个 Agent，但他的话可能不够具体。',
+  '你的工作：把他的原话改写成三条可以直接执行的任务书，三条侧重不同，不要只是换措辞。',
+  '1) constraints：补齐边界——能改哪些、不能改哪些、技术限制、禁止项；',
+  '2) steps：补步骤——先摸现状、再小步实现、最后自检，每步都要能验证；',
+  '3) acceptance：补验收——先给 3–5 条可检查的完成标准，再按标准实现。',
+  '硬性要求：',
+  '- 保留用户原本的目标，不许换任务、不许删需求；',
+  '- 每条任务书开头就是用户的原话目标（可以整理语序，但不能改意思）；',
+  '- 每条都写清「执行者是谁」「做完要给出什么证据」；',
+  '- 不要编造文件名或命令，除非用户提到过；',
+  '- 每条 150–500 字，中文，不要用代码块包裹。',
+  '只输出 JSON：{"prompts":[{"id":"constraints","label":"补齐约束版","focus":"一句话说明侧重点","prompt":"任务书正文"}]}',
+].join('\n');
+
 const TOOLS = [
   {
     type: 'function',
@@ -88,15 +103,39 @@ const text = (value, max) => (typeof value === 'string' ? value.trim().slice(0, 
 const list = (value, max, chars) =>
   Array.isArray(value) ? value.filter(item => typeof item === 'string' && item.trim()).slice(0, max).map(item => text(item, chars)) : [];
 
+/**
+ * 模型偶尔会在 JSON 字符串里留裸换行或尾逗号——直接 JSON.parse 会挂。
+ * 这里做一次无损修补：字符串内的换行转义、去掉对象/数组末尾多余逗号。
+ */
+function repairJson(text) {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (escaped) { out += ch; escaped = false; continue; }
+    if (ch === '\\') { out += ch; escaped = true; continue; }
+    if (ch === '"') { inString = !inString; out += ch; continue; }
+    if (inString && (ch === '\n' || ch === '\r')) { out += '\\n'; continue; }
+    if (inString && ch === '\t') { out += '\\t'; continue; }
+    out += ch;
+  }
+  return out.replace(/,\s*([}\]])/g, '$1');
+}
+
 function parseJsonObject(raw) {
   const source = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   const start = source.indexOf('{');
   const end = source.lastIndexOf('}');
   if (start < 0 || end <= start) throw brainError('BRAIN_FORMAT', '模型没有返回可解析的 JSON。', 502);
+  const slice = source.slice(start, end + 1);
   try {
-    return JSON.parse(source.slice(start, end + 1));
+    return JSON.parse(slice);
   } catch {
-    throw brainError('BRAIN_FORMAT', '模型返回的 JSON 无法解析。', 502);
+    try {
+      return JSON.parse(repairJson(slice));
+    } catch {
+      throw brainError('BRAIN_FORMAT', '模型返回的 JSON 无法解析。', 502);
+    }
   }
 }
 
@@ -338,5 +377,36 @@ export function createWorkBrain({ modelHub, fetchImpl = fetch, perCallTimeoutMs 
     };
   }
 
-  return { availability, think, summarize, __test__: { callTool, normalizeSteps } };
+  /**
+   * 把用户不够具体的话改写成几份可执行的任务书。
+   * 调用方拿不到结果时会回退到本地模板，所以这里失败就抛，让上层决定。
+   */
+  async function refine({ goal, agents = [], memory = '', project = null } = {}) {
+    const context = planStage();
+    if (!context) throw brainError('BRAIN_UNAVAILABLE', '还没有可用的规划模型。');
+    const { payload } = await callModel(
+      context,
+      [
+        { role: 'system', content: REFINE_SYSTEM },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            goal: text(goal, 4000),
+            agents: Array.isArray(agents) ? agents.slice(0, 4).map(id => text(id, 60)) : [],
+            project: project ? { name: text(project.name, 80), path: text(project.path, 300) } : null,
+            memory: text(memory, 2000),
+          }),
+        },
+      ],
+      null,
+    );
+    const message = payload?.choices?.[0]?.message;
+    const parsed = parseJsonObject(typeof message?.content === 'string' ? message.content : '');
+    return {
+      prompts: Array.isArray(parsed?.prompts) ? parsed.prompts : [],
+      model: { provider: context.settings.provider || '自定义接口', model: context.settings.model },
+    };
+  }
+
+  return { availability, think, summarize, refine, __test__: { callTool, normalizeSteps } };
 }

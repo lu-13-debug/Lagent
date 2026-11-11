@@ -3,7 +3,7 @@ import { AppWindow, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, C
 import { api } from '../api';
 import { Modal } from './ui';
 import { ChatModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
-import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkRun, WorkTeamwork, WorkTicket } from '../superagent';
+import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkRun, WorkTeamwork, WorkTicket } from '../superagent';
 import '../projects.css';
 
 type Props = {
@@ -157,6 +157,8 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   // 对话里的协作：内置 Agent 当主对话，另外挑 1–3 个外部 Agent 一起做，结果汇总回这里。
   const [collabOpen, setCollabOpen] = useState(false);
   const [collabAgents, setCollabAgents] = useState<string[]>([]);
+  // 派单前的任务书版本：内置 Agent 把不够具体的话改写成三份，用户挑一份再分发。
+  const [promptAsk, setPromptAsk] = useState<{ goal: string; source: string; modelError?: string; options: WorkPromptOption[] } | null>(null);
   // 协作任务：软件把目标拆成三份、分派、再组装成一个游戏。
   const [teamworkOpen, setTeamworkOpen] = useState(false);
   const [teamworkGoal, setTeamworkGoal] = useState('');
@@ -449,6 +451,32 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const send = async () => {
     const text = chatDraft.trim();
     if (!chat || !text) return;
+    // 协作与深度编排都是「派活」：先把用户的话改写成三份任务书让他挑，
+    // 挑完再分发。单 Agent 普通对话不走这一步，免得每次都多一次确认。
+    if (chat.executorId === 'model' && (collabAgents.length > 0 || orchestrate)) {
+      setBusy('send');
+      try {
+        const refined = await api.workSuggestPrompts({
+          goal: text,
+          // 深度编排时还没挑协作 Agent，这里用「能接项目活的执行器」当候选写进任务书。
+          agentIds: collabAgents.length ? collabAgents : dispatchExecutors,
+          ...(project?.id ? { projectId: project.id } : {}),
+          projectChatId: chat.id,
+        });
+        if (!refined.prompts.length) {
+          await deliver(text);
+          return;
+        }
+        setPromptAsk({ goal: text, source: refined.source, modelError: refined.modelError, options: refined.prompts });
+      } catch (cause) { notify((cause as Error).message, true); }
+      finally { setBusy(''); }
+      return;
+    }
+    await deliver(text);
+  };
+  /** 真的把一条消息交给 Agent（状态机在这里分三个入口）。 */
+  const deliver = async (text: string) => {
+    if (!chat || !text.trim()) return;
     setBusy('send');
     try {
       // 协作：本条对话是内置 Agent 时，可以拉着另外 1–3 个 Agent 一起做。
@@ -856,7 +884,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
             <span className={`pj-run-status is-${run.status}`}>{RUN_STATUS_LABELS[run.status] || run.status}</span>
             <span className="pj-run-time">{new Date(run.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
           </div>
-          <p className="pj-run-goal">{run.goal}</p>
+          <p className="pj-run-goal" title={run.goal}>{run.goal}</p>
           {total > 0 && <div className="pj-run-progress" role="progressbar" aria-valuenow={done} aria-valuemin={0} aria-valuemax={total} aria-label="已完成的步骤">
             <span className="pj-run-progress-bar"><i style={{ width: `${pct}%` }} /></span>
             <span className="pj-run-progress-text">{done}/{total} 步</span>
@@ -1271,6 +1299,35 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
         </footer>
       </div>
     </div>}
+    {promptAsk && <Modal title="挑一份任务书再分发" subtitle="三个版本侧重不同；选中的那一份会原样交给 Agent 执行。" close={() => setPromptAsk(null)} wide>
+      <div className="pj-prompts">
+        <p className="pj-prompts-goal">原来的要求：{promptAsk.goal.slice(0, 240)}</p>
+        {promptAsk.modelError && <p className="pj-prompts-warn">模型改写失败，已回退本地模板：{promptAsk.modelError}</p>}
+        <ul className="pj-prompt-list">
+          {promptAsk.options.map((option, index) => (
+            <li key={option.id} className="pj-prompt-card">
+              <div className="pj-prompt-head">
+                <span className="pj-prompt-index">{index + 1}</span>
+                <strong>{option.label}</strong>
+                {option.focus && <span className="pj-prompt-focus">{option.focus}</span>}
+              </div>
+              <p className="pj-prompt-body">{option.prompt}</p>
+              <div className="pj-prompt-actions">
+                <button type="button" className="pj-btn pj-primary pj-small" disabled={busy === 'send'} onClick={() => {
+                  const chosen = option.prompt;
+                  setPromptAsk(null);
+                  setChatDraft('');
+                  void deliver(chosen);
+                }}>用这一版分发<ChevronRight size={12} /></button>
+              </div>
+            </li>
+          ))}
+        </ul>
+        <footer className="pj-prompt-footer">
+          <button type="button" className="pj-btn" onClick={() => setPromptAsk(null)}>取消</button>
+        </footer>
+      </div>
+    </Modal>}
     {confirm && <Modal title={confirm.title} subtitle={confirm.quote ? '这一步无法撤销。' : confirm.body} close={() => { if (!confirmBusy) setConfirm(null); }}>
       <div className="pj-confirm">
         {confirm.quote && <blockquote className="pj-confirm-quote">{confirm.quote}</blockquote>}

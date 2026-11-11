@@ -29,6 +29,13 @@ export type WorkPlanSummary = Pick<WorkPlan, 'id' | 'goal' | 'status' | 'autoRun
 export interface WorkTaskAnalysisStep {
   index: number; title: string; executorId: string; scope: string[]; output: string; readOnly: boolean; dependsOn: number[]; needsApproval: boolean;
 }
+/** 派单前给用户挑的任务书版本：同一个目标，三种侧重。 */
+export interface WorkPromptOption {
+  id: string;
+  label: string;
+  focus: string;
+  prompt: string;
+}
 export interface WorkTaskAnalysis {
   goal: string;
   category: string;

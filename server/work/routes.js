@@ -69,6 +69,8 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/plans/suggest',async(req,res)=>res.json(await engine.suggestPlan(req.body)));
   app.post('/api/work/commander',async(req,res)=>res.status(201).json(await engine.commander(req.body)));
   app.post('/api/work/analyze',async(req,res)=>res.json(await engine.analyze(req.body)));
+  // 派单前把用户的话改写成几份任务书：前端让用户挑一份再开始协作。
+  app.post('/api/work/prompts',async(req,res)=>res.json(await engine.suggestPrompts(req.body)));
   app.post('/api/work/collaborate',async(req,res)=>res.status(201).json(await engine.collaborate(req.body)));
   app.get('/api/work/commander/:id/report',(req,res)=>res.json(engine.commanderReport(req.params.id)));
   app.get('/api/work/plans/:id',(req,res)=>res.json({plan:engine.getPlan(req.params.id)}));
@@ -112,8 +114,10 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/runs', runRoute(async req => {
     const started = await orchestrator();
     const goal = typeof req.body?.goal === 'string' ? req.body.goal.trim() : '';
-    if (!goal || goal.length > 300) {
-      const error = new Error('目标须为 1–300 字');
+    // 派单前的任务书可能比一句话长得多（三份版本里最细的那份常常上千字），
+    // 这里放宽到与对话消息一致的上限，否则选完版本反而发不出去。
+    if (!goal || goal.length > 4000) {
+      const error = new Error('目标须为 1–4000 字');
       error.status = 400;
       throw error;
     }
