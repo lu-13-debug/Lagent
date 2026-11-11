@@ -42,7 +42,7 @@ export function createAcpExecutor({
   command,
   args = [],
   environment = process.env,
-  timeoutMs = 300000,
+  timeoutMs = Number(process.env.DATAAGENT_CLI_TIMEOUT_MS) || 1_800_000,
   spawnImpl,
   capabilities = ['acp', 'agent', 'chat']
 } = {}) {

@@ -14,7 +14,7 @@ const READ_MAX_LINES = 800;
 const LIST_LIMIT = 120;
 const HITS_LIMIT = 40;
 const ACTIVITY_LIMIT = 60;
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.dataagent', 'data', '.venv', '__pycache__', 'coverage']);
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.dataagent', 'data', '.venv', '__pycache__', 'coverage', '.spec-workflow', '.browser-smoke-profile', '.playwright-mcp']);
 const WRITE_TOOLS = new Set(['write_file', 'replace_in_file', 'move_path', 'delete_path']);
 const READ_COMMAND = /^(git\s+(status|diff|log|show|branch)\b[^|;&<>]*|node\s+--check\s+\S+)$/i;
 // 纯查看类命令：只列、只看，不写不改。
@@ -29,13 +29,27 @@ const READ_CMDLETS = new Set([
 function isReadOnlyShell(command) {
   const value = String(command || '').trim();
   if (!value) return false;
-  if (/[;<>&$`]/.test(value)) return false;
-  const stages = value.split('|').map(part => part.trim()).filter(Boolean);
-  if (!stages.length) return false;
-  return stages.every(stage => {
-    const name = stage.split(/\s+/)[0].replace(/^\.\\/, '').toLowerCase();
-    return READ_CMDLETS.has(name);
+  // `< > & $ \`` 都能写文件或起子命令，一律不算查看；分号只是「连着跑几条」，逐条判断。
+  if (/[<>&$`]/.test(value)) return false;
+  const segments = value.split(';').map(part => part.trim()).filter(Boolean);
+  if (!segments.length) return false;
+  return segments.every(segment => {
+    // 每条都可能是「git status; git log」这种只读命令，也可能是一串管道。
+    if (isReadOnlySegment(segment)) return true;
+    const stages = segment.split('|').map(part => part.trim()).filter(Boolean);
+    if (!stages.length) return false;
+    return stages.every(stage => {
+      const name = stage.split(/\s+/)[0].replace(/^\.\\/, '').toLowerCase();
+      return READ_CMDLETS.has(name);
+    });
   });
+}
+// 单条只读命令：git 的只读子命令、node --check，或白名单里的查看命令。
+function isReadOnlySegment(segment) {
+  const value = String(segment || '').trim();
+  if (!value) return false;
+  if (READ_COMMAND.test(value) || SAFE_READ.test(value)) return true;
+  return false;
 }
 // 三档权限，语义与 dsh 一致：仅查看 / 只在工作区内修改 / 完全权限。
 const PERMISSIONS = ['read', 'workspace', 'full'];
@@ -407,6 +421,8 @@ export function modelSystemPrompt({ maxSteps, write, permission = write ? 'works
     `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content,append?}、replace_in_file{path,find,replace,all?}、move_path{from,to}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command,shell?}、project_changes{}。`,
     '接手一个已经有改动的项目时，先调 project_changes：它会告诉你谁在什么时候改了什么文件；然后按需 read_file 读那一段（offset/limit 都是行号，返回带行号，超长会提示下次从第几行接着读），或 run_command 跑 git diff 看差异，不要动辄把整个文件从头读一遍。',
     '注意：环境是 Windows。要跑 PowerShell 就写 run_command{command:"<脚本本体>",shell:"powershell"}，command 直接给脚本，不要自己再拼 powershell -Command 和引号。',
+    '查文件内容一律用 search_code；不要用 Select-String / findstr / Get-Content 管道去搜（管道里带 ForEach-Object、脚本块会被当成写操作，卡在等用户确认上）。真要跑命令，先只用 git status / git diff / node --check 这类。',
+    '检查语法就一条一条跑 run_command{command:"node --check js/game.js"}，一个文件一条；不要写 foreach / for 循环把多个文件包起来（脚本块会被判成需要确认，任务会停在那里等用户点允许）。',
     '路径可以写相对工作目录的路径，也可以写绝对路径。',
     '每次工具调用的 content 控制在一两百行以内：输出有长度上限，写长文件就先 write_file 骨架，再用 write_file{path,content:"<后续片段>",append:true} 一段段追加，最后 read_file 复核。',
     `当前权限档位：${PERMISSION_LABELS[mode]}（${mode}）。`,

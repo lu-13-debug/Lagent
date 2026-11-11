@@ -52,7 +52,7 @@ export function claudeCodeExecutor({
   store,
   cwd,
   binary = process.env.DATAAGENT_CLAUDE_CLI,
-  timeoutMs = 900_000,
+  timeoutMs = Number(process.env.DATAAGENT_CLI_TIMEOUT_MS) || 1_800_000,
   maxOutputBytes = 8 * 1024 * 1024,
   spawnImpl,
   environment = process.env

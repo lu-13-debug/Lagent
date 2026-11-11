@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { accessSync, constants, statSync } from 'node:fs';
 import path from 'node:path';
 import { workError } from '../domain.js';
+import { pruneClutter } from '../cleanup.js';
 
 const statusError = (message, status = 400) => Object.assign(workError(message, status), { status });
 const ALLOWED_ENVIRONMENT = [
@@ -15,6 +16,14 @@ const USAGE_KEYS = [
   'num_turns', 'duration_ms', 'duration_api_ms'
 ];
 const ARTIFACT_PATH_LIMIT = 100;
+// CLI 偶尔会在 stderr 打这种一句话的提示，它不是错误原因，别拿它当失败理由。
+const STDERR_NOISE = /^Reading additional input from stdin\.{0,3}$/i;
+
+function stderrNoise(text) {
+  const value = String(text || '').trim();
+  if (!value) return true;
+  return value.split('\n').map(line => line.trim()).filter(Boolean).every(line => STDERR_NOISE.test(line));
+}
 
 function executableStatus(binary) {
   if (typeof binary !== 'string' || !binary.trim()) return { available: false, executable: null };
@@ -241,6 +250,7 @@ export function createCliExecutor({
     if (controller.done) return task;
     controller.done = true;
     clearTimeout(controller.timer);
+    if (controller.ticker) clearInterval(controller.ticker);
     controllers.delete(task.id);
     const stdout = Buffer.concat(controller.stdout).toString('utf8');
     const stderr = Buffer.concat(controller.stderr).toString('utf8');
@@ -251,7 +261,14 @@ export function createCliExecutor({
       parsed = { summary: '', usage: {}, error: 'CLI 结构化输出解析失败', artifacts: [], stats: {} };
     }
     if (!parsed || typeof parsed !== 'object') parsed = { summary: '', usage: {}, error: 'CLI 结构化输出无效', artifacts: [], stats: {} };
-    if (!parsed.error && controller.timedOut) parsed.error = 'CLI 执行超时';
+    // 超时是最需要说清的原因：它会盖掉 stderr 里的噪声（比如 codex 那句 "Reading additional input from stdin..."），
+    // 并且明确告诉用户「文件可能已经改了一半」，否则只会看到一句看不懂的报错。
+    if (controller.timedOut) {
+      const minutes = Math.max(1, Math.round((timeoutMs / 60000) * 10) / 10);
+      parsed.error = `${name} 执行超过 ${minutes} 分钟被中止，已停止等待；它可能已经改了一部分文件，先看产出再决定重试还是手动收尾。`;
+    } else if (stderrNoise(parsed.error)) {
+      parsed.error = '';
+    }
     if (!parsed.error && error) parsed.error = `CLI 启动失败：${error.message}`;
     if (!parsed.error && code !== 0) parsed.error = `CLI 退出码 ${code ?? 'unknown'}`;
     const success = !controller.timedOut && !error && code === 0 && !parsed.error;
@@ -259,7 +276,11 @@ export function createCliExecutor({
     task.endedAt = new Date().toISOString();
     task.updatedAt = task.endedAt;
     task.error = success ? undefined : sanitizeText(parsed.error, 2000) || 'CLI 执行失败';
-    task.artifacts = { ...(task.artifacts || {}), cli: artifact(task, controller, parsed, { exitCode: code, signal }, task.workspace || workspace) };
+    const cleaned = pruneClutter(task.workspace || workspace, task.startedAt);
+    task.artifacts = {
+      ...(task.artifacts || {}),
+      cli: { ...artifact(task, controller, parsed, { exitCode: code, signal }, task.workspace || workspace), ...(cleaned.length ? { cleaned } : {}) }
+    };
     return persist(task);
   }
 
@@ -302,6 +323,17 @@ export function createCliExecutor({
     }
     const controller = { ...emptyController(), child };
     controllers.set(task.id, controller);
+    // 外部 CLI 一跑就是十几分钟，界面上只写「CLI执行中」用户完全不知道在干什么。
+    // 每分钟往 activity 里补一条心跳，详情面板就能看到它还在干活。
+    const startedAt = Date.now();
+    controller.ticker = setInterval(() => {
+      if (controller.done) return;
+      const minutes = Math.max(1, Math.round((Date.now() - startedAt) / 60000));
+      const list = Array.isArray(task.activity) ? task.activity : [];
+      task.activity = [...list, { at: new Date().toISOString(), kind: 'note', text: `${name} 还在执行（已 ${minutes} 分钟）` }].slice(-60);
+      persist(task);
+    }, 60_000);
+    if (typeof controller.ticker.unref === 'function') controller.ticker.unref();
     child.stdout?.on('data', chunk => addOutput(controller, controller.stdout, chunk, 'stdout'));
     child.stderr?.on('data', chunk => addOutput(controller, controller.stderr, chunk, 'stderr'));
     child.once('error', error => finalize(task, controller, { error }));

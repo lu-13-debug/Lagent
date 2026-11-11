@@ -71,7 +71,7 @@ export function codexExecutor({
   store,
   cwd,
   binary = process.env.DATAAGENT_CODEX_CLI,
-  timeoutMs = 900_000,
+  timeoutMs = Number(process.env.DATAAGENT_CLI_TIMEOUT_MS) || 1_800_000,
   maxOutputBytes = 8 * 1024 * 1024,
   spawnImpl,
   environment = process.env
@@ -86,7 +86,10 @@ export function codexExecutor({
     const windowsNote = process.platform === 'win32'
       ? '\n\n（Windows 环境：写多行文件不要用 apply_patch —— 这里的补丁会被 shell 的引号规则吃掉而写入失败。请直接用 shell 命令写文件，例如 powershell -NoProfile -Command "Set-Content -LiteralPath <路径> -Value <内容> -Encoding utf8"。）'
       : '';
-    const prompt = (write ? writablePrompt(input) : readOnlyPrompt(input)) + windowsNote;
+    // 实测它会往用户项目里塞 .spec-workflow 脚手架和整个 .browser-smoke-profile 浏览器配置目录，
+    // 几百个文件，用户打开项目只会一脸问号。产物只写任务要求的文件。
+    const noScaffoldNote = '\n\n（只写任务要求的文件：不要在工作目录里生成工作流脚手架（如 .spec-workflow）、浏览器/调试配置（如 .browser-smoke-profile）、临时截图或临时页面；需要自检就用 node --check 或直接读文件。）\n（也不要在命令行里内联多行内容——here-string、@\'...\'@、$x = @"..."@ 这类写法在 Windows 上会把引号弄坏，命令直接起不来。要写文件就用写文件工具或 Set-Content，要自检就跑 node --check。）';
+    const prompt = (write ? writablePrompt(input) : readOnlyPrompt(input)) + windowsNote + noScaffoldNote;
     // 项目目录不一定是 git 仓库（例如 D:\test），codex 默认会拒绝非受信目录并直接退出；
     // 写入范围已经由本软件的审批闸门与 sandbox 参数限制，这里放开仓库检查。
     const modelArgs = input.model ? ['-m', input.model] : [];

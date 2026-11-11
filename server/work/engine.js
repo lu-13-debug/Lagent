@@ -689,7 +689,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const summary=status==='failed'?String(task.error||`${label}执行失败`).slice(0,400):{
       working:`${label}执行中`,
       awaiting_review:task.accessRequest?accessPrompt(task.accessRequest):`${label}等待确认`,
-      completed:activeId==='window'?(typeof task.report?.summary==='string'&&task.report.summary.trim()?task.report.summary.trim():'窗口指令已发送'):tool?toolSummary:terminal?'终端命令执行完成':activeId==='model'?(typeof task.artifacts?.cli?.summary==='string'&&task.artifacts.cli.summary.trim()?task.artifacts.cli.summary.trim().slice(0,200):'模型 Agent 执行完成'):cli?`${label}执行完成`:'分析报告已生成',
+      completed:activeId==='window'?(typeof task.report?.summary==='string'&&task.report.summary.trim()?task.report.summary.trim():'窗口指令已发送'):tool?toolSummary:terminal?'终端命令执行完成':activeId==='model'?(typeof task.artifacts?.cli?.summary==='string'&&task.artifacts.cli.summary.trim()?task.artifacts.cli.summary.trim().slice(0,200):'模型 Agent 执行完成'):cli?(typeof task.artifacts?.cli?.summary==='string'&&task.artifacts.cli.summary.trim()?task.artifacts.cli.summary.trim().slice(0,300):`${label}执行完成`):'分析报告已生成',
       cancelled:`${label}已停止`
     }[status];
     const finished=['completed','failed','cancelled'].includes(status);
@@ -893,9 +893,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     });
     for (const step of prepared) {
       if (projectRecord && !step.chat && PROJECT_CHAT_EXECUTORS.includes(step.targetId)) {
+        const headline = step.text.split('\n').map(line => line.trim()).find(Boolean) || step.text;
         step.chat = ensureProjectChat(projectRecord, step.targetId, {
           ...(parentChat ? { parentChatId: parentChat.id } : {}),
-          title: parentChat ? step.text : ''
+          title: parentChat ? headline.slice(0, 60) : ''
         });
       }
       // 计划里的每一步都只负责自己那一块。内置 Agent 容易把「整件事没做完」当成自己的失败，
@@ -911,9 +912,11 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const stamp = now();
     const tickets = prepared.map((step, index) => {
       const ready = step.dependsOn.length === 0;
+      // 标题只取第一行：step.text 里可能追加了范围说明，整段塞进标题会在侧栏变成一大坨。
+      const headline = step.text.split('\n').map(line => line.trim()).find(Boolean) || step.text;
       return {
         id: randomUUID(),
-        title: step.text.slice(0, 100),
+        title: headline.slice(0, 60),
         status: ready ? (autoRun ? 'queued' : 'awaiting_review') : 'waiting',
         stage: ready && step.target.requiresDataset !== false ? 'dataset' : 'approval',
         source: 'plan',
@@ -1675,7 +1678,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           `接下来会并行交给：${others}。`,
           '请先用两三句话说明你如何理解这个任务，再逐条写清每个执行者要做什么、交付什么、验收标准是什么。',
           '分派时把每个人要写的文件写清楚，避免两个 Agent 抢同一个文件。',
-        ].filter(Boolean).join('\n\n'),...(profileId?{profileId}:{})}
+          // 协调者容易一头扎进去通读代码，把步数烧光还没写出一句分工；给个明确的次数上限。
+          '这一步只做分工：最多翻目录、看一两个关键文件确认结构，工具调用不要超过 4 次，然后直接写结论。',
+        ].filter(Boolean).join('\n\n'),...(profileId?{profileId}:{}),maxSteps:6}
       }];
       chosen.forEach(step=>{
         const model=typeof models[step.executorId]==='string'?models[step.executorId].trim():'';

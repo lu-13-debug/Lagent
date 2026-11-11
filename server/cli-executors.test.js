@@ -181,6 +181,10 @@ test('E2 CLI 截断、超时、非零退出与 Abort', async t => {
   const timeoutTask = timed.start({ command: 'timeout' }, { id: 'assignment-timeout' }, { prompt: '检查' });
   await waitFor(() => store.get('task', timeoutTask.id)?.status === 'failed');
   assert.equal(store.get('task', timeoutTask.id).artifacts.cli.timedOut, true);
+  // 超时要说清「超时了、可能改了一半」，而不是把 stderr 里的一句提示当失败原因。
+  assert.match(store.get('task', timeoutTask.id).error, /执行超过 .* 分钟被中止/);
+  assert.match(store.get('task', timeoutTask.id).error, /可能已经改了一部分文件/);
+  assert.doesNotMatch(store.get('task', timeoutTask.id).error, /stdin/);
 
   const failed = claudeCodeExecutor({
     store,
@@ -270,4 +274,17 @@ test('E2 codex 失败时优先给出真正的错误，配置提示不算失败',
   });
   assert.equal(warningsOnly.error, '');
   assert.equal(warningsOnly.summary, 'OK');
+});
+
+test('E2 CLI 只是提示「从 stdin 读取」时不算失败', async t => {
+  const { dir, binary, store } = fixture(t);
+  const executor = codexExecutor({
+    store,
+    cwd: dir,
+    binary,
+    spawnImpl: () => fakeCliChild({ stderr: 'Reading additional input from stdin...\n', code: 0, chunks: [jsonl([{ type: 'item.completed', item: { type: 'agent_message', text: '做完了' } }])] })
+  });
+  const task = executor.start({ command: 'ok' }, { id: 'assignment-stdin' }, { prompt: '检查' });
+  await waitFor(() => store.get('task', task.id)?.status === 'completed');
+  assert.equal(store.get('task', task.id).error, undefined);
 });
