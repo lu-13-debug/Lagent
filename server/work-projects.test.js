@@ -547,3 +547,40 @@ test('变更档案在没有 git 的目录里也会记下执行器报告的产出
   const lastChange = changes.at(-1);
   assert.deepEqual(lastChange.files, ['note.txt']);
 });
+
+test('建会话时可以一次挑好协作 Agent，之后改名单也存得住', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'dataagent-collab-chat-'));
+  const store = new Store(root);
+  const projectDir = join(root, 'collab-project');
+  mkdirSync(projectDir, { recursive: true });
+  writeFileSync(join(projectDir, 'README.md'), '# collab\n');
+  const home = makeHome(root);
+  const engine = createWorkEngine(store, createExecutorRegistry([modelExecutor({
+    store,
+    cwd: root,
+    context: () => ({ settings: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' }, key: 'test-key', maxTokens: 800, timeoutMs: 5000 }),
+    fetchImpl: async () => ({ ok: true, status: 200, headers: { get: () => null }, async json() { return { choices: [{ message: { content: '{"final":{"summary":"ok","done":true}}' } }] }; }, async text() { return '{}'; } })
+  })]), () => {}, {
+    policy: { allowedExecutors: ['model', 'claude-code', 'codex'], requireApproval: false, permission: 'workspace' },
+    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    home
+  });
+  t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const imported = engine.importProject({ path: projectDir });
+  const withTeam = engine.createProjectChat(imported.project.id, {
+    executorId: 'model',
+    collaborators: ['claude-code', 'codex', 'claude-code', 'model', 'window']
+  });
+  // 去重、去掉内置 Agent 与窗口 Agent、最多 3 个。
+  assert.deepEqual(withTeam.chat.collaborators, ['claude-code', 'codex']);
+
+  const changed = engine.setProjectChatCollaborators(withTeam.chat.id, { collaborators: ['codex'] });
+  assert.deepEqual(changed.collaborators, ['codex']);
+
+  const cleared = engine.setProjectChatCollaborators(withTeam.chat.id, { collaborators: [] });
+  assert.equal(cleared.collaborators, undefined, '清空后不再有名单，回到单 Agent');
+
+  const plain = engine.createProjectChat(imported.project.id, { executorId: 'model' });
+  assert.equal(plain.chat.collaborators, undefined, '不传就不写这个字段');
+});

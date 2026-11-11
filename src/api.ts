@@ -49,7 +49,8 @@ export const api = {
   workRenameProject: (id: string, name: string) => request<{ project: WorkProject }>(`/work/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
   workProjectSessions: (id: string, executor?: string) => request<{ sessions: WorkProjectSession[] }>(`/work/projects/${encodeURIComponent(id)}/sessions${executor ? `?executor=${encodeURIComponent(executor)}` : ''}`),
   workImportProjectSession: (id: string, executorId: string, sessionId: string) => request<{ chat: WorkProjectChat; created: boolean }>(`/work/projects/${encodeURIComponent(id)}/sessions`, { method: 'POST', body: JSON.stringify({ executorId, sessionId }) }),
-  workCreateProjectChat: (projectId: string, input: { executorId: string; title?: string; writable?: boolean; handle?: number; process?: string; windowTitle?: string }) => request<{ chat: WorkProjectChat; project: WorkProject }>(`/work/projects/${encodeURIComponent(projectId)}/chats`, { method: 'POST', body: JSON.stringify(input) }),
+  workCreateProjectChat: (projectId: string, input: { executorId: string; title?: string; writable?: boolean; handle?: number; process?: string; windowTitle?: string; collaborators?: string[] }) => request<{ chat: WorkProjectChat; project: WorkProject }>(`/work/projects/${encodeURIComponent(projectId)}/chats`, { method: 'POST', body: JSON.stringify(input) }),
+  workChatCollaborators: (id: string, collaborators: string[]) => request<{ chat: WorkProjectChat }>(`/work/chats/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ collaborators }) }),
   workDeleteProjectChat: (id: string) => request<{ id: string }>(`/work/chats/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   workRenameProjectChat: (id: string, title: string) => request<{ chat: WorkProjectChat }>(`/work/chats/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   // 每条会话自己的权限档位；传空字符串表示回到「跟随设置」。

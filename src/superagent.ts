@@ -74,6 +74,8 @@ export interface WorkProjectChat {
   parentChatId?: string;
   // 这条会话自己的权限档位；没有这个字段表示跟随设置里的全局档位。
   permission?: 'read' | 'workspace' | 'full';
+  // 建会话时挑的协作 Agent：内置 Agent 拆解后分派给它们，最多 3 个。
+  collaborators?: string[];
   ticketCount?: number; pendingCount?: number; lastTicketStatus?: string; lastTicketAt?: string;
   createdAt: string; updatedAt: string;
 }

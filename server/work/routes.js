@@ -49,8 +49,9 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/teamworks/:id/retry',(req,res)=>res.status(201).json(engine.teamworkRetry(req.params.id,req.body?.partId)));
   app.delete('/api/work/chats/:id',(req,res)=>res.json(engine.deleteProjectChat(req.params.id)));
   app.patch('/api/work/chats/:id',(req,res)=>{
-    // 一个 PATCH 兼容两种改法：只改标题，或只改这条会话自己的权限档位。
+    // 一个 PATCH 兼容三种改法：标题、这条会话自己的权限档位、协作 Agent 名单。
     if(req.body&&Object.hasOwn(req.body,'permission'))return res.json({chat:engine.setProjectChatPermission(req.params.id,req.body)});
+    if(req.body&&Object.hasOwn(req.body,'collaborators'))return res.json({chat:engine.setProjectChatCollaborators(req.params.id,req.body)});
     return res.json({chat:engine.renameProjectChat(req.params.id,req.body)});
   });
   app.post('/api/work/chats/:id/messages',(req,res)=>res.status(201).json({ticket:engine.projectChatMessage(req.params.id,req.body)}));

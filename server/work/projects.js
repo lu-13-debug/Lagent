@@ -189,6 +189,20 @@ export function projectService(db, { environment = process.env, home = os.homedi
     db.put('project-chat', next);
     return next;
   }
+  // 协作 Agent 名单挂在会话上：建会话时挑好，之后在命令条里改也存回来，
+// 这样下次打开这条会话还是同一拨人（最多 3 个，内置 Agent 自己不算）。
+  function setChatCollaborators(id, input = {}) {
+    const chat = getChat(id);
+    const raw = Array.isArray(input?.collaborators) ? input.collaborators : [];
+    const picked = [...new Set(raw
+      .filter(value => typeof value === 'string' && PROJECT_CHAT_EXECUTORS.includes(value) && value !== 'model' && value !== 'window'))]
+      .slice(0, 3);
+    const next = { ...chat, updatedAt: now() };
+    if (picked.length) next.collaborators = picked;
+    else delete next.collaborators;
+    db.put('project-chat', next);
+    return next;
+  }
   // 占位标题的会话在收到第一条消息后自动改名为消息摘要，避免侧栏出现多条同名「datagent · Claude Code」。
   function adoptTitle(id, text) {
     const chat = db.get('project-chat', id);
@@ -305,6 +319,12 @@ export function projectService(db, { environment = process.env, home = os.homedi
       if (parent.parentChatId) throw workError('只支持两级对话：从属会话不能再挂子会话', 400);
     }
     const stamp = now();
+    // 协作 Agent：建会话时一次挑好，之后发消息直接沿用（最多 3 个，内置 Agent 自己不在里面）。
+    const collaborators = Array.isArray(input.collaborators)
+      ? [...new Set(input.collaborators
+        .filter(id => typeof id === 'string' && PROJECT_CHAT_EXECUTORS.includes(id) && id !== 'model' && id !== 'window'))]
+        .slice(0, 3)
+      : [];
     const chat = {
       id: randomUUID(),
       projectId: project.id,
@@ -316,6 +336,7 @@ export function projectService(db, { environment = process.env, home = os.homedi
       sessionId: '',
       writable: input.writable !== false,
       ...(PERMISSIONS.includes(input.permission) ? { permission: input.permission } : {}),
+      ...(collaborators.length ? { collaborators } : {}),
       source: 'manual',
       createdAt: stamp,
       updatedAt: stamp
@@ -649,6 +670,7 @@ export function projectService(db, { environment = process.env, home = os.homedi
     deleteChat,
     renameChat,
     setChatPermission,
+    setChatCollaborators,
     adoptTitle,
     touchChat,
     scanSessions,

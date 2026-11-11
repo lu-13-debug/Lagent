@@ -1281,6 +1281,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     renameProjectChat(id,input){return projects.renameChat(id,input);},
     // 单条会话的权限档位：留空表示回到「跟随全局策略」。
     setProjectChatPermission(id,input){return projects.setChatPermission(id,input);},
+    setProjectChatCollaborators(id,input){return projects.setChatCollaborators(id,input);},
     scanProjectSessions(projectId,executorId){return projects.scanSessions(projectId,executorId);},
     importProjectSession(projectId,input){return projects.importSession(projectId,input);},
     projectChatMessage(chatId,input){

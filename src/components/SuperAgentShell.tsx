@@ -231,7 +231,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [pickedTickets, setPickedTickets] = useState<string[]>([]);
   const [bulkConfirm, setBulkConfirm] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
-  const [folderNewChat, setFolderNewChat] = useState<{ project: WorkProject; executorId: string } | null>(null);
+  const [folderNewChat, setFolderNewChat] = useState<{ project: WorkProject; picked: string[] } | null>(null);
   const [dropActive, setDropActive] = useState(false);
   // 侧栏折叠、右侧检查器、底部用户菜单：让主区尽量宽，工作与过程都放在主区
   const [railCollapsed, setRailCollapsed] = useState<boolean>(() => readJson<boolean>(RAIL_COLLAPSED_KEY, false));
@@ -459,26 +459,46 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       return result.projects;
     } catch { return folderState.projects; }
   };
-  // 文件夹行上的「+」：先让你选 Agent，再建会话（默认选这个文件夹上次用的那个）。
+  // 文件夹行上的「+」：先让你选 Agent（可多选，选多个就是这条会话里协作），再建会话。
+  const newChatExecutors = () => projectExecutorIds.filter(id => id !== 'window' && allowedExecutors.includes(id));
   const quickNewChat = (project: WorkProject) => {
-    const usable = projectExecutorIds.filter(id => id !== 'window' && allowedExecutors.includes(id));
+    const usable = newChatExecutors();
     if (!usable.length) { notify('没有可用于项目的执行器，请先在设置里启用。', true); return; }
-    const preferred = project.chats.find(chat => usable.includes(chat.executorId))?.executorId;
-    setFolderNewChat({ project, executorId: preferred || (usable.includes('model') ? 'model' : usable[0]) });
+    // 默认沿用这个文件夹上次用的执行器：只有一条就选它，协作过就带上那拨人。
+    const previous = project.chats.find(chat => usable.includes(chat.executorId));
+    const stored = (previous?.collaborators || []).filter(id => usable.includes(id)).slice(0, 3);
+    const picked = previous && stored.length ? ['model', ...stored] : [previous && usable.includes(previous.executorId) ? previous.executorId : (usable.includes('model') ? 'model' : usable[0])];
+    setFolderNewChat({ project, picked });
+  };
+  const toggleFolderAgent = (id: string) => {
+    if (!folderNewChat) return;
+    const picked = folderNewChat.picked.includes(id)
+      ? folderNewChat.picked.filter(entry => entry !== id)
+      // 一个内置 Agent 最多带 3 个协作 Agent。
+      : folderNewChat.picked.length >= 4 ? folderNewChat.picked : [...folderNewChat.picked, id];
+    setFolderNewChat({ ...folderNewChat, picked });
   };
   const createFolderChat = async () => {
     const draft = folderNewChat;
     if (!draft) return;
-    const usable = projectExecutorIds.filter(id => id !== 'window' && allowedExecutors.includes(id));
-    if (!usable.includes(draft.executorId)) { notify('这个 Agent 已经不在可用列表里，请重新选。', true); return; }
+    const usable = newChatExecutors();
+    const picked = draft.picked.filter(id => usable.includes(id));
+    if (!picked.length) { notify('先选一个 Agent 再建会话。', true); return; }
+    const helpers = picked.filter(id => id !== 'model');
+    // 选了两个以上，或者显式带上内置 Agent：由内置 Agent 拆解并分派。
+    const collaborative = picked.includes('model') || helpers.length > 1;
+    const executorId = collaborative ? 'model' : helpers[0];
+    const collaborators = collaborative ? helpers.filter(id => id !== executorId).slice(0, 3) : [];
     setFolderNewChat(null);
     try {
-      const result = await api.workCreateProjectChat(draft.project.id, { executorId: draft.executorId });
+      const result = await api.workCreateProjectChat(draft.project.id, { executorId, ...(collaborators.length ? { collaborators } : {}) });
       await reloadProjects();
       markChatSeen(result.chat.id);
       setCollapsedProjects(previous => previous.filter(id => id !== draft.project.id));
       openFolderChat(draft.project.id, result.chat.id);
-      notify(`已在「${draft.project.name}」新建会话，交给${executorNames[draft.executorId] || draft.executorId}。`);
+      notify(collaborators.length
+        ? `已在「${draft.project.name}」新建协作会话：内置 Agent 拆解，${collaborators.map(id => executorNames[id] || id).join('、')} 执行。`
+        : `已在「${draft.project.name}」新建会话，交给${executorNames[executorId] || executorId}。`);
     } catch (cause) { notify((cause as Error).message, true); }
   };
   const commitChatRename = async () => {
@@ -1685,18 +1705,27 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         <div className="sa-confirm-actions"><button type="button" className="sa-button" onClick={() => setBulkConfirm(false)}>取消</button><button type="button" className="sa-button sa-danger" disabled={bulkBusy} onClick={() => void removePicked()}>{bulkBusy ? '正在删除…' : `删除 ${pickedTotal} 条`}</button></div>
       </div>
     </Modal>}
-    {folderNewChat && <Modal title={`在「${folderNewChat.project.name}」新建会话`} subtitle="选一个 Agent 负责这条会话。建好后还能在对话里改权限档位与模型。" close={() => setFolderNewChat(null)}>
+    {folderNewChat && <Modal title={`在「${folderNewChat.project.name}」新建会话`} subtitle="选一个 Agent，或者多选几个让它协作：内置 Agent 负责拆解与汇总。建好后还能在对话里改权限档位与模型。" close={() => setFolderNewChat(null)}>
       <div className="sa-newchat-pick">
         <div className="sa-newchat-agents">
-          {projectExecutorIds.filter(id => id !== 'window' && allowedExecutors.includes(id)).map(id => {
-            const on = folderNewChat.executorId === id;
-            return <button key={id} type="button" className={`sa-pick ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => setFolderNewChat({ ...folderNewChat, executorId: id })}>
-              {on ? <Check size={12} /> : <Bot size={12} />}{(id === 'model' ? '内置 Agent' : executorNames[id] || id)}
+          {newChatExecutors().map(id => {
+            const on = folderNewChat.picked.includes(id);
+            const label = id === 'model' ? '内置 Agent' : executorNames[id] || id;
+            return <button key={id} type="button" className={`sa-pick ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => toggleFolderAgent(id)}>
+              {on ? <Check size={12} /> : <Bot size={12} />}{label}
             </button>;
           })}
         </div>
-        <p className="sa-inline-note"><ShieldCheck size={13} />写文件的权限、能不能跨目录，由设置里的权限档位决定；内置 Agent 会先分析任务、再分派。</p>
-        <div className="sa-confirm-actions"><button type="button" className="sa-button" onClick={() => setFolderNewChat(null)}>取消</button><button type="button" className="sa-button sa-primary" onClick={() => void createFolderChat()}>新建会话</button></div>
+        {(() => {
+          const helpers = folderNewChat.picked.filter(id => id !== 'model');
+          const collaborative = folderNewChat.picked.includes('model') || helpers.length > 1;
+          if (collaborative && helpers.length) {
+            return <p className="sa-inline-note"><Users size={13} />内置 Agent 拆解任务，分派给 {helpers.map(id => id === 'model' ? '内置 Agent' : executorNames[id] || id).join('、')} 协作执行。</p>;
+          }
+          if (helpers.length > 1) return null;
+          return <p className="sa-inline-note"><ShieldCheck size={13} />写文件的权限、能不能跨目录，由设置里的权限档位决定；选「内置 Agent」再加别的 Agent 就成了协作。</p>;
+        })()}
+        <div className="sa-confirm-actions"><button type="button" className="sa-button" onClick={() => setFolderNewChat(null)}>取消</button><button type="button" className="sa-button sa-primary" onClick={() => void createFolderChat()}>{(() => { const helpers = folderNewChat.picked.filter(id => id !== 'model'); return (folderNewChat.picked.includes('model') || helpers.length > 1) && helpers.length ? `新建协作会话（${helpers.length + 1} 个 Agent）` : '新建会话'; })()}</button></div>
       </div>
     </Modal>}
     {toast && <Toast message={toast.text} error={toast.error} close={() => setToast(null)} />}

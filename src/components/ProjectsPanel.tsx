@@ -174,10 +174,13 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   // 能跟着内置 Agent 一起干活的外部 Agent：不含内置 Agent 自己，最多再选 3 个。
   const collabCandidates = useMemo(() => dispatchExecutors.filter(id => id !== 'model'), [dispatchExecutors]);
   const chat = useMemo(() => project?.chats.find(item => item.id === activeChatId) || null, [project, activeChatId]);
-  // 每个对话各自的模型与思考强度，切对话时恢复上次的选择。
+  // 每个对话各自的模型与思考强度，切对话时恢复上次的选择；协作 Agent 也跟着会话走。
   useEffect(() => {
     if (!activeChatId) return;
     setChatModel(readChatModel(activeChatId));
+    const stored = project?.chats.find(item => item.id === activeChatId)?.collaborators;
+    setCollabAgents(Array.isArray(stored) ? stored.slice(0, 3) : []);
+    // 只在切换会话时重置，避免项目刷新把用户刚勾的协作 Agent 冲掉。
   }, [activeChatId]);
   const planExecutors = useMemo(() => {
     const ids = new Set<string>();
