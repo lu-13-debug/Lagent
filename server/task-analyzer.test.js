@@ -69,10 +69,10 @@ test('任务理解：没有绑定工作文件夹时只出结论，不声明写�
 });
 
 test('任务理解：绑定了工作文件夹时把目录写进理解里', () => {
-  const analysis = analyzeTask({ goal: '补上缺失的单测', executors: ['claude-code'], project: { name: 'datagent', path: 'D:\\datagent' } });
+  const analysis = analyzeTask({ goal: '补上缺失的单测', executors: ['claude-code'], project: { name: 'demo-app', path: 'D:\\demo-app' } });
   assert.equal(analysis.category, 'general');
-  assert.match(analysis.understanding[1], /datagent/);
-  assert.equal(analysis.project.name, 'datagent');
+  assert.match(analysis.understanding[1], /demo-app/);
+  assert.equal(analysis.project.name, 'demo-app');
 });
 
 test('任务理解：顺序固定为调研 → 写文件 → 验证，验证要等所有写步骤', () => {

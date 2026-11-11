@@ -139,12 +139,12 @@
 
 ## 10. 与 Claude Code 共同修改目录
 
-当前环境的 `claude.cmd --version` 已实际运行，返回 `2.1.316 (Claude Code)`。Codex 当前对 D:\datagent 有写权限。Claude Code 可从同一路径启动；其登录状态、模型权限和具体文件写入审批需由该 Claude Code 会话确认，本轮没有启动付费模型会话或自动向它派发开发任务。
+当前环境的 `claude.cmd --version` 已实际运行，返回 `2.1.316 (Claude Code)`。Codex 当前对 D:\lagent 有写权限。Claude Code 可从同一路径启动；其登录状态、模型权限和具体文件写入审批需由该 Claude Code 会话确认，本轮没有启动付费模型会话或自动向它派发开发任务。
 
 用户可以在 PowerShell 执行：
 
 ```powershell
-Set-Location -LiteralPath 'D:\datagent'
+Set-Location -LiteralPath 'D:\lagent'
 claude
 ```
 
