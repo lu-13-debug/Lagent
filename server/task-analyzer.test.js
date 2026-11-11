@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { analyzeTask } from './work/task-analyzer.js';
 
 test('任务理解：游戏需求会先调研、再写代码，写文件的步骤带目录范围', () => {
@@ -97,5 +100,33 @@ test('任务理解：验证步骤尽量不交给写代码的那个执行器', ()
   assert.ok(write);
   assert.ok(verify);
   assert.notEqual(verify.executorId, write.executorId);
+});
+
+// 真实踩过的坑：项目里是 js/ + index.html + styles.css，任务理解器却按关键词
+// 猜成 src/**，两个写步骤都去改不存在的目录，还互相判成冲突。
+test('任务理解：按项目真实目录分工，界面和逻辑不会互相覆盖', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'analyze-shape-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'js'));
+  fs.mkdirSync(path.join(root, 'docs'));
+  fs.writeFileSync(path.join(root, 'js', 'game.js'), 'const a = 1;\n');
+  fs.writeFileSync(path.join(root, 'index.html'), '<canvas></canvas>\n');
+  fs.writeFileSync(path.join(root, 'styles.css'), 'body{}\n');
+  fs.writeFileSync(path.join(root, 'docs', 'DESIGN.md'), '# 设计\n');
+
+  const analysis = analyzeTask({
+    goal: '在现有基础上优化这个游戏，调整界面配色，并更新说明文档',
+    executors: ['claude-code', 'codex'],
+    project: { name: 'game', path: root }
+  });
+
+  const writes = analysis.steps.filter(step => step.kind === 'write');
+  const scopes = writes.flatMap(step => step.scope);
+  assert.ok(scopes.includes('js/**'), `应该识别出 js/：${scopes.join('、')}`);
+  assert.ok(scopes.includes('index.html'), `应该识别出 index.html：${scopes.join('、')}`);
+  assert.ok(scopes.includes('styles.css'), `应该识别出 styles.css：${scopes.join('、')}`);
+  assert.equal(scopes.includes('src/**'), false, '不该再凭空猜 src/**');
+  assert.equal(analysis.conflicts.length, 0, '三组文件互不重叠');
+  assert.ok(analysis.understanding.some(line => line.includes('js/')), '理解里要写清项目现状');
 });
 

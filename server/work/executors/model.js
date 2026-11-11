@@ -8,7 +8,9 @@ import { modelRequest, readModelResponse, providerUsage, toolCallsOf, visibleRep
 // 与 CLI 执行器不同，它的每一步都写进 task.activity，界面因此能像看 dsh 一样看到过程。
 const statusError = (message, status = 400) => Object.assign(workError(message, status), { status });
 const MAX_STEPS = 20;
-const READ_LIMIT = 8000;
+// read_file 一次默认读 240 行、最多 800 行：模型不需要也不该整篇吞下大文件。
+const READ_LIMIT = 240;
+const READ_MAX_LINES = 800;
 const LIST_LIMIT = 120;
 const HITS_LIMIT = 40;
 const ACTIVITY_LIMIT = 60;
@@ -133,20 +135,31 @@ function listFiles(guard, target) {
   return { path: guard.display(start) || '.', entries };
 }
 
+// 读文件按「行」算，返回带行号的正文。
+// 之前 offset 被当成字符下标，模型要「第 100 行」拿到的是第 100 个字符，
+// 于是它只能整篇读或者反复试，白白烧步数。
 function readFile(guard, target, offset, limit) {
   const absolute = guard.resolve(target).absolute;
   const stat = fs.statSync(absolute);
   if (!stat.isFile()) throw new Error('只能读取文件');
-  if (stat.size > 400 * 1024) throw new Error('文件超过 400KB，请改用 search_code 定位');
+  if (stat.size > 400 * 1024) throw new Error('文件超过 400KB，请改用 search_code 定位要看的片段');
   const content = fs.readFileSync(absolute, 'utf8');
-  const from = Number.isInteger(offset) && offset > 0 ? offset : 0;
-  const take = Number.isInteger(limit) && limit > 0 ? Math.min(limit, READ_LIMIT) : READ_LIMIT;
+  const lines = content.split(/\r?\n/);
+  const total = lines.length;
+  const from = Number.isInteger(offset) && offset > 0 ? Math.min(offset - 1, total) : 0;
+  const take = Number.isInteger(limit) && limit > 0 ? Math.min(limit, READ_MAX_LINES) : READ_LIMIT;
+  const slice = lines.slice(from, from + take);
+  const numbered = slice.map((line, index) => `${String(from + index + 1).padStart(String(total).length, ' ')}| ${line}`).join('\n');
+  const end = from + slice.length;
   return {
     path: guard.display(absolute),
     size: stat.size,
-    offset: from,
-    content: content.slice(from, from + take),
-    truncated: content.length > from + take,
+    totalLines: total,
+    fromLine: from + 1,
+    toLine: end,
+    truncated: end < total,
+    ...(end < total ? { hint: `还有 ${total - end} 行没读：要接着看就再调 read_file{path:"${guard.display(absolute)}",offset:${end + 1},limit:${take}}，不要整篇重读。` } : {}),
+    content: numbered
   };
 }
 
@@ -392,7 +405,7 @@ export function modelSystemPrompt({ maxSteps, write, permission = write ? 'works
     '· 只有确实全部做完才写 done:true；没做完、缺东西、需要人接手，写 done:false 并在 summary 里说清还差什么。',
     '',
     `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content,append?}、replace_in_file{path,find,replace,all?}、move_path{from,to}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command,shell?}、project_changes{}。`,
-    '接手一个已经有改动的项目时，先调 project_changes：它会告诉你谁在什么时候改了什么文件；然后按需 read_file 读那一段，或 run_command 跑 git diff 看差异，不要动辄把整个文件从头读一遍。',
+    '接手一个已经有改动的项目时，先调 project_changes：它会告诉你谁在什么时候改了什么文件；然后按需 read_file 读那一段（offset/limit 都是行号，返回带行号，超长会提示下次从第几行接着读），或 run_command 跑 git diff 看差异，不要动辄把整个文件从头读一遍。',
     '注意：环境是 Windows。要跑 PowerShell 就写 run_command{command:"<脚本本体>",shell:"powershell"}，command 直接给脚本，不要自己再拼 powershell -Command 和引号。',
     '路径可以写相对工作目录的路径，也可以写绝对路径。',
     '每次工具调用的 content 控制在一两百行以内：输出有长度上限，写长文件就先 write_file 骨架，再用 write_file{path,content:"<后续片段>",append:true} 一段段追加，最后 read_file 复核。',
@@ -535,7 +548,7 @@ const TOOL_LABELS = {
 // 长文件也不会因为一个没转义的双引号整段作废（实测这是最常坏的一环）。
 export const TOOL_SCHEMAS = [
   { type: 'function', function: { name: 'list_files', description: '列出目录里的文件与子目录', parameters: { type: 'object', properties: { path: { type: 'string', description: '相对工作目录的路径，省略表示根目录' } } } } },
-  { type: 'function', function: { name: 'read_file', description: '读取文本文件内容', parameters: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'number', description: '从第几行开始（1 起）' }, limit: { type: 'number', description: '最多读多少行' } }, required: ['path'] } } },
+  { type: 'function', function: { name: 'read_file', description: '按行读取文本文件，返回带行号的正文（默认 240 行，最多 800 行）', parameters: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'number', description: '从第几行开始（1 起，按行不是按字符）' }, limit: { type: 'number', description: '最多读多少行' } }, required: ['path'] } } },
   { type: 'function', function: { name: 'search_code', description: '在项目里按正则搜索文本', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' } }, required: ['pattern'] } } },
   { type: 'function', function: { name: 'write_file', description: '写入文件；append=true 时追加到末尾，适合分多次写长文件', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, append: { type: 'boolean' } }, required: ['path', 'content'] } } },
   { type: 'function', function: { name: 'replace_in_file', description: '把文件里的一段原文替换成新内容', parameters: { type: 'object', properties: { path: { type: 'string' }, find: { type: 'string' }, replace: { type: 'string' }, all: { type: 'boolean', description: '有多处时是否全部替换' } }, required: ['path', 'find', 'replace'] } } },

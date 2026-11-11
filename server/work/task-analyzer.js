@@ -2,6 +2,9 @@
 // 纯本地启发式，不调用模型、不联网，因此每次派活前都能立刻给出一份「我理解的任务 + 需要的工具 + 分工」。
 // 模型规划器（agent-planner）仍然负责更细的步骤，这里的结果会作为它的上下文，并用于调度时的冲突检查。
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 const CATEGORIES = [
   { id: 'game', label: '游戏功能开发', match: ['游戏', '关卡', '角色', '像素', '射击', '塔防', 'roguelike', '肉鸽', 'phaser', 'unity', '玩法', '画面'] },
   { id: 'web', label: '前端 / 接口开发', match: ['网站', '页面', '前端', 'react', 'vue', '界面', '样式', '接口', 'api', '组件', '按钮'] },
@@ -19,6 +22,39 @@ const VERIFY_HINTS = ['测试', '单测', '用例', '验证', '检查', '跑通'
 
 const lower = value => String(value || '').toLowerCase();
 const hit = (text, words) => words.filter(word => text.includes(word.toLowerCase()));
+
+// 看一眼项目目录长什么样，拆任务时才知道「要改的东西」在哪个文件夹里。
+// 只读一层 + 一层子目录的文件名，不递归扫全仓（几十万文件的项目也秒回）。
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'data', '.dataagent', '__pycache__', '.venv', 'venv', 'coverage']);
+const SHAPE_FILE_LIMIT = 60;
+
+export function projectShape(root) {
+  const shape = { root: String(root || ''), dirs: [], rootFiles: [], scopes: [], code: [], ui: [], docs: [] };
+  if (!root) return shape;
+  let entries;
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return shape; }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
+    if (entry.isDirectory()) {
+      let files = [];
+      try {
+        files = fs.readdirSync(path.join(root, entry.name), { withFileTypes: true })
+          .filter(item => item.isFile() && !item.name.startsWith('.')).map(item => item.name).slice(0, SHAPE_FILE_LIMIT);
+      } catch { files = []; }
+      shape.dirs.push({ name: entry.name, files });
+      shape.scopes.push(`${entry.name}/**`);
+      if (/^(src|js|lib|app|server|packages)$/i.test(entry.name)) shape.code.push(entry.name);
+      if (/^(css|styles?|assets|ui|public)$/i.test(entry.name)) shape.ui.push(entry.name);
+      if (/^(docs?|doc)$/i.test(entry.name)) shape.docs.push(entry.name);
+    } else if (!entry.name.endsWith('.md')) {
+      shape.rootFiles.push(entry.name);
+      if (/\.(html?|css)$/i.test(entry.name)) shape.ui.push(entry.name);
+      else if (/\.(m?js|tsx?|jsx|py|go|rs|java)$/i.test(entry.name)) shape.code.push(entry.name);
+    }
+  }
+  shape.rootFiles.sort();
+  return shape;
+}
 
 function pickCategory(text) {
   let best = { id: 'general', label: '通用任务', score: 0 };
@@ -46,6 +82,22 @@ function guessScope(text, category) {
     else scopes.add('src/**');
   }
   return [...scopes];
+}
+
+// 按项目真实结构把「要写的文件」分成互不重叠的几组：
+// 界面（html/css）、逻辑（js/src）、文档。每组交给一个执行器，
+// 组之间不共享文件，才能真正并行；组内多人时再按文件轮着分。
+const pretty = value => `\`${value}\``;
+function writeGroups(shape) {
+  const toScope = item => (/[./]/.test(item) && /\.[a-z0-9]+$/i.test(item) ? item : `${item}/**`);
+  const ui = (shape?.ui || []).map(toScope);
+  const code = (shape?.code || []).map(toScope);
+  const docs = (shape?.docs || []).map(toScope);
+  const groups = [];
+  if (ui.length) groups.push({ key: 'ui', label: '界面与样式', scopes: ui });
+  if (code.length) groups.push({ key: 'code', label: '逻辑与实现', scopes: code });
+  if (docs.length) groups.push({ key: 'docs', label: '文档与说明', scopes: docs });
+  return groups;
 }
 
 function overlaps(left, right) {
@@ -118,26 +170,44 @@ export function analyzeTask(input) {
       readOnly: true
     });
   }
-  if (writing.length || ['game', 'web', 'automation'].includes(category.id)) {
+  // 没绑工作文件夹时不主动拆「写文件」的步骤：那里没有可写的目标，拆了只会给出空范围。
+  const wantsWrite = writing.length > 0 || (bound && ['game', 'web', 'automation', 'docs'].includes(category.id));
+  if (wantsWrite) {
     // 前端 / 后端 / 文档分属不同目录时，拆成互不重叠的写步骤：可以并行，不会互相覆盖。
-    const groups = new Map();
-    for (const scope of writeScope) {
-      const root = scope.split('/')[0];
-      if (!groups.has(root)) groups.set(root, []);
-      groups.get(root).push(scope);
-    }
     const writers = ['claude-code', 'codex'].filter(id => has(id));
     if (!writers.length) writers.push(executors[0] || 'claude-code');
-    [...groups.entries()].forEach(([root, scopes], position) => {
-      steps.push({
-        title: groups.size > 1 ? `实现主体（${root}）：${goal.slice(0, 32)}${goal.length > 32 ? '…' : ''}` : `实现主体：${goal.slice(0, 40)}${goal.length > 40 ? '…' : ''}`,
-        executorId: writers[position % writers.length],
-        scope: bound ? scopes : [],
-        output: bound ? `改动落在 ${scopes.join('、')}` : '只出方案与改动建议（未绑定工作文件夹）',
-        kind: bound ? 'write' : 'research',
-        readOnly: !bound
+    // 优先按项目真实结构分工：界面、逻辑、文档各一组，谁写哪些文件一目了然。
+    const shaped = bound ? writeGroups(projectShape(input?.project?.path)) : [];
+    if (shaped.length) {
+      shaped.forEach((group, position) => {
+        steps.push({
+          title: `实现主体（${group.label}）：${goal.slice(0, 30)}${goal.length > 30 ? '…' : ''}`,
+          executorId: writers[position % writers.length],
+          scope: group.scopes,
+          files: group.scopes,
+          output: `改动只落在 ${group.scopes.map(pretty).join('、')}；不要改别的目录里的文件`,
+          kind: 'write',
+          readOnly: false
+        });
       });
-    });
+    } else {
+      const groups = new Map();
+      for (const scope of writeScope) {
+        const root = scope.split('/')[0];
+        if (!groups.has(root)) groups.set(root, []);
+        groups.get(root).push(scope);
+      }
+      [...groups.entries()].forEach(([root, scopes], position) => {
+        steps.push({
+          title: groups.size > 1 ? `实现主体（${root}）：${goal.slice(0, 32)}${goal.length > 32 ? '…' : ''}` : `实现主体：${goal.slice(0, 40)}${goal.length > 40 ? '…' : ''}`,
+          executorId: writers[position % writers.length],
+          scope: bound ? scopes : [],
+          output: bound ? `改动落在 ${scopes.join('、')}` : '只出方案与改动建议（未绑定工作文件夹）',
+          kind: bound ? 'write' : 'research',
+          readOnly: !bound
+        });
+      });
+    }
   }
   if (verifying.length && (has('codex') || has('claude-code'))) {
     // 验证尽量交给没参与写代码的执行器，避免「自己写、自己判卷」。
@@ -201,9 +271,14 @@ export function analyzeTask(input) {
   });
 
   const writeCount = serial.filter(step => !step.readOnly).length;
+  const shape = bound ? projectShape(input?.project?.path) : null;
+  const shapeLine = shape && (shape.dirs.length || shape.rootFiles.length)
+    ? `项目里现有的东西：${[...shape.dirs.map(item => `${item.name}/`), ...shape.rootFiles].slice(0, 10).join('、')}`
+    : '';
   const understanding = [
     `我理解的目标：${goal}`,
     `任务类型：${category.label}${input?.project?.name ? `；工作目录 ${input.project.name}（${input.project.path || ''}）` : '；没有绑定工作文件夹，Agent 只能读代码给结论'}`,
+    ...(shapeLine ? [shapeLine] : []),
     needs.length
       ? `需要用到的能力：${needs.map(item => item.label).join('、')}`
       : '需要用到的能力：直接执行，不需要额外工具',
@@ -234,4 +309,4 @@ export function analyzeTask(input) {
   };
 }
 
-export const taskAnalyzerInternals = { pickCategory, guessScope, overlaps };
+export const taskAnalyzerInternals = { pickCategory, guessScope, overlaps, writeGroups, projectShape };
