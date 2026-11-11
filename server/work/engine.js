@@ -168,6 +168,51 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       return '';
     }
   };
+  // 按工作目录反查项目：执行器只知道自己的 workspace。
+  const projectByPath = value => {
+    if (typeof value !== 'string' || !value.trim()) return null;
+    let target = null;
+    try { target = path.resolve(value); } catch { return null; }
+    for (const row of db.list('project')) {
+      try { if (path.resolve(row.path) === target) return row; } catch { /* 路径坏掉的记录跳过 */ }
+    }
+    return null;
+  };
+  /**
+   * 项目现状：让任何 Agent 先看「别人改过什么」，而不是把整个文件重读一遍。
+   * 顺序按有用程度排：最近谁改了什么（含文件清单）→ 记忆里的结论/待办 → 当前还没提交的改动。
+   */
+  const projectStateBrief = workspace => {
+    try {
+      const project = projectByPath(workspace);
+      if (!project) return '';
+      const lines = ['【项目现状 · 由 DataAgent 维护】', `项目：${project.name}（${project.path}）`];
+      const changes = typeof projects.listChanges === 'function' ? projects.listChanges(project.id) : [];
+      const recent = changes.slice(-6).reverse();
+      if (recent.length) {
+        lines.push('', '最近的改动（新的在前）：');
+        for (const change of recent) {
+          const when = String(change.createdAt || '').slice(5, 16).replace('T', ' ');
+          const files = Array.isArray(change.files) ? change.files.slice(0, 8) : [];
+          const head = `- ${when} · ${change.executorId || 'Agent'} · ${String(change.title || '').slice(0, 60)}`;
+          lines.push(head);
+          if (change.summary) lines.push(`  ${String(change.summary).replace(/\s+/g, ' ').slice(0, 160)}`);
+          if (files.length) lines.push(`  动了：${files.join('、')}${change.files.length > 8 ? ` 等 ${change.files.length} 个` : ''}`);
+        }
+      }
+      const digest = memory.digest(project.id, { limit: 4 });
+      if (digest) lines.push('', digest);
+      try {
+        const dirty = projects.gitChangedFilesSync(project.path);
+        if (Array.isArray(dirty) && dirty.length) lines.push('', `当前工作区还有未提交的改动：${dirty.slice(0, 12).join('、')}${dirty.length > 12 ? ` 等 ${dirty.length} 个` : ''}`);
+      } catch { /* 不是 git 仓库就算了 */ }
+      lines.push('', '要看某个文件改了什么，用 git diff 或直接读那一段；不必通读整个文件。');
+      const text = lines.join('\n');
+      return text.length > 2400 ? `${text.slice(0, 2400)}…` : text;
+    } catch {
+      return '';
+    }
+  };
   const projectBriefContext = project => {
     try {
       const brief = projects.getBrief(project.id);
@@ -188,7 +233,12 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const recent = changes.slice(-3);
       if (recent.length) {
         lines.push('', '最近变更：');
-        for (const change of recent) lines.push(`- ${change.title}${change.summary ? `：${String(change.summary).slice(0, 90)}` : ''}`);
+        for (const change of recent) {
+          const files = Array.isArray(change.files) ? change.files.slice(0, 6) : [];
+          lines.push(`- ${change.title}${change.summary ? `：${String(change.summary).slice(0, 90)}` : ''}${files.length ? `（动了 ${files.join('、')}）` : ''}`);
+        }
+        lines.push('这些是别人已经改过的部分：先看清单，需要细节再用 git diff 或只读相关段落，不要整篇重读。');
+        lines.push('想确认得更细，直接调 project_changes 工具（里面有文件清单和摘要），不要靠通读文件去猜。');
       }
       const digest = projectMemoryContext(project);
       if (digest) lines.push('', digest);
@@ -493,6 +543,20 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       drainingOutbox=false;
     }
   }
+  /** 执行器自己报告的产出文件：不是 git 仓库时，变更档案就靠它。 */
+  function reportedFiles(task) {
+    const names = [];
+    const push = value => {
+      if (typeof value !== 'string') return;
+      const name = value.replace(/（[^）]*）$/, '').trim();
+      if (name && !names.includes(name)) names.push(name);
+    };
+    const cli = task?.artifacts?.cli;
+    if (Array.isArray(cli?.artifacts)) for (const item of cli.artifacts) push(item);
+    if (Array.isArray(cli?.files)) for (const item of cli.files) push(item);
+    if (Array.isArray(task?.artifacts?.files)) for (const item of task.artifacts.files) push(item);
+    return names.slice(0, 40);
+  }
   /** 把一次完成/失败的执行写成项目记忆；有模型时异步换成更好的总结。 */
   function recordProjectMemory(project, { ticket, status, summary, files, executorId, projectChatId }) {
     let entry = null;
@@ -625,7 +689,13 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         });
         if (finished) {
           const project = db.get('project', chat.projectId);
-          const changedFiles = project && status === 'completed' ? changedSinceSnapshot(ticket.id, project.path) : [];
+          // 文件清单优先用 git 前后差集；目录不是 git 仓库时退回执行器自己报告的产出
+          // （model 的 artifacts.cli.artifacts、CLI 的 files），否则变更档案里永远是空的。
+          // 失败也要记：文件确实被改过，这件事跟这次任务算不算成功无关。
+          const reported = reportedFiles(task);
+          const changedFiles = project
+            ? [...new Set([...(status === 'completed' ? changedSinceSnapshot(ticket.id, project.path) : []), ...reported])]
+            : [];
           if (project && status !== 'cancelled') {
             try {
               projects.recordChange(project.id, {
@@ -1130,6 +1200,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     projectMemory(id,limit){projects.getProject(id);return memory.list(id,limit||20);},
     projectMemoryDigest(id){projects.getProject(id);return {digest:memory.digest(id,{limit:8}),entries:memory.list(id,30)};},
     deleteProjectMemory(id,memoryId){projects.getProject(id);return memory.remove(memoryId);},
+    // 给执行器（模型 Agent）用：按工作目录拿到「最近改了什么」，不泄露其它项目。
+    projectStateBrief(workspace){return projectStateBrief(workspace);},
     createProjectChat(projectId,input){
       const chat=projects.createChat(projectId,input);
       try{
@@ -1499,7 +1571,14 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           : projects.createChat(projectRecord.id,{executorId:'model',title:goal}).id;
       }
       const planned=(analysis.steps||[]).filter(step=>step.executorId&&step.executorId!=='model').slice(0,3);
-      const chosen=planned.length?planned:[{executorId:requested[0]||'claude-code',title:'执行任务',scope:[]}];
+      // 只给「这一轮真正参与的 Agent」派活：分析结果里可能出现没被选中的执行器
+      // （模板或模型按任务猜出来的），照搬会造出「没人负责的契约文件」——
+      // duo 那次 index.html 引用了 Codex 负责的 input.js、但这一轮没有 Codex，就是这么来的。
+      const analysed=(analysis.steps||[]).filter(step=>step.executorId&&step.executorId!=='model');
+      const chosen=requested.map((id,index)=>{
+        const match=analysed.find(step=>step.executorId===id);
+        return match?{...match,executorId:id}:{executorId:id,title:`执行任务第 ${index+1} 部分`,scope:[]};
+      });
       const brief=[goal,...(analysis.understanding||[]).slice(0,4)].join('\n');
       const steps=[{
         executorId:'model',
@@ -1529,6 +1608,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         executorInput:{prompt:[
           '你是团队的协调者。前面几位 Agent 已经把结果交回给你（见上方材料）。',
           '请写一份团队汇总：每个人做了什么、结果是否达成目标、还有什么没做完或不可靠，',
+          '如果目标里点名了具体文件（比如 index.html、game.js），先列目录确认它们都在，缺了必须写明缺哪个，不要笼统说"完成了"。',
           '并明确「下一步建议交给谁、做什么」，方便继续分派。只依据给定材料，不要编造。',
         ].join('\n'),...(profileId?{profileId}:{})}
       });

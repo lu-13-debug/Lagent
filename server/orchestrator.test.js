@@ -47,7 +47,7 @@ function harness(t, options = {}) {
       return { id, status };
     },
     getProject(id) {
-      return { id, chats: [] };
+      return { id, chats: [], ...(options.projectPath ? { path: options.projectPath } : {}) };
     },
     createProjectChat(projectId, input) {
       const chat = { id: `chat-${input.executorId}${input.writable ? '-write' : ''}`, executorId: input.executorId, projectId, ...(input.parentChatId ? { parentChatId: input.parentChatId } : {}), writable: input.writable === true };
@@ -290,4 +290,62 @@ test('能力路由：没人能接的一步标成跳过，并说清缺哪种能�
   assert.ok(done.board.some(item => /找不到具备 browser 能力/.test(item.text)));
   // 其它步骤照常有人接，工单也照常派。
   assert.ok(store.list('work-ticket').length >= 2);
+});
+
+test('看门狗：一步长时间没有任何输出就停下来，而不是一直等', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'dataagent-watchdog-'));
+  const rows = new Map();
+  const store = {
+    get: (kind, id) => rows.get(`${kind}:${id}`) ?? null,
+    list: kind => [...rows.entries()].filter(([key]) => key.startsWith(`${kind}:`)).map(([, body]) => body),
+    put: (kind, body) => { rows.set(`${kind}:${body.id}`, body); return body; },
+    delete: (kind, id) => { rows.delete(`${kind}:${id}`); },
+  };
+  // 工单一直停在 working、updatedAt 不动：模拟 CLI 卡住不出声。
+  store.put('work-ticket', { id: 't-1', status: 'working', updatedAt: '2026-01-01T00:00:00.000Z', summary: '执行中', executor: 'codex' });
+  const stopped = [];
+  const orchestrator = createOrchestrator({
+    engine: { action: (id, action) => { stopped.push([id, action]); return { id, status: 'cancelled' }; } },
+    store,
+    emit: () => {},
+    listAgents: () => [],
+    storageUrl: `file:${join(root, 'runs.db')}`,
+    idleTimeoutMs: 120
+  });
+  t.after(() => {
+    try {
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch {
+      // LibSQL 句柄在 Windows 上可能还没释放，留给系统清理。
+    }
+  });
+  const result = await orchestrator._internal.waitTicket('t-1');
+  assert.equal(result.status, 'stalled', '没有输出就不再干等');
+  assert.match(result.summary, /没有任何输出/);
+  assert.deepEqual(stopped, [['t-1', 'stop']], '要真的把它停掉');
+});
+
+test('实现步骤没写全点名的文件，这一步和整条运行都判失败', async t => {
+  const projectPath = mkdtempSync(join(tmpdir(), 'dataagent-gap-'));
+  const { orchestrator } = harness(t, { projectPath });
+  t.after(() => {
+    try {
+      rmSync(projectPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch {
+      // 忽略：临时目录会被系统清理。
+    }
+  });
+  const run = await orchestrator.start({ goal: '做一个游戏页面：写 index.html 和 input.js', projectId: 'p-gap' });
+  for (let i = 0; i < 100; i++) {
+    if (orchestrator.get(run.id).status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  await orchestrator.approve(run.id);
+  const done = await settle(orchestrator, run.id);
+  const implement = done.steps.find(step => step.kind === 'implement');
+  assert.ok(implement, '改代码模板要有实现步骤');
+  assert.equal(implement.status, 'failed', '文件没出现就不算做完');
+  assert.match(implement.summary || '', /产出不完整/);
+  assert.equal(done.status, 'failed');
+  assert.deepEqual(done.missing, ['index.html', 'input.js'], '缺哪些文件要记在运行上');
 });

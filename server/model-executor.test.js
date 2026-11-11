@@ -563,3 +563,32 @@ test('受保护路径永远拒绝，连询问都不给', async t => {
   const text = done.activity.map(item => `${item.text || ''} ${item.detail || ''}`).join('\n');
   assert.match(text, /受保护/);
 });
+
+test('project_changes 工具把项目改动清单交给模型，不必整篇重读文件', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-changes-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'game.js'), '// 已经改过');
+  const brief = ['【项目现状 · 由 DataAgent 维护】', '最近的改动（新的在前）：', '- 08:40 · claude-code · 加了输入处理', '  动了：game.js、input.js'].join('\n');
+  const hub = fakeModelHub([
+    '{"tool":"project_changes","args":{}}',
+    '{"final":{"summary":"看过了","files":[]}}',
+  ]);
+  const seen = [];
+  const executor = modelExecutor({
+    store,
+    cwd: dir,
+    context: () => hub.context(),
+    fetchImpl: fakeFetch(hub),
+    projectState: workspace => { seen.push(workspace); return brief; },
+  });
+  executor.start({ command: '接手改动' }, { id: 'assign-changes' }, {
+    executorInput: { prompt: '接手改动', workspace: dir, write: false },
+  });
+  const done = await settle(executor, 'assign-changes');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.deepEqual(seen, [dir], '按工作目录去问项目现状');
+  const text = done.activity.map(item => `${item.text || ''} ${item.detail || ''}`).join('\n');
+  assert.match(text, /看改动|项目现状/);
+  assert.match(text, /input\.js/, '清单里要能看出别人动了哪些文件');
+});

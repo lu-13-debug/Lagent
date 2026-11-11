@@ -8,9 +8,13 @@ import { z } from 'zod';
 import { detectTemplate, buildSteps, repairStep, templateById } from './templates.js';
 import { pickExecutor, capabilitiesOf } from './capabilities.js';
 import { createRunStore, RUN_STATUS, isTerminal } from './runs.js';
+import { artifactGap, describeGap } from '../artifacts.js';
 
 const TERMINAL_TICKET = new Set(['completed', 'failed', 'blocked', 'cancelled']);
 const DEFAULT_STEP_TIMEOUT_MS = 30 * 60 * 1000;
+// 单步「完全没有动静」的上限：CLI 卡住时总超时太远，用户只能干等。
+// 实测 Codex 有过 20 分钟零输出的情况，5 分钟没有任何活动基本就可以判死。
+const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const POLL_MS = 400;
 
 function sleep(ms) {
@@ -24,6 +28,7 @@ export function createOrchestrator({
   listAgents = () => engine.bootstrap().agents || [],
   storageUrl = null,
   stepTimeoutMs = DEFAULT_STEP_TIMEOUT_MS,
+  idleTimeoutMs = Number(process.env.DATAAGENT_STEP_IDLE_MS) > 0 ? Number(process.env.DATAAGENT_STEP_IDLE_MS) : DEFAULT_IDLE_TIMEOUT_MS,
   now = () => new Date().toISOString()
 }) {
   const runs = createRunStore({ store, clock: now });
@@ -33,6 +38,16 @@ export function createOrchestrator({
     return listAgents()
       .filter(agent => agent.status === 'available' || agent.available === true)
       .map(agent => agent.id);
+  }
+
+  // 项目根目录：产出校验要拿它当基准。
+  function projectRootOf(run) {
+    if (!run?.projectId) return '';
+    try {
+      return engine.getProject(run.projectId)?.project?.path || engine.getProject(run.projectId)?.path || '';
+    } catch {
+      return '';
+    }
   }
 
   // 模板有两种来源：用户在对话里手动选的（templateChoice），或者按目标关键词猜的。
@@ -102,13 +117,37 @@ export function createOrchestrator({
     return created.chat.id;
   }
 
+  // 看门狗要的信号：这一步到底有没有在动。
+  // 工单的 updatedAt、摘要、以及执行器任务里的 activity 条数，任何一个变化都算“在动”。
+  function progressSignature(ticket) {
+    const assignments = store.list('work-assignment').filter(row => row.ticketId === ticket.id);
+    const last = assignments[assignments.length - 1] || null;
+    const task = last ? store.get('task', last.id) : null;
+    const activity = Array.isArray(task?.activity) ? task.activity.length : 0;
+    return `${ticket.status}|${ticket.updatedAt || ''}|${String(ticket.summary || '').slice(0, 60)}|${activity}|${task?.status || ''}`;
+  }
+
   async function waitTicket(ticketId) {
     const deadline = Date.now() + stepTimeoutMs;
+    let signature = '';
+    let lastChange = Date.now();
     for (;;) {
       const ticket = store.get('work-ticket', ticketId);
       if (ticket && TERMINAL_TICKET.has(ticket.status)) {
         const report = store.list('work-report').find(row => row.ticketId === ticketId) || null;
         return { status: ticket.status, summary: report?.summary || ticket.summary || '' };
+      }
+      if (ticket) {
+        const next = progressSignature(ticket);
+        if (next !== signature) {
+          signature = next;
+          lastChange = Date.now();
+        } else if (idleTimeoutMs > 0 && Date.now() - lastChange > idleTimeoutMs) {
+          // 长时间零进展：先停掉，再如实告诉用户发生了什么，而不是继续干等 30 分钟。
+          try { engine.action(ticketId, 'stop'); } catch { /* 已经停了就算了 */ }
+          const minutes = Math.round(idleTimeoutMs / 60000);
+          return { status: 'stalled', summary: `这一步 ${minutes} 分钟没有任何输出，已停止（多半是 CLI 卡住了）` };
+        }
       }
       if (Date.now() > deadline) return { status: 'timeout', summary: '这一步超过等待上限，已放弃等待' };
       await sleep(POLL_MS);
@@ -143,15 +182,29 @@ export function createOrchestrator({
     engine.action(ticket.id, 'approve');
     const result = await waitTicket(ticket.id);
 
+    let stepStatus = result.status === 'completed' ? 'done' : 'failed';
+    let summary = String(result.summary || '');
+    // 动文件的步骤要自己证明「文件真的在」：退出码 0 不算数。
+    if (stepStatus === 'done' && step.kind === 'implement') {
+      const root = projectRootOf(run);
+      const gap = root ? artifactGap(root, step.prompt) : [];
+      if (gap.length) {
+        stepStatus = 'failed';
+        summary = `${summary}${summary ? '；' : ''}${describeGap(gap)}`;
+        runs.note(run, 'check', `「${step.role}」${describeGap(gap)}`);
+      }
+    }
+    if (result.status === 'stalled') runs.note(run, 'check', `「${step.role}」长时间没有输出，已停止`);
+
     runs.updateStep(run, step.index, {
-      status: result.status === 'completed' ? 'done' : 'failed',
-      summary: String(result.summary || '').slice(0, 2000),
+      status: stepStatus,
+      summary: summary.slice(0, 2000),
       endedAt: now()
     });
-    if (result.summary) runs.note(run, 'result', `${step.role}：${String(result.summary).slice(0, 400)}`);
+    if (summary) runs.note(run, 'result', `${step.role}：${summary.slice(0, 400)}`);
     runs.save(run);
-    publish({ type: 'run-step', runId: run.id, payload: { index: step.index, status: result.status, summary: result.summary } });
-    return result;
+    publish({ type: 'run-step', runId: run.id, payload: { index: step.index, status: stepStatus, summary } });
+    return { status: stepStatus === 'done' ? 'completed' : (result.status === 'stalled' ? 'stalled' : 'failed'), summary };
   }
 
   // ---- Mastra 工作流 ----
@@ -317,15 +370,29 @@ export function createOrchestrator({
         const last = run.board.slice(-5).map(item => `- ${item.text}`).join('\n');
         lines.push('最近经过：', last);
       }
-      run.digest = lines.join('\n').slice(0, 4000);
-      if (run.cancelledAt) {
-        runs.note(run, 'note', '运行被取消，以下是已经做完的部分');
-      } else if (run.status !== RUN_STATUS.failed) {
-        runs.setStatus(run, RUN_STATUS.completed);
-        runs.note(run, 'note', '运行结束');
-      } else {
-        runs.note(run, 'note', '运行结束（验证没通过）');
-      }
+    // 运行级产出校验：目标里点名的文件是否真的存在。
+    // 这一步就是 trio 那次「每步都报成功、index.html 引用的 input.js 却没有」的兜底。
+    const gap = projectRootOf(run) ? artifactGap(projectRootOf(run), run.goal) : [];
+    if (gap.length) {
+      run.missing = gap;
+      lines.push('', describeGap(gap));
+      runs.note(run, 'check', describeGap(gap));
+    } else {
+      run.missing = [];
+    }
+    run.digest = lines.join('\n').slice(0, 4000);
+    if (run.cancelledAt) {
+      runs.note(run, 'note', '运行被取消，以下是已经做完的部分');
+    } else if (gap.length) {
+      runs.setStatus(run, RUN_STATUS.failed);
+      run.error = describeGap(gap);
+      runs.note(run, 'note', '运行结束，但产出不完整');
+    } else if (run.status !== RUN_STATUS.failed) {
+      runs.setStatus(run, RUN_STATUS.completed);
+      runs.note(run, 'note', '运行结束');
+    } else {
+      runs.note(run, 'note', '运行结束（验证没通过）');
+    }
       publish({ type: 'run', runId: run.id, payload: { status: run.status, digest: run.digest } });
       return { runId: run.id };
     }

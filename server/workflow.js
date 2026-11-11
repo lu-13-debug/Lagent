@@ -148,7 +148,11 @@ export class Workflow {
     this.modelSnapshots = new Map(); this.lockedModelContexts = new Set();
     for (const task of store.list('task')) if (['running', 'awaiting_approval'].includes(task.status)) {
       task.status = 'failed'; task.error = '服务已重启，先前任务中断，冻结额度已释放。'; task.updatedAt = new Date().toISOString();
-      const step = task.steps[task.currentStep]; if (step && step.status !== 'completed') step.status = 'failed';
+      // 旧记录可能缺 steps 或 currentStep 越界；这里只做善后，不能让整个服务起不来。
+      const steps = Array.isArray(task.steps) ? task.steps : [];
+      const step = steps[task.currentStep];
+      if (step && step.status !== 'completed') step.status = 'failed';
+      if (!Array.isArray(task.events)) task.events = [];
       task.events.push(makeEvent('error', '任务因服务重启中断', task.error, step?.id)); store.finish(task, false);
     }
   }

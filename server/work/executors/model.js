@@ -373,7 +373,8 @@ export function modelSystemPrompt({ maxSteps, write, permission = write ? 'works
     '· 结束任务：{"final":{"done":true,"summary":"做了什么、结论是什么","files":["改动过的文件"]}}',
     '· 只有确实全部做完才写 done:true；没做完、缺东西、需要人接手，写 done:false 并在 summary 里说清还差什么。',
     '',
-    `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content,append?}、replace_in_file{path,find,replace,all?}、move_path{from,to}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command,shell?}。`,
+    `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content,append?}、replace_in_file{path,find,replace,all?}、move_path{from,to}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command,shell?}、project_changes{}。`,
+    '接手一个已经有改动的项目时，先调 project_changes：它会告诉你谁在什么时候改了什么文件；然后按需 read_file 读那一段，或 run_command 跑 git diff 看差异，不要动辄把整个文件从头读一遍。',
     '注意：环境是 Windows。要跑 PowerShell 就写 run_command{command:"<脚本本体>",shell:"powershell"}，command 直接给脚本，不要自己再拼 powershell -Command 和引号。',
     '路径可以写相对工作目录的路径，也可以写绝对路径。',
     '每次工具调用的 content 控制在一两百行以内：输出有长度上限，写长文件就先 write_file 骨架，再用 write_file{path,content:"<后续片段>",append:true} 一段段追加，最后 read_file 复核。',
@@ -508,6 +509,7 @@ const TOOL_LABELS = {
   replace_in_file: '改文件',
   move_path: '移动',
   delete_path: '删除',
+  project_changes: '看改动',
   run_command: '运行命令',
 };
 
@@ -522,6 +524,7 @@ export const TOOL_SCHEMAS = [
   { type: 'function', function: { name: 'move_path', description: '移动或重命名文件/目录', parameters: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] } } },
   { type: 'function', function: { name: 'delete_path', description: '删除文件或目录；dryRun 只预览不删，删目录必须 recursive=true', parameters: { type: 'object', properties: { path: { type: 'string' }, recursive: { type: 'boolean' }, dryRun: { type: 'boolean' } }, required: ['path'] } } },
   { type: 'function', function: { name: 'run_command', description: '执行命令。查看类命令（Get-ChildItem/dir/ls 等）直接跑；其它命令需要用户确认。要跑 PowerShell 脚本就传 shell="powershell"', parameters: { type: 'object', properties: { command: { type: 'string' }, shell: { type: 'string', enum: ['powershell'] } }, required: ['command'] } } },
+  { type: 'function', function: { name: 'project_changes', description: '查看项目最近谁改了什么：改动清单、涉及文件、当前未提交的改动。接手任务前先看它，别整篇重读文件', parameters: { type: 'object', properties: {} } } },
 ];
 
 // 有些模型会把工具调用当文本吐出来（内部标记 + 一串 XML）。解析不出来就白丢一步，
@@ -564,6 +567,7 @@ export function describeCall(tool, args = {}) {
   if (tool === 'move_path') return `${label} ${shortPath(args.from)} → ${shortPath(args.to)}`;
   if (tool === 'delete_path') return `${label} ${shortPath(args.path)}${args.recursive === true ? '（递归）' : ''}${args.dryRun === true ? '（试运行）' : ''}`;
   if (tool === 'run_command') return `${label} ${String(args.command || '').slice(0, 80)}`;
+  if (tool === 'project_changes') return '查看项目最近的改动';
   return tool;
 }
 
@@ -599,10 +603,14 @@ export function describeOutput(tool, output = {}) {
     const first = String(output.output || '').trim().split(/\r?\n/)[0] || '';
     return `退出码 ${output.exitCode ?? 0}${first ? `：${first.slice(0, 100)}` : ''}`;
   }
+  if (tool === 'project_changes') {
+    return String(output.changes || '').split('\n').slice(0, 4).join(' / ').slice(0, 240);
+  }
   return '';
 }
 
-export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fetch, perCallTimeoutMs = 120000, totalTimeoutMs = 900000 }) {  if (!store || typeof cwd !== 'string' || !cwd) throw new TypeError('model 执行器需要 store 和 cwd');
+export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fetch, perCallTimeoutMs = 120000, totalTimeoutMs = 900000, projectState = () => '' }) {
+  if (!store || typeof cwd !== 'string' || !cwd) throw new TypeError('model 执行器需要 store 和 cwd');
   const workspace = path.resolve(cwd);
   const running = new Map();
   const persist = task => { store.put('task', task); return task; };
@@ -777,6 +785,11 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
   async function runTool(task, name, args, guard, { write, confirmDanger, permission = 'workspace' }) {
     const writeTools = WRITE_TOOLS;
     if (writeTools.has(name) && !write) throw new Error(`当前是「${PERMISSION_LABELS.read}」模式，不能修改文件；要改动请在设置里切换到「${PERMISSION_LABELS.workspace}」。`);
+    if (name === 'project_changes') {
+      // 接手别人的改动前先看这份清单：谁、什么时候、动了哪些文件、为什么。
+      const brief = String(projectState(guard.base) || '').trim();
+      return { changes: brief || '这个目录还没有记录到任何改动。' };
+    }
     if (name === 'list_files') {
       await guardAccess(task, guard.resolve(args?.path), 'read', undefined, permission);
       return listFiles(guard, args?.path);

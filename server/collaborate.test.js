@@ -65,8 +65,20 @@ test('团队协作：内置模型先拆解，再分派外部 Agent，最后由�
   assert.match(modelControl.executorInput.prompt, /不要修改任何文件/);
 });
 
-test('团队协作：没有可用的外部 Agent 时拒绝执行', async t => {
+test('团队协作：只给你选中的 Agent 派活，没选的不会凭空出现在分工里', async t => {
   const { engine } = harness(t);
+  const result = await engine.collaborate({
+    goal: '给播放器加一个音量记忆功能，写 index.html、player.js 和 unit.test.js',
+    agentIds: ['claude-code']
+  });
+  const middle = result.plan.steps.slice(1, -1);
+  assert.ok(middle.length >= 1);
+  for (const step of middle) {
+    assert.equal(step.executorId, 'claude-code', '只在被选中的 Agent 里分工');
+  }
+});
+
+test('团队协作：没有可用的外部 Agent 时拒绝执行', async t => {  const { engine } = harness(t);
   await assert.rejects(
     () => engine.collaborate({ goal: '补一个导出按钮', agentIds: [] }),
     /至少选择一个 Agent/

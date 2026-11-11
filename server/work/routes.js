@@ -3,6 +3,25 @@ import { workEvents } from './effects.js';
 import { registerMobileWorkRoutes } from '../mobile-gateway.js';
 import { registerMcpRoutes } from './mcp.js';
 
+// 执行器（特别是模型 Agent）需要知道「这个工作目录属于哪个项目、最近改了什么」。
+// 执行器比引擎先创建，所以这里按 workspace 登记引擎，事后反查。
+const enginesByWorkspace = new Map();
+// 项目工作目录和引擎的默认工作目录通常不是同一个：项目可能在任何路径下导入。
+// 所以除了精确匹配，还要留一个「任意引擎」兜底，由它按路径反查项目。
+let fallbackEngine = null;
+
+/** 给执行器用：按工作目录拿到项目现状摘要（最近改动 + 项目记忆）。 */
+export function projectStateOf(workspace) {
+  const key = typeof workspace === 'string' ? workspace : '';
+  const engine = enginesByWorkspace.get(key) || fallbackEngine;
+  if (!engine) return '';
+  try {
+    return engine.projectStateBrief(key);
+  } catch {
+    return '';
+  }
+}
+
 export function registerWork(app,store,executor,{isSessionValid,onConnect,mobileGateway,mobileOwnerId,onMobileEventConnect,planner,windowBridge,providerRegistry,workspace,brain,allowFilesystemBrowser=false}={}) {
   const events=workEvents();
   const publish=event=>{
@@ -10,6 +29,8 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     if(mobileGateway)mobileGateway.publish(mobileOwnerId,event);
   };
   const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain});
+  enginesByWorkspace.set(typeof workspace==='string'?workspace:'', engine);
+  fallbackEngine = engine;
   app.get('/api/work/bootstrap',(_req,res)=>res.json(engine.bootstrap()));
   app.get('/api/work/projects',(_req,res)=>res.json({projects:engine.listProjects()}));
   if(allowFilesystemBrowser)app.get('/api/work/files',(req,res)=>res.json(engine.listDirectory({path:req.query?.path})));
@@ -147,5 +168,5 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   if(mobileGateway)registerMobileWorkRoutes(app,mobileGateway,{engine,ownerId:mobileOwnerId,onConnect:onMobileEventConnect});
   if(mobileGateway)registerMcpRoutes(app,{engine,gateway:mobileGateway,ownerId:mobileOwnerId,windowBridge});
   engine.recover();
-  return ()=>{engine.close();events.close();};
+  return ()=>{engine.close();events.close();enginesByWorkspace.delete(typeof workspace==='string'?workspace:'');};
 }

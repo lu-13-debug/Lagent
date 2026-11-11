@@ -1,4 +1,4 @@
-import { registerWork } from './work/routes.js';
+import { projectStateOf, registerWork } from './work/routes.js';
 import { createWindowBridge } from './window-bridge.js';
 import { workEnabled } from './work/policy.js';
 import { analysisExecutor } from './work/executors/analysis.js';
@@ -212,6 +212,11 @@ export function createApp(options = {}) {
       },
       // 会话级模型：允许这一步用指定的模型配置，而不是全局默认模型。
       contextFor:profileId=>modelHub.contextForProfile(profileId),
+      // 项目现状（最近改动 + 记忆摘要）：让内置 Agent 先看「别人改了什么」，
+      // 而不是每次都把整个文件重读一遍。
+      projectState:workspace=>{
+        try{return projectStateOf(workspace);}catch{return '';}
+      },
       fetchImpl:options.fetchImpl||fetch,
     });
     const mobileOwnerId=options.userId||'local';

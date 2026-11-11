@@ -10,6 +10,7 @@ import { createWorkEngine } from './work/engine.js';
 import { createExecutorRegistry } from './work/executors/index.js';
 import { claudeCodeExecutor } from './work/executors/claude-code.js';
 import { codexExecutor } from './work/executors/codex.js';
+import { modelExecutor } from './work/executors/model.js';
 import { windowExecutor } from './work/executors/window.js';
 
 async function waitFor(predicate, message = '等待条件超时', timeoutMs = 3000) {
@@ -501,4 +502,48 @@ test('P1 窗口 Agent 可与项目内 Agent 并行分派，窗口会话绑定所
   assert.equal(again.tickets[0].projectChatId, windowChat.id);
   assert.equal(engine.getProject(imported.project.id).chats.filter(chat => chat.executorId === 'window').length, 1);
   assert.throws(() => engine.projectDispatch(imported.project.id, { text: '缺句柄', executorIds: ['claude-code', 'window'] }), { status: 400, message: /请先选择要接管的窗口/ });
+});
+
+test('变更档案在没有 git 的目录里也会记下执行器报告的产出文件', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'dataagent-changes-'));
+  const store = new Store(root);
+  // 故意不建 .git：真实用户经常把普通文件夹导进来，git 差集拿不到东西。
+  const projectDir = join(root, 'plain-project');
+  mkdirSync(projectDir, { recursive: true });
+  writeFileSync(join(projectDir, 'README.md'), '# plain\n');
+  const home = makeHome(root);
+  const replies = [
+    { choices: [{ message: { tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'note.txt', content: 'hello-memory' }) } }] } }] },
+    { choices: [{ message: { content: '{"final":{"summary":"已写入 note.txt","files":["note.txt"],"done":true}}' } }] }
+  ];
+  let index = 0;
+  const model = modelExecutor({
+    store,
+    cwd: root,
+    context: () => ({ settings: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' }, key: 'test-key', maxTokens: 800, timeoutMs: 5000 }),
+    fetchImpl: async () => {
+      const body = replies[Math.min(index, replies.length - 1)];
+      index += 1;
+      return { ok: true, status: 200, headers: { get: () => null }, async json() { return body; }, async text() { return JSON.stringify(body); } };
+    }
+  });
+  const engine = createWorkEngine(store, createExecutorRegistry([model]), () => {}, {
+    policy: { allowedExecutors: ['model'], requireApproval: false, permission: 'workspace' },
+    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    home
+  });
+  t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const imported = engine.importProject({ path: projectDir });
+  const { chat } = engine.createProjectChat(imported.project.id, { executorId: 'model' });
+  const ticket = engine.projectChatMessage(chat.id, { text: '新建 note.txt，内容写 hello-memory。' });
+  await waitFor(() => ['completed', 'failed'].includes(engine.detail(ticket.id).ticket.status), '模型工单没有结束', 8000);
+  assert.equal(engine.detail(ticket.id).ticket.status, 'completed');
+
+  const changes = engine.projectChanges(imported.project.id);
+  const recorded = changes.find(change => change.ticketId === ticket.id);
+  assert.ok(recorded, '完成一次执行要留下变更档案');
+  assert.deepEqual(recorded.files, ['note.txt'], '没有 git 时也要记下动了哪个文件');
+  const lastChange = changes.at(-1);
+  assert.deepEqual(lastChange.files, ['note.txt']);
 });
