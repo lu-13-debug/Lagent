@@ -231,6 +231,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [pickedTickets, setPickedTickets] = useState<string[]>([]);
   const [bulkConfirm, setBulkConfirm] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [folderNewChat, setFolderNewChat] = useState<{ project: WorkProject; executorId: string } | null>(null);
   const [dropActive, setDropActive] = useState(false);
   // 侧栏折叠、右侧检查器、底部用户菜单：让主区尽量宽，工作与过程都放在主区
   const [railCollapsed, setRailCollapsed] = useState<boolean>(() => readJson<boolean>(RAIL_COLLAPSED_KEY, false));
@@ -458,19 +459,26 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       return result.projects;
     } catch { return folderState.projects; }
   };
-  // 文件夹行上的「+」：用这个文件夹上一次用过的执行器直接开一段会话。
-  const quickNewChat = async (project: WorkProject) => {
-    const usable = projectExecutors.filter(id => allowedExecutors.includes(id));
+  // 文件夹行上的「+」：先让你选 Agent，再建会话（默认选这个文件夹上次用的那个）。
+  const quickNewChat = (project: WorkProject) => {
+    const usable = projectExecutorIds.filter(id => id !== 'window' && allowedExecutors.includes(id));
+    if (!usable.length) { notify('没有可用于项目的执行器，请先在设置里启用。', true); return; }
     const preferred = project.chats.find(chat => usable.includes(chat.executorId))?.executorId;
-    const executorId = preferred || usable[0];
-    if (!executorId) { notify('没有可用于项目的执行器，请先在设置里启用。', true); return; }
+    setFolderNewChat({ project, executorId: preferred || (usable.includes('model') ? 'model' : usable[0]) });
+  };
+  const createFolderChat = async () => {
+    const draft = folderNewChat;
+    if (!draft) return;
+    const usable = projectExecutorIds.filter(id => id !== 'window' && allowedExecutors.includes(id));
+    if (!usable.includes(draft.executorId)) { notify('这个 Agent 已经不在可用列表里，请重新选。', true); return; }
+    setFolderNewChat(null);
     try {
-      const result = await api.workCreateProjectChat(project.id, { executorId });
+      const result = await api.workCreateProjectChat(draft.project.id, { executorId: draft.executorId });
       await reloadProjects();
       markChatSeen(result.chat.id);
-      setCollapsedProjects(previous => previous.filter(id => id !== project.id));
-      openFolderChat(project.id, result.chat.id);
-      notify(`已在「${project.name}」新建会话。`);
+      setCollapsedProjects(previous => previous.filter(id => id !== draft.project.id));
+      openFolderChat(draft.project.id, result.chat.id);
+      notify(`已在「${draft.project.name}」新建会话，交给${executorNames[draft.executorId] || draft.executorId}。`);
     } catch (cause) { notify((cause as Error).message, true); }
   };
   const commitChatRename = async () => {
@@ -1675,6 +1683,20 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         </ul>
         <p>这一步无法撤销，确认继续？</p>
         <div className="sa-confirm-actions"><button type="button" className="sa-button" onClick={() => setBulkConfirm(false)}>取消</button><button type="button" className="sa-button sa-danger" disabled={bulkBusy} onClick={() => void removePicked()}>{bulkBusy ? '正在删除…' : `删除 ${pickedTotal} 条`}</button></div>
+      </div>
+    </Modal>}
+    {folderNewChat && <Modal title={`在「${folderNewChat.project.name}」新建会话`} subtitle="选一个 Agent 负责这条会话。建好后还能在对话里改权限档位与模型。" close={() => setFolderNewChat(null)}>
+      <div className="sa-newchat-pick">
+        <div className="sa-newchat-agents">
+          {projectExecutorIds.filter(id => id !== 'window' && allowedExecutors.includes(id)).map(id => {
+            const on = folderNewChat.executorId === id;
+            return <button key={id} type="button" className={`sa-pick ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => setFolderNewChat({ ...folderNewChat, executorId: id })}>
+              {on ? <Check size={12} /> : <Bot size={12} />}{(id === 'model' ? '内置 Agent' : executorNames[id] || id)}
+            </button>;
+          })}
+        </div>
+        <p className="sa-inline-note"><ShieldCheck size={13} />写文件的权限、能不能跨目录，由设置里的权限档位决定；内置 Agent 会先分析任务、再分派。</p>
+        <div className="sa-confirm-actions"><button type="button" className="sa-button" onClick={() => setFolderNewChat(null)}>取消</button><button type="button" className="sa-button sa-primary" onClick={() => void createFolderChat()}>新建会话</button></div>
       </div>
     </Modal>}
     {toast && <Toast message={toast.text} error={toast.error} close={() => setToast(null)} />}

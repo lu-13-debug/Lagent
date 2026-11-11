@@ -6344,3 +6344,17 @@ html[data-theme="dark"] .sa-brand-mono {
   line-height: 1.7;
 }
 .sa-confirm-list strong { color: var(--sa-text); font-variant-numeric: tabular-nums; }
+
+/* ---- 侧栏「+」新建会话：先选 Agent ---- */
+.sa-newchat-pick {
+  display: grid;
+  gap: 12px;
+  padding: 4px 20px 18px;
+}
+.sa-newchat-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sa-newchat-pick .sa-inline-note { margin: 0; }
+.sa-newchat-pick .sa-confirm-actions { margin-top: 2px; }
