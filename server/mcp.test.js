@@ -34,7 +34,7 @@ test('MCP 初始化、工具列表与调用受 Bearer 令牌保护', async t => 
   const init = await f.request('/api/mcp', { method: 'POST', token: f.token, body: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } } });
   assert.equal(init.status, 200);
   const initBody = await init.json();
-  assert.equal(initBody.result.serverInfo.name, 'DataAgent');
+  assert.equal(initBody.result.serverInfo.name, 'Lagent');
   const list = await (await f.request('/api/mcp', { method: 'POST', token: f.token, body: { jsonrpc: '2.0', id: 2, method: 'tools/list' } })).json();
   assert.ok(list.result.tools.some(item => item.name === 'work_send_command'));
   const call = await (await f.request('/api/mcp', { method: 'POST', token: f.token, body: { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'work_send_command', arguments: { text: '检查 CI' } } } })).json();

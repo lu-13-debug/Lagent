@@ -24,7 +24,7 @@ export function AppearanceProvider({ children, userId }: { children: ReactNode; 
   }, []);
   useEffect(() => {
     try {
-      const bridge = window.dataagentDesktop;
+      const bridge = window.lagentDesktop;
       if (typeof bridge?.onSystemThemeChanged !== 'function') return;
       const unsubscribe = bridge.onSystemThemeChanged(value => setDark(Boolean(value)));
       return () => { if (typeof unsubscribe === 'function') { try { unsubscribe(); } catch { /* 旧客户端可继续工作。 */ } } };
@@ -36,8 +36,8 @@ export function AppearanceProvider({ children, userId }: { children: ReactNode; 
     if (current.theme === 'system') delete root.dataset.themeFix; else root.dataset.themeFix = '';
     document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute('content', current.resolvedTheme === 'dark' ? '#0d1110' : '#f2f4f3');
     root.dataset.appearanceReady = '';
-    try { saveAppearance(localStorage, origin, userId, preference); localStorage.setItem('dataagent:appearance:boot:v1', JSON.stringify(preference)); } catch { /* 存储不可用时仍可切换。 */ }
-    try { window.dataagentDesktop?.setTheme?.(current.theme); } catch { /* 旧客户端仍使用页面主题。 */ }
+    try { saveAppearance(localStorage, origin, userId, preference); localStorage.setItem('lagent:appearance:boot:v1', JSON.stringify(preference)); } catch { /* 存储不可用时仍可切换。 */ }
+    try { window.lagentDesktop?.setTheme?.(current.theme); } catch { /* 旧客户端仍使用页面主题。 */ }
   }, [current, origin, preference, userId]);
   const setTheme = useCallback((theme: ThemePreference) => setPreference(previous => ({ ...previous, theme })), []);
   const setRailCollapsed = useCallback((value: boolean) => { setRailPreference(value); try { saveRail(localStorage, origin, userId, value); } catch { /* 当前会话仍可使用。 */ } }, [origin, userId]);

@@ -2,7 +2,7 @@ import { estimateModelCost } from './model-cost.ts';
 export type Rates=Record<string,{input:number;output:number}>;
 export type UsageRow={provider:string;model:string;protocol:string;calls:number;tasks?:number;withUsage?:number;missingUsage?:number;inputTokens:number|null;outputTokens:number|null;totalTokens:number|null;inputMissing?:number;outputMissing?:number;cacheReadInputTokens?:number|null;cacheCreationInputTokens?:number|null};
 export type DisplayUsageRow=UsageRow & {protocolRows:UsageRow[]};
-export const modelRateKey=(runtime:string,userId:string|null|undefined,origin:string)=>`dataagent:model-rates:v1:${runtime}:${encodeURIComponent(origin)}:${runtime==='cloud'?encodeURIComponent(userId||'anonymous'):'local'}`;
+export const modelRateKey=(runtime:string,userId:string|null|undefined,origin:string)=>`lagent:model-rates:v1:${runtime}:${encodeURIComponent(origin)}:${runtime==='cloud'?encodeURIComponent(userId||'anonymous'):'local'}`;
 function clean(value:unknown):Rates {if(!value||typeof value!=='object'||Array.isArray(value))return {};return Object.fromEntries(Object.entries(value).filter(([,v])=>v&&typeof v==='object'&&[v.input,v.output].every(x=>typeof x==='number'&&Number.isFinite(x)&&x>=0)).map(([k,v])=>[k,{input:v.input,output:v.output}]));}
 export function readModelRates(storage:Pick<Storage,'getItem'>,key:string):Rates{try{return clean(JSON.parse(storage.getItem(key)||'{}'));}catch{return {};}}
 export function writeModelRates(storage:Pick<Storage,'setItem'>,key:string,rates:Rates){try{storage.setItem(key,JSON.stringify(clean(rates)));}catch{}}

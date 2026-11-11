@@ -70,8 +70,8 @@ export function parseCodexOutput({ stdout, stderr, exitCode }) {
 export function codexExecutor({
   store,
   cwd,
-  binary = process.env.DATAAGENT_CODEX_CLI,
-  timeoutMs = Number(process.env.DATAAGENT_CLI_TIMEOUT_MS) || 1_800_000,
+  binary = process.env.LAGENT_CODEX_CLI,
+  timeoutMs = Number(process.env.LAGENT_CLI_TIMEOUT_MS) || 1_800_000,
   maxOutputBytes = 8 * 1024 * 1024,
   spawnImpl,
   environment = process.env

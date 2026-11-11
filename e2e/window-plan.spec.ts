@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test('AI 规划可以把窗口 Agent 作为步骤目标', async ({ page }) => {
   await page.request.post('/api/auth/register', { data: { username: `wplan${Date.now()}`, displayName: '窗口计划', password: 'test-password-123' } });
-  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'DataAgent', version: '1.1.0', capabilities: { superagent: true } } }));
+  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: '1.1.0', capabilities: { superagent: true } } }));
   await page.route('**/api/work/events', route => route.abort());
   await page.route('**/api/work/windows**', route => route.fulfill({ json: { windows: [{ id: '42', handle: 42, pid: 7, process: 'Codex', title: 'Codex 任务窗口' }] } }));
   await page.route('**/api/work/bootstrap', route => route.fulfill({ json: {

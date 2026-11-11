@@ -43,7 +43,7 @@ entity = { kind, x, y, w, h, vx, vy, color, alive }  // kind 由规则自定义�
 
 const CONTRACT = `# 协作游戏契约
 
-这个目录由 DataAgent 生成：三个 Agent 各写一份文件，软件负责把它们组装成 \`coop/index.html\`。
+这个目录由 Lagent 生成：三个 Agent 各写一份文件，软件负责把它们组装成 \`coop/index.html\`。
 
 ## 谁负责什么
 

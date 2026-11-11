@@ -111,7 +111,7 @@ test('ACP 工单未显式提供 executorInput 时用指令文本作为 prompt', 
     get: id => id && store.get('task', id),
     stop() {}
   };
-  const engine = createWorkEngine(store, createExecutorRegistry([acp]), () => {}, { env: { DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
+  const engine = createWorkEngine(store, createExecutorRegistry([acp]), () => {}, { env: { LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   engine.updatePolicy({ allowedExecutors: ['claude-acp'] });
   const ticket = engine.command({ text: '只回复 OK', executorId: 'claude-acp' });
@@ -148,7 +148,7 @@ test('策略切到「仅查看」后项目分派给 ACP 只读', t => {
     get: id => id && store.get('task', id),
     stop() {}
   };
-  const engine = createWorkEngine(store, createExecutorRegistry([acp]), () => {}, { env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
+  const engine = createWorkEngine(store, createExecutorRegistry([acp]), () => {}, { env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); rmSync(projectDir, { recursive: true, force: true }); });
   engine.updatePolicy({ allowedExecutors: ['claude-acp'], permission: 'read' });
   const { project } = engine.importProject({ path: projectDir });

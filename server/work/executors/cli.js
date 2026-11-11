@@ -89,11 +89,11 @@ export function writablePrompt(input) {
   ].join('\n');
 }
 
-export const CLI_ENV_PASSTHROUGH = 'DATAAGENT_CLI_ENV_PASSTHROUGH';
+export const CLI_ENV_PASSTHROUGH = 'LAGENT_CLI_ENV_PASSTHROUGH';
 
 // 默认只给 CLI 子进程最小环境（不带任何 API Key），避免把本地凭据泄露给它读到的任意命令。
 // 但本机 CLI 往往自带 provider 配置（例如 ~/.codex/config.toml 里 env_key = "OPENCODE_API_KEY"），
-// 所以留一个显式开关：只有操作者在 DATAAGENT_CLI_ENV_PASSTHROUGH 里点名的变量才会透传。
+// 所以留一个显式开关：只有操作者在 LAGENT_CLI_ENV_PASSTHROUGH 里点名的变量才会透传。
 export function cliEnvironment(source = process.env) {
   const env = {};
   for (const key of ALLOWED_ENVIRONMENT) {

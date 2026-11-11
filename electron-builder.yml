@@ -1,6 +1,6 @@
-appId: com.dataagent.desktop
-productName: DataAgent
-copyright: Copyright © 2026 DataAgent
+appId: com.lagent.desktop
+productName: Lagent
+copyright: Copyright © 2026 Lagent
 asar: true
 npmRebuild: false
 directories:
@@ -21,7 +21,7 @@ win:
     - target: nsis
       arch:
         - x64
-  artifactName: DataAgent-Setup-${version}-${arch}.${ext}
+  artifactName: Lagent-Setup-${version}-${arch}.${ext}
   signExecutable: false
 nsis:
   oneClick: false
@@ -30,7 +30,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: DataAgent
+  shortcutName: Lagent
   installerLanguages:
     - zh_CN
     - en_US

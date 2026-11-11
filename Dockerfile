@@ -10,8 +10,8 @@ RUN npm run build
 
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
-ENV NODE_ENV=production HOST=0.0.0.0 PORT=3002 DATAAGENT_DATA_DIR=/app/data
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright DATAAGENT_PYTHON=/opt/analysis/bin/python
+ENV NODE_ENV=production HOST=0.0.0.0 PORT=3002 LAGENT_DATA_DIR=/app/data
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright LAGENT_PYTHON=/opt/analysis/bin/python
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv fonts-noto-cjk \

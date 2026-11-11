@@ -5,7 +5,7 @@ const fields = ['viewedSample', 'selectedData', 'generatedReport', 'dismissed'] 
 const clean = (value: unknown): OnboardingProgress => Object.fromEntries(fields.map(field => [field, Boolean(value && typeof value === 'object' && (value as Record<string, unknown>)[field] === true)])) as unknown as OnboardingProgress;
 
 export function onboardingKey(runtime: Pick<Runtime, 'mode'>, user: Pick<User, 'id'> | null, origin: string) {
-  return `dataagent:onboarding:v1:${runtime.mode}:${encodeURIComponent(origin)}:${runtime.mode === 'cloud' ? encodeURIComponent(user?.id || 'anonymous') : 'local'}`;
+  return `lagent:onboarding:v1:${runtime.mode}:${encodeURIComponent(origin)}:${runtime.mode === 'cloud' ? encodeURIComponent(user?.id || 'anonymous') : 'local'}`;
 }
 export function readOnboarding(storage: Pick<Storage, 'getItem'>, key: string): OnboardingProgress {
   try { return clean(JSON.parse(storage.getItem(key) || '{}')); } catch { return clean(null); }

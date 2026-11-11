@@ -21,7 +21,7 @@ export function useTaskMonitor(options: Options) {
     const controllers = new Set<AbortController>(); const notices = new Set<Notification>(); const baseTitle = document.title;
     const tracker = createTerminalTracker(latest.current.data!.tasks); const calibrated = new Set(latest.current.data!.tasks.filter(task => isTerminal(task.status)).map(task => task.id)); const pendingCalibration = new Set<string>();
     const needsDetails = new Set<string>(); const capabilities = latest.current.runtime.capabilities;
-    const backgroundMonitor = () => !document.hidden || Boolean(window.dataagentDesktop);
+    const backgroundMonitor = () => !document.hidden || Boolean(window.lagentDesktop);
     const contact = () => { lastContact = Date.now(); if (alive) setConnection('connected'); };
     function requestSignal() {
       const controller = new AbortController(); controllers.add(controller);
@@ -33,11 +33,11 @@ export function useTaskMonitor(options: Options) {
       const title = task.status === 'completed' ? '分析已完成' : '分析未完成';
       if ('Notification' in window && Notification.permission === 'granted') {
         try {
-          const notice = new Notification(title, { body: task.title, tag: `dataagent-task-${task.id}` }); notices.add(notice);
-          notice.onclick = () => { if (alive) { window.focus(); showDesktopWindow(window.dataagentDesktop); latest.current.onFocusTask(task.id); } notice.close(); notices.delete(notice); };
+          const notice = new Notification(title, { body: task.title, tag: `lagent-task-${task.id}` }); notices.add(notice);
+          notice.onclick = () => { if (alive) { window.focus(); showDesktopWindow(window.lagentDesktop); latest.current.onFocusTask(task.id); } notice.close(); notices.delete(notice); };
           notice.onclose = () => notices.delete(notice);
-        } catch { document.title = `${title} · ${task.title} — DataAgent`; }
-      } else document.title = `${title} · ${task.title} — DataAgent`;
+        } catch { document.title = `${title} · ${task.title} — Lagent`; }
+      } else document.title = `${title} · ${task.title} — Lagent`;
     }
     async function calibrate() {
       if (!alive || !backgroundMonitor() || calibrationBusy || !pendingCalibration.size) return;

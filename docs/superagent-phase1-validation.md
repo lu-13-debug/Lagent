@@ -10,7 +10,7 @@ Phase 0/1 后端已按 15:18 API 契约接通，并完成 Phase 1b 的数据集�
 启用方式：
 
 ```powershell
-$env:DATAAGENT_WORK_ENABLED='1'
+$env:LAGENT_WORK_ENABLED='1'
 ```
 
 未设置或设为其他值时保持关闭。

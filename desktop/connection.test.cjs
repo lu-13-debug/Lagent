@@ -56,13 +56,13 @@ test('只有当前连接窗口的本地主框架可以调用连接 IPC', () => {
 test('服务探测必须识别云端账号服务并禁止跟随重定向', async () => {
   assert.equal(typeof runtime.probeCloudServer, 'function');
   let request;
-  const fetchImpl = async (url, options) => { request = { url, options }; return { ok: true, json: async () => ({ mode: 'cloud', authRequired: true, serviceName: 'DataAgent' }) }; };
+  const fetchImpl = async (url, options) => { request = { url, options }; return { ok: true, json: async () => ({ mode: 'cloud', authRequired: true, serviceName: 'Lagent' }) }; };
   assert.equal(await runtime.probeCloudServer('https://cloud.example/', fetchImpl), 'https://cloud.example');
   assert.equal(request.url, 'https://cloud.example/api/runtime');
   assert.equal(request.options.redirect, 'error');
   assert.equal(request.options.credentials, 'omit');
   assert.ok(request.options.signal instanceof AbortSignal);
-  for (const body of [{ mode: 'local', authRequired: false, serviceName: 'DataAgent' }, { mode: 'cloud', authRequired: false, serviceName: 'DataAgent' }, { mode: 'cloud', authRequired: true, serviceName: 'Other' }]) {
+  for (const body of [{ mode: 'local', authRequired: false, serviceName: 'Lagent' }, { mode: 'cloud', authRequired: false, serviceName: 'Lagent' }, { mode: 'cloud', authRequired: true, serviceName: 'Other' }]) {
     await assert.rejects(runtime.probeCloudServer('https://cloud.example', async () => ({ ok: true, json: async () => body })), /云端账号/);
   }
   await assert.rejects(runtime.probeCloudServer('https://cloud.example', async () => ({ ok: false, status: 503 })), /503/);
@@ -74,7 +74,7 @@ test('连接文件仅在探测通过后写入且只保存非敏感服务地址',
   try {
     await assert.rejects(runtime.saveCloudConnection(file, 'https://bad.example', async () => ({ ok: true, json: async () => ({ mode: 'local' }) })));
     await assert.rejects(readFile(file), { code: 'ENOENT' });
-    await runtime.saveCloudConnection(file, 'https://cloud.example/', async () => ({ ok: true, json: async () => ({ mode: 'cloud', authRequired: true, serviceName: 'DataAgent' }) }));
+    await runtime.saveCloudConnection(file, 'https://cloud.example/', async () => ({ ok: true, json: async () => ({ mode: 'cloud', authRequired: true, serviceName: 'Lagent' }) }));
     assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { serverUrl: 'https://cloud.example' });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

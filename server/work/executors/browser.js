@@ -183,7 +183,7 @@ function finishFailure(task, controller) {
 
 function findBrowserExecutable(environment = process.env) {
   const candidates = [
-    environment.DATAAGENT_CHROMIUM_EXECUTABLE_PATH,
+    environment.LAGENT_CHROMIUM_EXECUTABLE_PATH,
     (environment['ProgramFiles(x86)'] || environment['PROGRAMFILES(X86)']) && path.join(environment['ProgramFiles(x86)'] || environment['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
     environment.PROGRAMFILES && path.join(environment.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
     environment.PROGRAMFILES && path.join(environment.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -197,11 +197,11 @@ export function browserExecutor({  store,
   playwright: suppliedPlaywright,
   lookupHost = lookup,
   timeoutMs = 30000,
-  chromiumExecutablePath = environment.DATAAGENT_CHROMIUM_EXECUTABLE_PATH
+  chromiumExecutablePath = environment.LAGENT_CHROMIUM_EXECUTABLE_PATH
 } = {}) {
   if (!store) throw new TypeError('browserExecutor 需要 store');
   const library = suppliedPlaywright ?? defaultPlaywright;
-  const enabled = environment.DATAAGENT_BROWSER_ENABLED !== '0';
+  const enabled = environment.LAGENT_BROWSER_ENABLED !== '0';
   const browserExecutable = chromiumExecutablePath || findBrowserExecutable(environment);
   const controllers = new Map();
   const timeout = Math.max(1, Number(timeoutMs) || 30000);

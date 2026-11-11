@@ -115,7 +115,7 @@ try {
     await checklist.waitFor(); await checklist.getByRole('button', { name: '关闭三步清单', exact: true }).click();
     await page.reload(); await page.getByRole('button', { name: '使用指南', exact: true }).waitFor();
     assert.equal(await checklist.count(), 0);
-    const stored = await page.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('dataagent:onboarding:')).map(k => JSON.parse(localStorage.getItem(k))));
+    const stored = await page.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('lagent:onboarding:')).map(k => JSON.parse(localStorage.getItem(k))));
     assert.ok(stored.every(value => Object.values(value).every(item => typeof item === 'boolean')));
     if (cloud) {
       await context.request.post(`${base}/api/auth/logout`, { headers: { origin: base }, data: {} });
@@ -130,7 +130,7 @@ try {
       { hosts: ['api.deepseek.com'], hasKey: true, balance: 19, label: '模型已配置' },
     ];
     for (const scenario of cases) {
-      await page.route('**/api/runtime', route => route.fulfill({ json: { mode: cloud ? 'cloud' : 'local', authRequired: cloud, serviceName: 'DataAgent', version: '1.1.0', modelHosts: scenario.hosts } }));
+      await page.route('**/api/runtime', route => route.fulfill({ json: { mode: cloud ? 'cloud' : 'local', authRequired: cloud, serviceName: 'Lagent', version: '1.1.0', modelHosts: scenario.hosts } }));
       await page.route('**/api/bootstrap', route => route.fulfill({ json: { ...bootstrap, settings: { ...bootstrap.settings, hasKey: scenario.hasKey }, wallet: { ...bootstrap.wallet, balance: scenario.balance } } }));
       await page.reload(); await page.locator('.model-status').filter({ hasText: scenario.label }).waitFor();
       await page.getByRole('button', { name: '新建分析', exact: true }).first().click();

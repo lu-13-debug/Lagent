@@ -40,7 +40,7 @@ const snapshot = hub.captureWorkflow(); // 无 Key，含每阶段 Skill 原文�
 const context = hub.context(snapshot.stages[stageId]); // {settings,key,maxTokens,timeoutMs}
 ```
 
-默认主密钥环境变量 DATAAGENT_CREDENTIAL_MASTER_KEY（32 字节 base64）。缺失时提供明确 vault 状态，保留旧会话 Key 模式，禁用持久凭据写入。云端由 workspace 的 userId 作为 ownerId；本地使用 local。新工作流仅在设置了 defaultProfileId 时启用，旧路径继续运行。
+默认主密钥环境变量 LAGENT_CREDENTIAL_MASTER_KEY（32 字节 base64）。缺失时提供明确 vault 状态，保留旧会话 Key 模式，禁用持久凭据写入。云端由 workspace 的 userId 作为 ownerId；本地使用 local。新工作流仅在设置了 defaultProfileId 时启用，旧路径继续运行。
 
 ## 任务 1：加密凭据与模型中心（后端独立任务）
 

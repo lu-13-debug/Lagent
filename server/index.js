@@ -1,9 +1,10 @@
+import './env.js';
 import { createApp } from './app.js';
 
 const port = Number(process.env.PORT || 3001);
 const app = createApp();
 const server = app.listen(port, '127.0.0.1', () => {
-  console.log(`DataAgent 已启动：http://127.0.0.1:${port}`);
+  console.log(`Lagent 已启动：http://127.0.0.1:${port}`);
 });
 let stopping = false;
 const stop = () => {

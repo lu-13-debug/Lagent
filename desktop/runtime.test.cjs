@@ -4,9 +4,9 @@ const path = require('node:path');
 const { desktopPaths, allowedNavigation, safeExternalUrl } = require('./runtime.cjs');
 
 test('desktop runtime stores database under userData instead of installed program', () => {
-  const p = desktopPaths('C:\\Users\\Test\\AppData\\Roaming\\DataAgent');
-  assert.equal(p.data, path.join('C:\\Users\\Test\\AppData\\Roaming\\DataAgent', 'storage'));
-  assert.equal(p.logs, path.join('C:\\Users\\Test\\AppData\\Roaming\\DataAgent', 'logs'));
+  const p = desktopPaths('C:\\Users\\Test\\AppData\\Roaming\\Lagent');
+  assert.equal(p.data, path.join('C:\\Users\\Test\\AppData\\Roaming\\Lagent', 'storage'));
+  assert.equal(p.logs, path.join('C:\\Users\\Test\\AppData\\Roaming\\Lagent', 'logs'));
 });
 test('desktop navigation is limited to the exact local service origin', () => {
   const origin = 'http://127.0.0.1:32145';
@@ -23,8 +23,8 @@ test('external links cannot launch system protocols or credential-bearing URLs',
 
 test('反馈诊断仅包含版本、规范服务 origin 与日志目录', () => {
   const { buildSupportDiagnostic } = require('./runtime.cjs');
-  const output = buildSupportDiagnostic({ version: '1.1.0', origin: 'https://service.example', logs: 'C:\\DataAgent\\logs', apiKey: 'secret', account: 'private', rawRows: 'player', logBody: 'hidden' });
-  assert.deepEqual(JSON.parse(output), { version: '1.1.0', serverOrigin: 'https://service.example', logDirectory: 'C:\\DataAgent\\logs' });
+  const output = buildSupportDiagnostic({ version: '1.1.0', origin: 'https://service.example', logs: 'C:\\Lagent\\logs', apiKey: 'secret', account: 'private', rawRows: 'player', logBody: 'hidden' });
+  assert.deepEqual(JSON.parse(output), { version: '1.1.0', serverOrigin: 'https://service.example', logDirectory: 'C:\\Lagent\\logs' });
   assert.doesNotMatch(output, /secret|private|player|hidden/);
   assert.equal(JSON.parse(buildSupportDiagnostic({ version: '1.1.0', origin: 'https://user:password@service.example/path?token=secret', logs: 'logs' })).serverOrigin, '未连接');
   assert.equal(JSON.parse(buildSupportDiagnostic({ version: '1.1.0', origin: null, logs: 'logs' })).serverOrigin, '未连接');

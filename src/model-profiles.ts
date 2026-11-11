@@ -5,7 +5,7 @@ export const providerPresets = [
   { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', protocol: 'Chat Completions · 文本对话' },
   { name: 'OpenCode Go', baseUrl: 'https://opencode.ai/inference/go/openai/v1', protocol: 'Chat Completions · 文本对话' },
 ];
-export const profileKey = (mode: string, user: string | undefined, origin: string) => `dataagent:model-profiles:v1:${mode}:${encodeURIComponent(origin)}:${mode === 'cloud' ? encodeURIComponent(user || 'anonymous') : 'local'}`;
+export const profileKey = (mode: string, user: string | undefined, origin: string) => `lagent:model-profiles:v1:${mode}:${encodeURIComponent(origin)}:${mode === 'cloud' ? encodeURIComponent(user || 'anonymous') : 'local'}`;
 function clean(value: unknown): ModelProfile | null {
   if (!value || typeof value !== 'object') return null;
   const input = value as Record<string, unknown>;

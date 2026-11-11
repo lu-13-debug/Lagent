@@ -19,7 +19,7 @@ export function Sidebar({ view, setView, wallet, tasks, selectedId, selectTask, 
   return <>
     {open && <button className="sidebar-shade" onClick={close} aria-label="收起导航" />}
     <aside className={`sidebar ${open ? 'sidebar-open' : ''} ${collapsed ? 'sidebar-collapsed' : ''}`}>
-      <a className="brand" href="#" onClick={e => { e.preventDefault(); setView('workspace'); close(); }}><Logo /><span>DataAgent<span className="brand-dot">.</span></span></a>
+      <a className="brand" href="#" onClick={e => { e.preventDefault(); setView('workspace'); close(); }}><Logo /><span>Lagent<span className="brand-dot">.</span></span></a>
       <button className="icon-button mobile-sidebar-close" aria-label="收起导航" onClick={close}><X size={19} /></button>
       <button className="project-select" onClick={onDomain} aria-label="查看领域说明"><span className="project-icon">{domainId === 'game' ? <Gamepad2 size={18} /> : <Database size={18} />}</span><span><strong>工作空间</strong><small>{domainName || '游戏运营'}</small></span><ChevronRight size={14} /></button>
       <button className="sidebar-new" aria-label="新建分析" title="新建分析" onClick={onNew}><Plus size={17} /><span>新建分析</span><kbd>N</kbd></button>

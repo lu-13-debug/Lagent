@@ -1,9 +1,13 @@
 import { spawn } from 'node:child_process';
 import process from 'node:process';
+import { adoptLegacyEnv } from '../server/env.js';
 
-// 开发时默认打开 Agent 工作台接口；显式传 DATAAGENT_WORK_ENABLED=0 可关掉。
+// 旧前缀（DATAAGENT_）的变量先搬过来，再判断默认值。
+adoptLegacyEnv();
+
+// 开发时默认打开 Agent 工作台接口；显式传 LAGENT_WORK_ENABLED=0 可关掉。
 const env = { ...process.env };
-if (env.DATAAGENT_WORK_ENABLED === undefined || env.DATAAGENT_WORK_ENABLED === '') env.DATAAGENT_WORK_ENABLED = '1';
+if (env.LAGENT_WORK_ENABLED === undefined || env.LAGENT_WORK_ENABLED === '') env.LAGENT_WORK_ENABLED = '1';
 
 // 只盯 server/：默认的 --watch 会被数据库写入（data/*.sqlite、data/orchestrator.db）
 // 反复触发，后端起来又重启，前端只会看到一堆 ECONNREFUSED。

@@ -25,7 +25,7 @@ export function searchCommands<T extends Searchable>(items: T[], query: string, 
   }).filter(item => item.score >= 0).sort((a, b) => b.score - a.score || a.recentIndex - b.recentIndex || a.index - b.index).slice(0, 40).map(item => item.item);
 }
 export function commandStorageKey(runtime: string, userId: string | undefined, origin: string) {
-  return `dataagent:commands:v1:${runtime}:${encodeURIComponent(origin)}:${runtime === 'cloud' ? encodeURIComponent(userId || 'anonymous') : 'local'}`;
+  return `lagent:commands:v1:${runtime}:${encodeURIComponent(origin)}:${runtime === 'cloud' ? encodeURIComponent(userId || 'anonymous') : 'local'}`;
 }
 export function readRecentCommands(storage: Pick<Storage, 'getItem'>, key: string): string[] {
   try {

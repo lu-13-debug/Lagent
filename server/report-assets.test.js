@@ -10,7 +10,7 @@ import { Store } from './store.js';
 const password = 'account-password-2026';
 const input = (datasetId, extra = {}) => ({ title: '继续分析', goal: '本次明确输入的目标', mode: 'collaborative', domain: 'game', datasetId, useAI: false, ...extra });
 async function setup(t, cloud = false, options = {}) {
-  const dir = await mkdtemp(path.join(tmpdir(), 'dataagent-assets-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'lagent-assets-'));
   let app, server, base;
   const start = async () => {
     app = (cloud ? createCloudApp : createApp)({ dataDir: dir, serveStatic: false, ...options });

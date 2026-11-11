@@ -38,7 +38,7 @@ function fakeCliChild(stdout) {
 const jsonl = events => events.map(event => JSON.stringify(event)).join('\n') + '\n';
 
 test('E2 Work CLI approval freezes input and projects sanitized report/SSE', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-cli-work-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-cli-work-'));
   const store = new Store(dir);
   const spawned = { codex: [], 'claude-code': [] };
   const events = [];
@@ -46,7 +46,7 @@ test('E2 Work CLI approval freezes input and projects sanitized report/SSE', asy
     PATH: process.env.PATH,
     OPENAI_API_KEY: 'must-not-leak',
     ANTHROPIC_API_KEY: 'must-not-leak',
-    DATAAGENT_CREDENTIAL_MASTER_KEY: 'must-not-leak'
+    LAGENT_CREDENTIAL_MASTER_KEY: 'must-not-leak'
   };
   const codex = codexExecutor({
     store,
@@ -81,7 +81,7 @@ test('E2 Work CLI approval freezes input and projects sanitized report/SSE', asy
       ]));
     }
   });
-  const engine = createWorkEngine(store, createExecutorRegistry([codex, claude]), event => events.push(event), { policy: { allowedExecutors: ['codex', 'claude-code'], requireApproval: true }, env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
+  const engine = createWorkEngine(store, createExecutorRegistry([codex, claude]), event => events.push(event), { policy: { allowedExecutors: ['codex', 'claude-code'], requireApproval: true }, env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
   t.after(() => {
     engine.close();
     store.close();
@@ -139,7 +139,7 @@ test('E2 Work CLI approval freezes input and projects sanitized report/SSE', asy
     assert.equal(invocation.options.shell, false);
     assert.equal(invocation.options.env.OPENAI_API_KEY, undefined);
     assert.equal(invocation.options.env.ANTHROPIC_API_KEY, undefined);
-    assert.equal(invocation.options.env.DATAAGENT_CREDENTIAL_MASTER_KEY, undefined);
+    assert.equal(invocation.options.env.LAGENT_CREDENTIAL_MASTER_KEY, undefined);
   }
 
   const codexDetail = engine.detail(codexTicket.id);

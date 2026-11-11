@@ -7,7 +7,7 @@ form.addEventListener('submit', async event => {
   status.textContent = '正在验证云端服务…';
   status.dataset.ok = 'true';
   try {
-    const result = await window.dataagentConnection.connect(document.getElementById('server-url').value);
+    const result = await window.lagentConnection.connect(document.getElementById('server-url').value);
     if (!result.ok) throw new Error(result.error);
     status.textContent = '验证成功，正在打开工作台…';
   } catch (error) {

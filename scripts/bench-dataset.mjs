@@ -40,7 +40,7 @@ async function measure(rows, onStart = async () => {}, onEnd = () => {}) {
   try { dataset = await parseFiles(files, { timezone: 'Asia/Shanghai', completeness: { declared: 'full' }, maxRows: rows + 10, maxBytes: Number.MAX_SAFE_INTEGER }); }
   finally { await onEnd(); }
   const parseMs = Math.round(performance.now() - started);
-  const directory = mkdtempSync(path.join(tmpdir(), 'dataagent-bench-'));
+  const directory = mkdtempSync(path.join(tmpdir(), 'lagent-bench-'));
   let dbBytes = 0;
   let storeMs = 0, checkpointMs = 0, statMs = 0;
   try {
@@ -52,7 +52,7 @@ async function measure(rows, onStart = async () => {}, onEnd = () => {}) {
     store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     checkpointMs = performance.now() - checkpointStarted;
     const statStarted = performance.now();
-    dbBytes = statSync(path.join(directory, 'dataagent.sqlite')).size;
+    dbBytes = statSync(path.join(directory, 'lagent.sqlite')).size;
     statMs = performance.now() - statStarted;
     store.close();
   } finally { rmSync(directory, { recursive: true, force: true }); }

@@ -1,6 +1,6 @@
 {
-  "name": "DataAgent 指挥台",
-  "short_name": "DataAgent",
+  "name": "Lagent 指挥台",
+  "short_name": "Lagent",
   "description": "从手机远程查看、审批并指挥个人 Agent。",
   "start_url": "/m",
   "scope": "/",

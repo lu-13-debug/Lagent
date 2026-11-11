@@ -10,7 +10,7 @@ import { claudeCodeExecutor } from './work/executors/claude-code.js';
 import { codexExecutor } from './work/executors/codex.js';
 
 function harness(t, { planner } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-commander-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-commander-'));
   const home = join(root, 'home');
   mkdirSync(home, { recursive: true });
   const store = new Store(join(home, 'store.sqlite'));
@@ -18,7 +18,7 @@ function harness(t, { planner } = {}) {
   const codex = codexExecutor({ store, cwd: root, binary: process.execPath });
   const engine = createWorkEngine(store, createExecutorRegistry([claude, codex]), () => {}, {
     policy: { allowedExecutors: ['claude-code', 'codex'] },
-    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home,
     planner
   });

@@ -464,6 +464,43 @@ test('管道只是整理输出时也不用逐次确认', async t => {
   assert.match(observed, /alpha/);
 });
 
+// 真实踩过的坑：模型一次看「改了什么」会连着写 `git status; git log`，
+// 分号让它掉出只读白名单，于是整条计划停在第一次确认上。
+test('分号连起来的只读命令也不用逐次确认', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-cmd-semi-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'x\n');
+  const hub = fakeModelHub([
+    '{"tool":"run_command","args":{"command":"Get-ChildItem; Get-Content a.txt"}}',
+    '{"final":{"summary":"目录里只有 a.txt","files":[]}}'
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '看看目录和文件' }, { id: 'assign-cmd-semi' }, {
+    executorInput: { prompt: '看看目录和文件', workspace: dir, write: false }
+  });
+  const done = await settle(executor, 'assign-cmd-semi');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(done.activity.some(item => item.kind === 'waiting'), false, '只读命令连起来跑也不该弹确认');
+});
+
+// 反过来：分号里只要有一段会写文件，仍然要问。
+test('分号里有写操作时仍然要确认', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-cmd-semi-write-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const hub = fakeModelHub([
+    '{"tool":"run_command","args":{"command":"Get-ChildItem; Set-Content -Path evil.txt -Value hi"}}',
+    '{"final":{"summary":"没写成","files":[]}}'
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '试着写个文件' }, { id: 'assign-cmd-semi-write' }, {
+    executorInput: { prompt: '试着写个文件', workspace: dir, write: true, permission: 'workspace' }
+  });
+  const done = await settle(executor, 'assign-cmd-semi-write');
+  assert.ok(done.activity.some(item => item.kind === 'waiting'), '写操作必须让用户确认');
+});
+
 // 真实踩过的坑：`cmd.exe /d /s /c "powershell -Command "..."` 会把内层引号吃掉，
 // PowerShell 只回显脚本、退出码还是 0 —— 命令看着成功，其实什么都没做。
 test('shell=powershell 的脚本带引号也能真正执行，不会被 cmd 吃掉', async t => {
@@ -591,7 +628,7 @@ test('project_changes 工具把项目改动清单交给模型，不必整篇重�
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-changes-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, 'game.js'), '// 已经改过');
-  const brief = ['【项目现状 · 由 DataAgent 维护】', '最近的改动（新的在前）：', '- 08:40 · claude-code · 加了输入处理', '  动了：game.js、input.js'].join('\n');
+  const brief = ['【项目现状 · 由 Lagent 维护】', '最近的改动（新的在前）：', '- 08:40 · claude-code · 加了输入处理', '  动了：game.js、input.js'].join('\n');
   const hub = fakeModelHub([
     '{"tool":"project_changes","args":{}}',
     '{"final":{"summary":"看过了","files":[]}}',

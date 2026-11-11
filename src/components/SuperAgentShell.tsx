@@ -35,7 +35,7 @@ const proposalNames: Record<string, string> = { proposed: '待决策', needsAppr
 const accessModeNames: Record<string, string> = { read: '读取', write: '写入', delete: '删除', command: '执行命令' };
 const quickCommands = ['检查 GitHub 仓库状态', '浏览网页并总结', '运行终端命令'];
 const executorIds = ['terminal', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'browser', 'github', 'window'];
-const executorNames: Record<string, string> = { analysis: '数据分析', terminal: '受控终端', codex: 'Codex CLI', 'claude-code': 'Claude Code', 'claude-acp': 'Claude ACP', 'codex-acp': 'Codex ACP', 'dsh-acp': 'DSH ACP', opencode: 'OpenCode', gemini: 'Gemini CLI', qwen: 'Qwen Code', 'cursor-agent': 'Cursor Agent', dsh: 'DSH CLI', codebuddy: 'CodeBuddy', qoder: 'Qoder', iflow: 'iFlow', kimi: 'Kimi CLI', model: '模型 Agent', browser: '浏览器', github: 'GitHub', window: '窗口 Agent' };
+const executorNames: Record<string, string> = { analysis: '数据分析', terminal: '受控终端', codex: 'Codex CLI', 'claude-code': 'Claude Code', 'claude-acp': 'Claude ACP', 'codex-acp': 'Codex ACP', 'dsh-acp': 'DSH ACP', opencode: 'OpenCode', gemini: 'Gemini CLI', qwen: 'Qwen Code', 'cursor-agent': 'Cursor Agent', dsh: 'DSH CLI', codebuddy: 'CodeBuddy', qoder: 'Qoder', iflow: 'iFlow', kimi: 'Kimi CLI', model: 'Lagent', browser: '浏览器', github: 'GitHub', window: '窗口 Agent' };
 // 可在对话/项目里直接派活的执行器（不含終端、浏览器、GitHub 这类内置工具）。
 const conversationExecutorIds = ['analysis', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi', 'model'];
 // 项目工作文件夹里能建会话的执行器：数据分析是内置工具，需要在数据集上跑，不能进项目。
@@ -49,7 +49,7 @@ const shortTime = (value?: string) => {
   if (date.toDateString() === today.toDateString()) return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
   return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
 };
-const CROSS_CHECK_KEY = 'dataagent.crosschecks.v1';
+const CROSS_CHECK_KEY = 'lagent.crosschecks.v1';
 const windowKey = (handle: number) => `win:${handle}`;
 const agentIcon = (id: string, size = 20) => id === 'analysis' ? <Database size={size} /> : id === 'terminal' ? <Terminal size={size} /> : id === 'browser' ? <Globe size={size} /> : id === 'github' ? <GitBranch size={size} /> : id === 'window' ? <AppWindow size={size} /> : <Bot size={size} />;
 const toolIcon = (id: string, size = 20) => id === 'terminal' ? <Terminal size={size} /> : id === 'browser' ? <Globe size={size} /> : id === 'github' ? <GitBranch size={size} /> : id === 'window' ? <AppWindow size={size} /> : <Wrench size={size} />;
@@ -102,11 +102,11 @@ const reportIcon = (report: WorkReport) => {
 };
 
 // 草稿与已读位置都存在 localStorage：草稿按会话分开，避免把 A 会话打了一半的指令发到 B。
-const DRAFTS_KEY = 'dataagent.drafts.v1';
-const CHAT_SEEN_KEY = 'dataagent.chatseen.v1';
-const SIDEBAR_WIDTH_KEY = 'dataagent.sidebarw.v1';
-const PINNED_KEY = 'dataagent.pinnedfolders.v1';
-const RAIL_COLLAPSED_KEY = 'dataagent.railcollapsed.v1';
+const DRAFTS_KEY = 'lagent.drafts.v1';
+const CHAT_SEEN_KEY = 'lagent.chatseen.v1';
+const SIDEBAR_WIDTH_KEY = 'lagent.sidebarw.v1';
+const PINNED_KEY = 'lagent.pinnedfolders.v1';
+const RAIL_COLLAPSED_KEY = 'lagent.railcollapsed.v1';
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -200,8 +200,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [teamProfile, setTeamProfile] = useState('');
   const [teamModels, setTeamModels] = useState<Record<string, string>>({});
   // 新对话绑定的工作文件夹：选中后指令会作为项目任务分派，Agent 在该目录内读写。
-  const [newFolder, setNewFolder] = useState<string>(() => { try { return localStorage.getItem('dataagent.newchatfolder.v1') || ''; } catch { return ''; } });
-  useEffect(() => { try { localStorage.setItem('dataagent.newchatfolder.v1', newFolder); } catch { /* 存储禁用时仅当前会话生效。 */ } }, [newFolder]);
+  const [newFolder, setNewFolder] = useState<string>(() => { try { return localStorage.getItem('lagent.newchatfolder.v1') || ''; } catch { return ''; } });
+  useEffect(() => { try { localStorage.setItem('lagent.newchatfolder.v1', newFolder); } catch { /* 存储禁用时仅当前会话生效。 */ } }, [newFolder]);
   const [synthesisAgent, setSynthesisAgent] = useState('');
   const [synthesizing, setSynthesizing] = useState(false);
   const threadRef = useRef<HTMLDivElement | null>(null);
@@ -497,7 +497,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       setCollapsedProjects(previous => previous.filter(id => id !== draft.project.id));
       openFolderChat(draft.project.id, result.chat.id);
       notify(collaborators.length
-        ? `已在「${draft.project.name}」新建协作会话：内置 Agent 拆解，${collaborators.map(id => executorNames[id] || id).join('、')} 执行。`
+        ? `已在「${draft.project.name}」新建协作会话：Lagent 拆解，${collaborators.map(id => executorNames[id] || id).join('、')} 执行。`
         : `已在「${draft.project.name}」新建会话，交给${executorNames[executorId] || executorId}。`);
     } catch (cause) { notify((cause as Error).message, true); }
   };
@@ -575,7 +575,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     } catch (cause) { notify((cause as Error).message, true); }
   };
   const revealFolder = async (project: WorkProject) => {
-    const bridge = (window as unknown as { dataagentDesktop?: { openPath?: (path: string) => Promise<unknown> } }).dataagentDesktop;
+    const bridge = (window as unknown as { lagentDesktop?: { openPath?: (path: string) => Promise<unknown> } }).lagentDesktop;
     setFolderMenu(null);
     if (bridge?.openPath) {
       try { await bridge.openPath(project.path); return; } catch { /* 落到复制路径。*/ }
@@ -836,7 +836,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         setCommand('');
         setActiveTicketId(null);
         setActiveGroupId(null);
-        notify(`内置 Agent 已拆解任务，并分派给 ${execs.length} 个 Agent，开始执行。`);
+        notify(`Lagent 已拆解任务，并分派给 ${execs.length} 个 Agent，开始执行。`);
         if (scope) {
           setView('chat');
           setProjectFocus(scope.id);
@@ -1274,13 +1274,13 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         {selectedAgents.length > 0 && <div className="sa-team">
           <label className="sa-team-toggle">
             <input type="checkbox" checked={teamMode} onChange={event => setTeamMode(event.target.checked)} />
-            <Sparkles size={12} />内置 Agent 统筹
+            <Sparkles size={12} />Lagent 统筹
           </label>
-          {teamMode && <select className="sa-team-select" value={teamProfile} onChange={event => setTeamProfile(event.target.value)} aria-label="内置 Agent 使用的模型">
+          {teamMode && <select className="sa-team-select" value={teamProfile} onChange={event => setTeamProfile(event.target.value)} aria-label="Lagent 使用的模型">
             <option value="">{teamProfiles.length ? '默认模型' : '尚未配置模型'}</option>
             {teamProfiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
           </select>}
-          {teamMode && !teamProfiles.length && <span className="sa-team-hint">还没有模型配置，内置 Agent 会先按本地规则拆解。</span>}
+          {teamMode && !teamProfiles.length && <span className="sa-team-hint">还没有模型配置，Lagent 会先按本地规则拆解。</span>}
           {teamMode && selectedAgents.filter(id => !id.startsWith('win:')).length > 0 && <details className="sa-team-models">
             <summary>分配模型</summary>
             <div className="sa-team-model-list">
@@ -1291,11 +1291,11 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             </div>
           </details>}
         </div>}
-        <textarea id="sa-command" value={command} maxLength={3000} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} rows={2} placeholder={selectedAgents.length > 1 ? '描述要对比的问题，例如：审查这段鉴权逻辑是否有漏洞？' : '描述目标，例如：检查 DataAgent 仓库的 CI，修复失败项并开 PR'} />
+        <textarea id="sa-command" value={command} maxLength={3000} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} rows={2} placeholder={selectedAgents.length > 1 ? '描述要对比的问题，例如：审查这段鉴权逻辑是否有漏洞？' : '描述目标，例如：检查 Lagent 仓库的 CI，修复失败项并开 PR'} />
         {singleExecutor === 'analysis' && (datasets.length > 1 ? <div className="sa-executor-fields"><label className="sa-field"><span>数据集</span><select value={datasetId} onChange={event => setDatasetId(event.target.value)}><option value="">请选择数据集</option>{datasets.map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.name} · {dataset.rowCount.toLocaleString()} 行</option>)}</select></label></div> : datasets.length === 1 ? <div className="sa-executor-fields"><span className="sa-inline-note"><Check size={13} />数据集：{datasets[0].name}</span></div> : <div className="sa-executor-fields"><span className="sa-inline-note">还没有数据集，请先在工作区上传或加载示例数据。</span></div>)}
         {singleExecutor === 'terminal' && <div className="sa-executor-fields"><label className="sa-field"><span>程序</span><select value={terminalProgram} onChange={event => setTerminalProgram(event.target.value)}><option value="git">git</option><option value="npm">npm</option><option value="ls">ls</option><option value="pwd">pwd</option></select></label><label className="sa-field"><span>参数</span><input value={terminalArgs} onChange={event => setTerminalArgs(event.target.value)} placeholder="status --short" /></label></div>}
         {singleExecutor === 'browser' && <div className="sa-executor-fields"><label className="sa-field"><span>页面地址</span><input type="url" value={browserUrl} onChange={event => setBrowserUrl(event.target.value)} placeholder="https://example.com/page" /></label></div>}
-        {singleExecutor === 'github' && <div className="sa-executor-fields"><label className="sa-field"><span>GitHub 动作</span><select value={githubAction} onChange={event => setGithubAction(event.target.value)}><option value="repo">仓库</option><option value="issues">Issues</option><option value="pulls">Pull Requests</option><option value="checks">CI Checks</option><option value="file">文件</option></select></label><label className="sa-field"><span>owner</span><input value={githubOwner} onChange={event => setGithubOwner(event.target.value)} placeholder="acme" /></label><label className="sa-field"><span>repo</span><input value={githubRepo} onChange={event => setGithubRepo(event.target.value)} placeholder="data-agent" /></label>{['issues', 'pulls', 'checks'].includes(githubAction) && <label className="sa-field"><span>编号</span><input inputMode="numeric" value={githubNumber} onChange={event => setGithubNumber(event.target.value)} placeholder="7" /></label>}{githubAction === 'file' && <label className="sa-field"><span>文件路径</span><input value={githubPath} onChange={event => setGithubPath(event.target.value)} placeholder="docs/readme.md" /></label>}</div>}
+        {singleExecutor === 'github' && <div className="sa-executor-fields"><label className="sa-field"><span>GitHub 动作</span><select value={githubAction} onChange={event => setGithubAction(event.target.value)}><option value="repo">仓库</option><option value="issues">Issues</option><option value="pulls">Pull Requests</option><option value="checks">CI Checks</option><option value="file">文件</option></select></label><label className="sa-field"><span>owner</span><input value={githubOwner} onChange={event => setGithubOwner(event.target.value)} placeholder="acme" /></label><label className="sa-field"><span>repo</span><input value={githubRepo} onChange={event => setGithubRepo(event.target.value)} placeholder="lagent" /></label>{['issues', 'pulls', 'checks'].includes(githubAction) && <label className="sa-field"><span>编号</span><input inputMode="numeric" value={githubNumber} onChange={event => setGithubNumber(event.target.value)} placeholder="7" /></label>}{githubAction === 'file' && <label className="sa-field"><span>文件路径</span><input value={githubPath} onChange={event => setGithubPath(event.target.value)} placeholder="docs/readme.md" /></label>}</div>}
         <div className="sa-composer-foot"><div className="sa-chips"><button type="button" onClick={() => setPlanOpen(true)}>多步计划</button></div><button className="sa-send" type="submit" disabled={!command.trim() || sending} aria-label="发送指令">{sending ? <RefreshCw size={16} className="sa-spin" /> : <Send size={16} />}<span>{sending ? '提交中' : composerTitle}</span></button></div>
       </form>
       <p className="sa-note"><ShieldCheck size={14} />{selectedAgents.length > 1 ? '多个 Agent 会并行独立作答，方便对比；会消耗对应执行器的额度。' : '只会执行你明确授权或规则允许的操作；危险动作会先请求确认。'}<span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
@@ -1369,10 +1369,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       <div className="sa-agent-group"><h2>内置</h2><span>不用安装，用「规划设置」里的默认模型运行</span></div>
       <ul className="sa-agent-list">
         <li className={`sa-agent-row${enabledExecutors.includes('model') ? ' is-on' : ''}${modelAgentStatus === 'available' ? '' : ' is-off'}`}>
-          <span className="sa-agent-glyph"><Brain size={18} /></span>
+          <span className="sa-agent-glyph"><img className="sa-brand-img" src="/favicon.svg" alt="" aria-hidden="true" /></span>
           <div className="sa-agent-main">
-            <div className="sa-agent-title"><strong>模型 Agent</strong>{' '}<Status status={modelAgentStatus} /></div>
-            <span className="sa-agent-path">模型 + 工具循环：读文件、搜代码、运行只读命令</span>
+            <div className="sa-agent-title"><strong>Lagent</strong>{' '}<Status status={modelAgentStatus} /></div>
+            <span className="sa-agent-path">Lagent 本体：模型 + 工具循环，读文件、搜代码、跑命令</span>
             <span className="sa-agent-note-line">{modelAgentStatus === 'available' ? '已在「规划设置」里选好默认模型，可以直接派任务。' : '还没配置可用的模型：先去「设置 → 规划设置」选一个默认模型。'}</span>
           </div>
           <div className="sa-agent-side">
@@ -1412,13 +1412,13 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     </article>;
   })}{!tools.length && <p className="sa-empty">工具状态载入中。</p>}</div></section>;
 
-  const settingsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">SETTINGS</p><h1>设置</h1><p>主题、模型与执行权限。</p></div></header><div className="sa-settings-grid"><article className="sa-card"><h2>外观</h2><p>当前仅保留简洁版，主题可切换。</p><button className="sa-button" onClick={() => setAppearanceOpen(true)}><SunMoon size={15} />打开显示设置</button></article><article className="sa-card"><h2>模型与 API</h2><p>配置执行器使用的模型和凭据。</p><button className="sa-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} />打开模型设置</button></article><article className="sa-card sa-policy-card"><h2>执行器策略</h2><p>与「Agent」页的开关同步，这里可批量调整并设置预算；外部执行器还需 <code>DATAAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code>。</p>
+  const settingsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">SETTINGS</p><h1>设置</h1><p>主题、模型与执行权限。</p></div></header><div className="sa-settings-grid"><article className="sa-card"><h2>外观</h2><p>当前仅保留简洁版，主题可切换。</p><button className="sa-button" onClick={() => setAppearanceOpen(true)}><SunMoon size={15} />打开显示设置</button></article><article className="sa-card"><h2>模型与 API</h2><p>配置执行器使用的模型和凭据。</p><button className="sa-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} />打开模型设置</button></article><article className="sa-card sa-policy-card"><h2>执行器策略</h2><p>与「Agent」页的开关同步，这里可批量调整并设置预算；外部执行器还需 <code>LAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code>。</p>
     {policy ? <><div className="sa-policy-executors">{executorIds.map(id => <label key={id}><input type="checkbox" checked={(policy.allowedExecutors || []).includes(id)} onChange={() => toggleExecutor(id)} />{executorNames[id]}</label>)}</div>
       <div className="sa-permissions" role="radiogroup" aria-label="权限模式">{[{ id: 'read', name: '仅查看', desc: '只能读文件、跑只读命令，不改任何东西。' }, { id: 'workspace', name: '仅工作区内修改', desc: '项目目录里直接改；目录之外、递归删除、非白名单命令会弹窗问你。' }, { id: 'full', name: '完全权限', desc: '不再逐次确认；系统目录、.git、.ssh、密钥仍然拒绝。' }].map(option => <button key={option.id} type="button" role="radio" aria-checked={(policy.permission || 'workspace') === option.id} className={`sa-permission${(policy.permission || 'workspace') === option.id ? ' is-on' : ''}`} onClick={() => setPolicy(previous => previous ? { ...previous, permission: option.id as 'read' | 'workspace' | 'full' } : previous)}><strong>{option.name}</strong><em>{option.desc}</em></button>)}</div>
       {(policy.permission || 'workspace') === 'workspace' && <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.confirmDanger !== false} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), confirmDanger: event.target.checked } } : previous)} /><span>危险操作再确认<em>递归删除、白名单外的命令，即使目录已授权也会再弹一次窗。</em></span></label>}
       <div className="sa-policy-roots">
         <div className="sa-policy-roots-head"><strong>额外授权的目录</strong><em>工作目录之外的目录。登记后里面的读写直接执行、不再逐个弹窗；最多 10 个，系统目录、.git、.ssh、密钥与 .env 始终不开放。</em></div>
-        {(policy.limits?.extraRoots || []).length > 0 ? <ul className="sa-policy-root-list">{policy.limits?.extraRoots?.map(root => <li key={root}><code>{root}</code><button type="button" className="sa-link" onClick={() => removeExtraRoot(root)}>移除</button></li>)}</ul> : <p className="sa-inline-note">还没有额外目录。模型 Agent 碰到工作目录之外的路径时，会逐次弹窗问你。</p>}
+        {(policy.limits?.extraRoots || []).length > 0 ? <ul className="sa-policy-root-list">{policy.limits?.extraRoots?.map(root => <li key={root}><code>{root}</code><button type="button" className="sa-link" onClick={() => removeExtraRoot(root)}>移除</button></li>)}</ul> : <p className="sa-inline-note">还没有额外目录。Lagent 碰到工作目录之外的路径时，会逐次弹窗问你。</p>}
         <div className="sa-policy-root-add"><input value={rootDraft} placeholder="D:\shared\assets" onChange={event => setRootDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addExtraRoot(); } }} /><button type="button" className="sa-button" disabled={!rootDraft.trim()} onClick={addExtraRoot}>添加目录</button></div>
       </div>
       <div className="sa-policy-budgets">
@@ -1436,7 +1436,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     <p className="sa-inline-note"><ShieldCheck size={13} />配对码 5 分钟有效且只能使用一次；设备凭证 90 天后过期。</p>
   </article><article className="sa-card sa-mobile-card"><h2><Terminal size={16} />MCP 外部 Agent</h2><p>让 Claude Code、Codex 或其他 MCP Agent 通过 <code>{location.origin}/api/mcp</code> 反向读取工单与报告、查看执行器、创建计划、发送指令和审批。</p>
     {mcpToken ? <div className="sa-mcp-token"><div><span>端点</span><code>{location.origin}{mcpToken.endpoint}</code></div><div><span>Bearer 令牌</span><code>{mcpToken.token}</code></div><p className="sa-inline-note"><ShieldCheck size={13} />令牌只显示一次，请现在复制；有效至{time(mcpToken.expiresAt)}。</p></div> : <button className="sa-button" disabled={mcpBusy} onClick={() => void createMcpToken()}>{mcpBusy ? <RefreshCw size={15} className="sa-spin" /> : <Terminal size={15} />}{mcpBusy ? '生成中…' : '生成 MCP 令牌'}</button>}
-    <div className="sa-code-note"><span>Claude Code 示例</span><code>claude mcp add --transport http dataagent {location.origin}/api/mcp --header "Authorization: Bearer &lt;令牌&gt;"</code></div>
+    <div className="sa-code-note"><span>Claude Code 示例</span><code>claude mcp add --transport http lagent {location.origin}/api/mcp --header "Authorization: Bearer &lt;令牌&gt;"</code></div>
   </article></div></section>;
 
   const page = view === 'command' ? conversationPage : view === 'project' ? <ProjectsPanel mode="project" notify={notify} onOpenTicket={id => void openCard(id)} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => setView('projects')} onBackToProjects={() => setView('projects')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'chat' ? <ProjectsPanel mode="chat" notify={notify} onOpenTicket={id => void openCard(id)} onApprove={id => void act(id, 'approve')} onSkip={id => void act(id, 'skip')} onTicketsChanged={() => { void load(); void reloadProjects(); }} focusProjectId={projectFocus} focusChatId={chatFocus} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} onExitChat={() => openFolder(folderState.projectId || '')} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'projects' ? <ProjectsPanel mode="manage" notify={notify} onOpenTicket={viewTicket} focusProjectId={projectFocus} focusChatId={chatFocus} requestImport={importTick} onState={handleFolderState} onFocusProject={() => { setProjectFocus(null); setChatFocus(null); }} onOpenChat={openFolderChat} allowedExecutors={allowedExecutors.filter(id => projectExecutorIds.includes(id))} /> : view === 'agents' ? agentsPage : view === 'tools' ? toolsPage : view === 'memory' ? <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">MEMORY</p><h1>记忆</h1><p>你确认过的偏好、术语和决定。</p></div></header><MemoryPanel /></section> : settingsPage;
@@ -1446,7 +1446,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     {navOpen && <button className="sa-nav-shade" aria-label="关闭导航" onClick={() => setNavOpen(false)} />}
     <aside className={`sa-sidebar ${navOpen ? 'sa-nav-open' : ''}`}>
       <div className="sa-brand-row">
-        <button className="sa-brand" onClick={newChat}><Logo /><span>DataAgent<span className="brand-dot">.</span></span></button>
+        <button className="sa-brand" onClick={newChat}><Logo /><span>Lagent<span className="brand-dot">.</span></span></button>
         <button type="button" className="sa-icon sa-rail-toggle" aria-label={railCollapsed ? '展开侧栏' : '收起侧栏'} title={railCollapsed ? '展开侧栏' : '收起侧栏'} aria-expanded={!railCollapsed} onClick={() => setRailCollapsed(value => !value)}>
           {railCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
         </button>
@@ -1621,7 +1621,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         <button type="button" className="sa-button sa-primary" disabled={approvalNeedsDataset && (datasets.length === 0 || (datasets.length > 1 && !approvalDataset))} onClick={() => { setDismissedApprovals(previous => [...previous, approvalAsk.item.ticketId]); void act(approvalAsk.item.ticketId, 'approve', approvalNeedsDataset && approvalDataset ? { datasetId: approvalDataset } : undefined); }}><Check size={15} />批准并开始</button>
       </div>
     </Modal>}
-    {accessAsk && <Modal title="模型 Agent 需要你的授权" subtitle="工作目录之外的读写、以及危险命令，都会先停在这里问你一次。" close={() => setDismissedAccess(previous => [...previous, accessAsk.ticketId])}>
+    {accessAsk && <Modal title="Lagent 需要你的授权" subtitle="工作目录之外的读写、以及危险命令，都会先停在这里问你一次。" close={() => setDismissedAccess(previous => [...previous, accessAsk.ticketId])}>
       <div className="sa-access">
         <p className="sa-access-line"><span className="sa-access-mode">{accessModeNames[accessAsk.accessMode || ''] || '访问'}</span>{accessAsk.accessPath || accessAsk.question}</p>
         <p className="sa-inline-note">允许之后，这个任务里同一个位置不再重复询问；想长期免问，可以到「设置 → 执行器策略 → 额外授权的目录」里登记它。</p>
@@ -1707,12 +1707,12 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         <div className="sa-confirm-actions"><button type="button" className="sa-button" onClick={() => setBulkConfirm(false)}>取消</button><button type="button" className="sa-button sa-danger" disabled={bulkBusy} onClick={() => void removePicked()}>{bulkBusy ? '正在删除…' : `删除 ${pickedTotal} 条`}</button></div>
       </div>
     </Modal>}
-    {folderNewChat && <Modal title={`在「${folderNewChat.project.name}」新建会话`} subtitle="选一个 Agent，或者多选几个让它协作：内置 Agent 负责拆解与汇总。建好后还能在对话里改权限档位与模型。" close={() => setFolderNewChat(null)}>
+    {folderNewChat && <Modal title={`在「${folderNewChat.project.name}」新建会话`} subtitle="选一个 Agent，或者多选几个让它协作：Lagent 负责拆解与汇总。建好后还能在对话里改权限档位与模型。" close={() => setFolderNewChat(null)}>
       <div className="sa-newchat-pick">
         <div className="sa-newchat-agents">
           {newChatExecutors().map(id => {
             const on = folderNewChat.picked.includes(id);
-            const label = id === 'model' ? '内置 Agent' : executorNames[id] || id;
+            const label = id === 'model' ? 'Lagent' : executorNames[id] || id;
             return <button key={id} type="button" className={`sa-pick ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => toggleFolderAgent(id)}>
               {on ? <Check size={12} /> : <Bot size={12} />}{label}
             </button>;
@@ -1722,10 +1722,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           const helpers = folderNewChat.picked.filter(id => id !== 'model');
           const collaborative = folderNewChat.picked.includes('model') || helpers.length > 1;
           if (collaborative && helpers.length) {
-            return <p className="sa-inline-note"><Users size={13} />内置 Agent 拆解任务，分派给 {helpers.map(id => id === 'model' ? '内置 Agent' : executorNames[id] || id).join('、')} 协作执行。</p>;
+            return <p className="sa-inline-note"><Users size={13} />Lagent 拆解任务，分派给 {helpers.map(id => id === 'model' ? 'Lagent' : executorNames[id] || id).join('、')} 协作执行。</p>;
           }
           if (helpers.length > 1) return null;
-          return <p className="sa-inline-note"><ShieldCheck size={13} />写文件的权限、能不能跨目录，由设置里的权限档位决定；选「内置 Agent」再加别的 Agent 就成了协作。</p>;
+          return <p className="sa-inline-note"><ShieldCheck size={13} />写文件的权限、能不能跨目录，由设置里的权限档位决定；选「Lagent」再加别的 Agent 就成了协作。</p>;
         })()}
         <div className="sa-confirm-actions"><button type="button" className="sa-button" onClick={() => setFolderNewChat(null)}>取消</button><button type="button" className="sa-button sa-primary" onClick={() => void createFolderChat()}>{(() => { const helpers = folderNewChat.picked.filter(id => id !== 'model'); return (folderNewChat.picked.includes('model') || helpers.length > 1) && helpers.length ? `新建协作会话（${helpers.length + 1} 个 Agent）` : '新建会话'; })()}</button></div>
       </div>

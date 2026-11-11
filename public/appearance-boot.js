@@ -1,7 +1,7 @@
 (function () {
   var theme = 'system', view = 'concise';
   var raw = null;
-  try { raw = localStorage.getItem('dataagent:appearance:boot:v1'); } catch (_) { /* 无存储时继续跟随系统。 */ }
+  try { raw = localStorage.getItem('lagent:appearance:boot:v1'); } catch (_) { /* 无存储时继续跟随系统。 */ }
   try {
     if (raw) {
       var stored = JSON.parse(raw);

@@ -21,7 +21,7 @@ const bootstrap = {
 
 async function mockDesktop(page) {
   await page.request.post('/api/auth/register', { data: { username: `handoff${Date.now()}`, displayName: '交接测试', password: 'test-password-123' } });
-  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'DataAgent', version: '1.1.0', capabilities: { superagent: true } } }));
+  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: '1.1.0', capabilities: { superagent: true } } }));
   await page.route('**/api/work/events', route => route.abort());
   await page.route('**/api/work/bootstrap', route => route.fulfill({ json: bootstrap }));
   await page.route('**/api/work/tickets/t-done', route => route.fulfill({ json: { ticket: done, assignments: [], reports: [{ id: 'r1', kind: 'ready', summary: '检查完成', createdAt: done.updatedAt }], team: null } }));

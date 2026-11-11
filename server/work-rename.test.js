@@ -10,7 +10,7 @@ import { createWorkEngine } from './work/engine.js';
 import { createExecutorRegistry } from './work/executors/index.js';
 import { claudeCodeExecutor } from './work/executors/claude-code.js';
 
-const scratch = () => mkdtempSync(join(tmpdir(), 'dataagent-rename-'));
+const scratch = () => mkdtempSync(join(tmpdir(), 'lagent-rename-'));
 
 test('P1 工作文件夹与会话可重命名，首条消息自动命名且项目摘要带工单计数', t => {
   const root = scratch();
@@ -56,7 +56,7 @@ test('P1 工作文件夹与会话可重命名，首条消息自动命名且项�
   const executor = claudeCodeExecutor({ store, cwd: root, binary: process.execPath, spawnImpl: () => { throw new Error('不应启动 CLI'); } });
   const engine = createWorkEngine(store, createExecutorRegistry([executor]), () => {}, {
     policy: { allowedExecutors: ['claude-code'], requireApproval: true },
-    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home
   });
   t.after(() => engine.close());

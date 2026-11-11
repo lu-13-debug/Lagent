@@ -1,9 +1,10 @@
+import './env.js';
 import { createCloudApp } from './cloud-app.js';
 
 const port = Number(process.env.PORT || 3002);
 const host = process.env.HOST || '127.0.0.1';
 const app = createCloudApp();
-const server = app.listen(port, host, () => console.log(`DataAgent 云端服务已启动，监听 ${host}:${port}`));
+const server = app.listen(port, host, () => console.log(`Lagent 云端服务已启动，监听 ${host}:${port}`));
 server.requestTimeout = 120000;
 server.headersTimeout = 15000;
 let stopping = false;

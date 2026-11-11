@@ -30,12 +30,12 @@ test('parser rejects ambiguous tables, negative amounts, invalid time and confli
 
 test('parser accepts the documented 200000 row boundary without argument stack overflow', async t => {
   const csv = 'user_id,event_time\n' + Array.from({ length: 200000 }, (_, i) => `u${i},2026-10-01`).join('\n');
-  const budget = Number(process.env.DATAAGENT_PARSE_BUDGET_MS || 20000);
+  const budget = Number(process.env.LAGENT_PARSE_BUDGET_MS || 20000);
   const started = performance.now();
   const dataset = await parser.parseFiles([{ originalname: 'activity.csv', buffer: Buffer.from(csv) }]);
   const elapsedMs = Math.round(performance.now() - started);
   t.diagnostic(`200000 行解析耗时 ${elapsedMs}ms（阈值 ${budget}ms）`);
-  assert.ok(elapsedMs <= budget, `200000 行解析耗时 ${elapsedMs}ms，超过阈值 ${budget}ms（可用 DATAAGENT_PARSE_BUDGET_MS 调整）`);
+  assert.ok(elapsedMs <= budget, `200000 行解析耗时 ${elapsedMs}ms，超过阈值 ${budget}ms（可用 LAGENT_PARSE_BUDGET_MS 调整）`);
   assert.equal(dataset.rowCount, 200000);
   assert.equal(dataset.inspection.rawRows, 200000);
   assert.equal(dataset.inspection.validRows, 200000);

@@ -41,7 +41,7 @@ function abortable(promise, signal) {
   });
 }
 
-export async function buildReportPdf(task, { signal, timeoutMs = 60000, browserExecutablePath = process.env.DATAAGENT_CHROMIUM_EXECUTABLE_PATH } = {}) {
+export async function buildReportPdf(task, { signal, timeoutMs = 60000, browserExecutablePath = process.env.LAGENT_CHROMIUM_EXECUTABLE_PATH } = {}) {
   signal?.throwIfAborted();
   const html = buildReportHtml(task);
   const timeout = new AbortController();
@@ -66,7 +66,7 @@ export async function buildReportPdf(task, { signal, timeoutMs = 60000, browserE
       page.setDefaultTimeout(30000);
       await abortable(page.setContent(html, { waitUntil: 'load', timeout: 30000 }), combined);
       await abortable(page.emulateMedia({ media: 'print' }), combined);
-      const pdf = await abortable(page.pdf({ format: 'A4', preferCSSPageSize: true, printBackground: true, displayHeaderFooter: true, headerTemplate: '<span></span>', footerTemplate: '<div style="font-size:9px;color:#65767c;width:100%;padding:0 17mm;text-align:center;font-family:Arial,sans-serif">DataAgent · <span class="pageNumber"></span> / <span class="totalPages"></span></div>', margin: { top: '18mm', right: '17mm', bottom: '19mm', left: '17mm' }, timeout: 30000 }), combined);
+      const pdf = await abortable(page.pdf({ format: 'A4', preferCSSPageSize: true, printBackground: true, displayHeaderFooter: true, headerTemplate: '<span></span>', footerTemplate: '<div style="font-size:9px;color:#65767c;width:100%;padding:0 17mm;text-align:center;font-family:Arial,sans-serif">Lagent · <span class="pageNumber"></span> / <span class="totalPages"></span></div>', margin: { top: '18mm', right: '17mm', bottom: '19mm', left: '17mm' }, timeout: 30000 }), combined);
       combined.throwIfAborted();
       if (pdf.length > 24 * 1024 * 1024) throw fail('生成 PDF 超过 24MB 上限', 'PDF_TOO_LARGE');
       return Buffer.from(pdf);

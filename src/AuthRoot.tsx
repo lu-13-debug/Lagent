@@ -19,7 +19,7 @@ export function AuthRoot({ children, attribution }: { children: ReactNode; attri
   const [session, setSession] = useState(0);
   const endSession = useCallback((message: string) => {
     resetSessionBoundary();
-    setDesktopState(window.dataagentDesktop, 'login');
+    setDesktopState(window.lagentDesktop, 'login');
     setUser(null);
     setNotice(message);
     setSession(value => value + 1);
@@ -36,7 +36,7 @@ export function AuthRoot({ children, attribution }: { children: ReactNode; attri
     async function connect() {
       try {
         const next = await api.runtime();
-        if (next.serviceName !== 'DataAgent' || !['local', 'cloud'].includes(next.mode) || next.authRequired !== (next.mode === 'cloud')) throw new Error('该地址未提供兼容的 DataAgent 服务，请确认服务配置。');
+        if (next.serviceName !== 'Lagent' || !['local', 'cloud'].includes(next.mode) || next.authRequired !== (next.mode === 'cloud')) throw new Error('该地址未提供兼容的 Lagent 服务，请确认服务配置。');
         const current = next.mode === 'cloud' ? (await api.session()).user : null;
         if (!alive) return;
         resetSessionBoundary();
@@ -50,11 +50,11 @@ export function AuthRoot({ children, attribution }: { children: ReactNode; attri
   }, [attempt]);
 
   useEffect(() => {
-    if (!loading && runtime?.mode === 'cloud' && !user) setDesktopState(window.dataagentDesktop, 'login');
+    if (!loading && runtime?.mode === 'cloud' && !user) setDesktopState(window.lagentDesktop, 'login');
   }, [loading, runtime, user]);
 
   if (loading || error || !runtime) return <div className="app-loading" aria-busy={loading}>
-    <div className="loading-brand"><Logo /><strong>DataAgent.</strong></div>
+    <div className="loading-brand"><Logo /><strong>Lagent.</strong></div>
     {error ? <><h2>连接分析服务时遇到问题</h2><p role="alert">{error}</p><button className="button primary" onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15} />重试连接</button><small>请检查网络和所连接的服务地址；服务管理员可检查部署状态。</small></> : <><Spinner size={24} /><p role="status">正在连接你的分析服务…</p></>}
   </div>;
 
@@ -100,8 +100,8 @@ function AuthPage({ notice, onAuthenticated, attribution }: { notice: string; on
   }
   return <main className="auth-page">
     <div className="auth-layout">
-      <section className="auth-intro" aria-label="DataAgent 账号介绍">
-        <div className="auth-brand"><Logo /><span>DataAgent<span className="brand-dot">.</span></span></div>
+      <section className="auth-intro" aria-label="Lagent 账号介绍">
+        <div className="auth-brand"><Logo /><span>Lagent<span className="brand-dot">.</span></span></div>
         <span className="auth-eyebrow">从数据出发，为决策而来</span>
         <h1>你的数据，<br />你的下一步<span>。</span></h1>
         <p>连接团队的分析服务，让每一次探索都留在自己的工作空间。</p>

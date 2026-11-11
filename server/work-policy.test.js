@@ -8,11 +8,11 @@ import { createWorkEngine } from './work/engine.js';
 import { createExecutorRegistry } from './work/executors/index.js';
 
 function fixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-work-policy-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-work-policy-'));
   const store = new Store(dir);
   const analysis = { id: 'analysis', name: '分析', kind: 'analysis', available: true, requiresDataset: true, capabilities: [], start() { throw new Error('unused'); }, get() { return null; } };
   const codex = { id: 'codex', name: 'Codex', kind: 'cli', available: true, capabilities: [], validateInput: input => input, start() { throw new Error('unused'); }, get() { return null; } };
-  const engine = createWorkEngine(store, createExecutorRegistry([analysis, codex]), () => {}, { env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '' } });
+  const engine = createWorkEngine(store, createExecutorRegistry([analysis, codex]), () => {}, { env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '' } });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   return { store, engine };
 }
@@ -29,13 +29,13 @@ test('Work policy 默认拒绝外部执行器并允许 analysis/terminal', t => 
 });
 
 test('Work policy 需要策略允许与外部开关同时成立', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-work-policy-env-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-work-policy-env-'));
   const store = new Store(dir);
   const codex = { id: 'codex', name: 'Codex', kind: 'cli', available: true, capabilities: [], validateInput: input => input, start() { throw new Error('unused'); }, get() { return null; } };
-  const engine = createWorkEngine(store, createExecutorRegistry([codex]), () => {}, { policy: { allowedExecutors: ['codex'] }, env: { DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '' } });
+  const engine = createWorkEngine(store, createExecutorRegistry([codex]), () => {}, { policy: { allowedExecutors: ['codex'] }, env: { LAGENT_ALLOW_EXTERNAL_EXECUTORS: '' } });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   assert.throws(() => engine.command({ text: '读取', executorId: 'codex', executorInput: { prompt: 'hi' } }), { status: 403 });
-  const enabled = createWorkEngine(store, createExecutorRegistry([codex]), () => {}, { policy: { allowedExecutors: ['codex'] }, env: { DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
+  const enabled = createWorkEngine(store, createExecutorRegistry([codex]), () => {}, { policy: { allowedExecutors: ['codex'] }, env: { LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
   t.after(() => enabled.close());
   assert.equal(enabled.command({ text: '读取', executorId: 'codex', executorInput: { prompt: 'hi' } }).executor, 'codex');
 });

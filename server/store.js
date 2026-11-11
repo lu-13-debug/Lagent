@@ -15,7 +15,7 @@ export class Store {
     // User supplied resource IDs are SQL parameters; never used to form filesystem paths.
     const root = path.resolve(dataDir);
     mkdirSync(root, { recursive: true });
-    this.db = new DatabaseSync(path.join(root, 'dataagent.sqlite'));
+    this.db = new DatabaseSync(path.join(root, 'lagent.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS entities (kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id));
       CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, body TEXT NOT NULL);

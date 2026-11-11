@@ -22,7 +22,7 @@ function serviceUrl(value, production) {
 function modelPolicy(hosts, { production, allowLocalModelHttp, fetchImpl }) {
   const allowed = [...new Set(hosts.map(x => String(x).trim().toLowerCase()).filter(Boolean))];
   for (const host of allowed) {
-    if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host) || host.includes('..') || loopback(host) || /^\d+(?:\.\d+){3}$/.test(host)) throw new Error('DATAAGENT_MODEL_HOSTS 必须为精确 HTTPS 主机名');
+    if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host) || host.includes('..') || loopback(host) || /^\d+(?:\.\d+){3}$/.test(host)) throw new Error('LAGENT_MODEL_HOSTS 必须为精确 HTTPS 主机名');
   }
   const assert = settings => {
     const url = new URL(settings.baseUrl);
@@ -43,9 +43,9 @@ export function createCloudApp(options = {}) {
   if (production && !configuredUrl) throw new Error('生产环境必须配置 HTTPS PUBLIC_URL');
   // Development listeners may use an OS-selected loopback port.
   const publicUrl = configuredUrl ? serviceUrl(configuredUrl, production) : null;
-  const hosts = options.modelHosts ?? (process.env.DATAAGENT_MODEL_HOSTS === undefined ? DEFAULT_MODEL_HOSTS : process.env.DATAAGENT_MODEL_HOSTS.split(','));
+  const hosts = options.modelHosts ?? (process.env.LAGENT_MODEL_HOSTS === undefined ? DEFAULT_MODEL_HOSTS : process.env.LAGENT_MODEL_HOSTS.split(','));
   const policy = modelPolicy(hosts, { ...options, production });
-  const dataDir = path.resolve(options.dataDir || process.env.DATAAGENT_DATA_DIR || path.join(root, 'data', 'cloud'));
+  const dataDir = path.resolve(options.dataDir || process.env.LAGENT_DATA_DIR || path.join(root, 'data', 'cloud'));
   const now = options.now || Date.now;
   const enableWork = workEnabled(options);
   const mobileGateway = enableWork ? new MobileGateway({ dataDir: path.join(dataDir, 'mobile-gateway'), now }) : null;
@@ -110,7 +110,7 @@ export function createCloudApp(options = {}) {
   app.use(express.json({ limit: '128kb' }));
   if (enableWork) registerMobilePairingRoutes(app, mobileGateway, { desktopOwner: req => requireSession(req).user.id });
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
-  app.get('/api/runtime', (_req, res) => res.json({ mode: 'cloud', authRequired: true, serviceName: 'DataAgent', version: '1.1.0', modelHosts: policy.allowed, capabilities: { ...taskCapabilities(workEnabled(options)), reportSharing: true } }));
+  app.get('/api/runtime', (_req, res) => res.json({ mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: '1.1.0', modelHosts: policy.allowed, capabilities: { ...taskCapabilities(workEnabled(options)), reportSharing: true } }));
   app.get('/api/auth/session', (req, res) => { const session = accounts.session(cookieToken(req)); res.json({ user: session?.user || null }); });
   const rateLimit = req => { const name = typeof req.body?.username === 'string' ? req.body.username.toLowerCase().slice(0, 128) : ''; limiter.consume(req.ip, name); };
   app.post('/api/auth/register', async (req, res) => {

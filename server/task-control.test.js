@@ -8,7 +8,7 @@ import { createCloudApp } from './cloud-app.js';
 import { createDataset } from './datasets.js';
 
 async function setup(t, options = {}, cloud = false) {
-  const dir = await mkdtemp(path.join(tmpdir(), 'dataagent-control-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'lagent-control-'));
   let app, server, base;
   const start = async () => {
     app = (cloud ? createCloudApp : createApp)({ dataDir: dir, serveStatic: false, ...options });
@@ -58,7 +58,7 @@ const register = (c, username) => c.api('/api/auth/register', 'POST', { username
 for (const cloud of [false, true]) test(`${cloud ? 'cloud' : 'local'} runtime advertises implemented task capabilities without authentication`, async t => {
   const s = await setup(t, {}, cloud); const runtime = await s.api('/api/runtime');
   assert.equal(runtime.status, 200); assert.equal(runtime.mode, cloud ? 'cloud' : 'local'); assert.equal(runtime.authRequired, cloud);
-  assert.equal(runtime.serviceName, 'DataAgent'); assert.equal(runtime.version, '1.1.0');
+  assert.equal(runtime.serviceName, 'Lagent'); assert.equal(runtime.version, '1.1.0');
   assert.deepEqual(runtime.capabilities, { taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, modelHub: true, reportPdf: true, agentTrace: true, memory: true, modelUsage: true, ...(cloud ? { reportSharing: true } : {}) });
 });
 

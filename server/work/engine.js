@@ -19,7 +19,7 @@ const now = () => new Date().toISOString();
 const review = (question, approveLabel = '批准', rejectLabel = '退回') => ({question,createdAt:now(),options:[{id:'approve',label:approveLabel,action:'approve'},{id:'reject',label:rejectLabel,action:'reject'}]});
 // 越权访问的确认文案：命令类的 path 其实是命令本身。
 const ACCESS_VERBS = { read: '读取', write: '写入', delete: '删除', command: '执行命令' };
-const accessPrompt = request => `模型 Agent 请求${ACCESS_VERBS[request.mode] || '访问'}：${String(request.path || '').slice(0, 240)}`;
+const accessPrompt = request => `Lagent 请求${ACCESS_VERBS[request.mode] || '访问'}：${String(request.path || '').slice(0, 240)}`;
 const accessReview = request => ({...review(accessPrompt(request), `允许这次${ACCESS_VERBS[request.mode] || '访问'}`, '拒绝'),kind:'access',accessMode:request.mode,accessPath:String(request.path || '').slice(0,240)});
 const publicTicket = ({clientRequestId, command, lastAction, datasetId, useAI, approvalSnapshot, executorInput, artifacts, prompt, parentTicketId, chainRootId, handoffDepth, handoffSummary, handoffChildId, planId, planStep, planTotal, ...ticket}) => ({
   ...ticket,
@@ -185,7 +185,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   const sharedMemoryBrief = project => {
     try {
       const digest = memory.digest(project.id, { limit: 6 });
-      return digest ? `【项目关键改动 · 由内置 Agent 同步给你】\n${digest}` : '';
+      return digest ? `【项目关键改动 · 由 Lagent 同步给你】\n${digest}` : '';
     } catch {
       return '';
     }
@@ -208,7 +208,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     try {
       const project = projectByPath(workspace);
       if (!project) return '';
-      const lines = ['【项目现状 · 由 DataAgent 维护】', `项目：${project.name}（${project.path}）`];
+      const lines = ['【项目现状 · 由 Lagent 维护】', `项目：${project.name}（${project.path}）`];
       const changes = typeof projects.listChanges === 'function' ? projects.listChanges(project.id) : [];
       const recent = changes.slice(-6).reverse();
       if (recent.length) {
@@ -239,7 +239,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     try {
       const brief = projects.getBrief(project.id);
       const changes = projects.listChanges(project.id);
-      const lines = ['【项目上下文 · 由 DataAgent 维护，供你了解项目现状】', `项目：${project.name}`, `路径：${project.path}`];
+      const lines = ['【项目上下文 · 由 Lagent 维护，供你了解项目现状】', `项目：${project.name}`, `路径：${project.path}`];
       if (project.gitBranch) lines.push(`分支：${project.gitBranch}`);
       if (brief.goal) lines.push('', `目标：${brief.goal}`);
       if (brief.summary) lines.push('', `当前进展：${brief.summary}`);
@@ -331,8 +331,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   // 计划步骤的完整产出落盘：工单报告会截断到几千字，下游步骤要靠文件才能读到完整材料。
   const planRunDir = project => {
     const base = project && typeof project.path === 'string' && project.path
-      ? path.join(project.path, '.dataagent', 'runs')
-      : path.join(os.tmpdir(), 'dataagent-runs');
+      ? path.join(project.path, '.lagent', 'runs')
+      : path.join(os.tmpdir(), 'lagent-runs');
     return base;
   };
   const writeStepArtifact = (ticket, body) => {
@@ -378,7 +378,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       used += chunk.length;
       lines.push(`### 第 ${step.index + 1} 步 · ${step.executorId}\n${chunk}`);
     }
-    return lines.length ? `【前序步骤材料 · 由 DataAgent 汇总，供你直接使用】\n${lines.join('\n\n')}\n\n` : '';
+    return lines.length ? `【前序步骤材料 · 由 Lagent 汇总，供你直接使用】\n${lines.join('\n\n')}\n\n` : '';
   };
   const ensureProjectChat = (project, executorId, options = {}) => {
     const parentChatId = typeof options.parentChatId === 'string' ? options.parentChatId : '';
@@ -660,7 +660,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const terminal=activeId==='terminal';
     const cli=active.kind==='cli';
     const tool=active.kind==='tool';
-    const label=terminal?'终端命令':cli?(activeId==='model'?'模型 Agent':cliWritable(ticket)?'CLI':'只读 CLI'):tool?(activeId==='browser'?'浏览器':activeId==='github'?'GitHub':active.name):'分析';
+    const label=terminal?'终端命令':cli?(activeId==='model'?'Lagent':cliWritable(ticket)?'CLI':'只读 CLI'):tool?(activeId==='browser'?'浏览器':activeId==='github'?'GitHub':active.name):'分析';
     const toolInfo=tool?(task.artifacts?.[activeId]||{}):null;
     const toolSummary=activeId==='github'
       ? (toolInfo?.action==='search'

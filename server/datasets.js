@@ -15,7 +15,7 @@ import { buildCapability } from './capability.js';
 const MAX_ROWS = 200000;
 const MAX_BYTES = 20 * 1024 * 1024;
 // 生产固定三文件；分片实验只能在非生产环境显式开启。
-const MAX_FILES = process.env.NODE_ENV !== 'production' && process.env.DATAAGENT_ENABLE_MULTI_SHARD === '1' ? 20 : inputContract.maxFiles;
+const MAX_FILES = process.env.NODE_ENV !== 'production' && process.env.LAGENT_ENABLE_MULTI_SHARD === '1' ? 20 : inputContract.maxFiles;
 // 基准（scripts/bench-dataset.mjs，2026-10-30，本机）：20 万行三表 CSV 解析 7.1 秒、堆增量 283MB；
 // 50 万行 18.5 秒、654MB。升到 50 万需同时满足“5 秒内、堆增量 400MB 内”，实测两项均超，
 // 且 20MB 体积上限本身只容纳约 55 万行，因此维持 20 万行；提升上限必须改为流式解析而非只改常量。

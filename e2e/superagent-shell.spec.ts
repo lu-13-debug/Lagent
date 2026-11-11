@@ -30,7 +30,7 @@ const bootstrap = {
 
 test('Super-agent 指挥台：指令、收件箱、Agent/工具与移动端', async ({ page }, info) => {
   await page.request.post('/api/auth/register', { data: { username: `super${Date.now()}`, displayName: '指挥测试', password: 'test-password-123' } });
-  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'DataAgent', version: '1.1.0', capabilities: { superagent: true, memory: true } } }));
+  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: '1.1.0', capabilities: { superagent: true, memory: true } } }));
   await page.route('**/api/work/events', route => route.abort());
   await page.route('**/api/work/bootstrap', route => route.fulfill({ json: bootstrap }));
   await page.route('**/api/work/command', async route => route.fulfill({ json: { ticket: { ...ticket, id: 't-new', title: '运行终端命令', status: 'working' } } }));

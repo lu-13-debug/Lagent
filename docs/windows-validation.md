@@ -11,7 +11,7 @@
 
 ## 2026-10-28 候选安装包
 
-- 候选文件 `release/candidate/DataAgent-Setup-1.1.0-x64.exe`，SHA256：`9D1FD4323FF785E5E13111F7B5D272261834CEFC4B2B2B719B0F56E9E186856C`；未签名。
+- 候选文件 `release/candidate/Lagent-Setup-1.1.0-x64.exe`，SHA256：`9D1FD4323FF785E5E13111F7B5D272261834CEFC4B2B2B719B0F56E9E186856C`；未签名。
 - 使用缓存的 Electron 45 与 NSIS 工具构建，7-Zip 文件测试结果 `Everything is Ok`，同时提示安装包尾部存在额外数据；没有在独立 Windows 环境中实际运行安装器。
 - 同次构建的 `win-unpacked` 通过启动与完整注册、真实上传、协作/自动分析、账号隔离和切换服务测试；见 `artifacts/desktop-smoke-cloud-1793174672943` 与 `artifacts/desktop-check-cloud-1793174734695`。打包内主进程、更新模块、云端分享服务及前端构建文件与当前源码 SHA256 一致。
 - 模型调用使用受控响应，未进行真实付费 API 测试；尚未在独立系统实测安装向导、系统托盘和多显示器拔插。候选包尚未上传 GitHub 或发布 Release。

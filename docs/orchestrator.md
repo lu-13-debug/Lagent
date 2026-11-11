@@ -12,7 +12,7 @@
 不自己写文件——它建工单、等工单到终态、把结果写进自己的运行记录。这样：
 
 - 审批、权限、改动快照、执行记录都沿用既有那套，没有第二份状态；
-- 关掉编排器（`DATAAGENT_ORCHESTRATOR=legacy`）时，旧流程完全不受影响；
+- 关掉编排器（`LAGENT_ORCHESTRATOR=legacy`）时，旧流程完全不受影响；
 - 运行记录丢了也不影响项目历史，反过来也不会有「编排器说成功、工单说失败」的分裂。
 
 ## 模块
@@ -25,7 +25,7 @@
 | `server/work/orchestrator/runs.js` | 运行记录的读写（kind `work-run`） |
 
 Mastra 只负责「步骤顺序 + 挂起/恢复」，状态落在自己的 SQLite（`data/orchestrator.db`，可用
-`DATAAGENT_RUN_DB` 改），不写 Mastra 的 memory，也不依赖它的 agent。
+`LAGENT_RUN_DB` 改），不写 Mastra 的 memory，也不依赖它的 agent。
 
 ## 状态机
 
@@ -80,5 +80,5 @@ drafting ──→ awaiting_approval ──→ running ──→ verifying ─�
 ## 打开与关闭
 
 - 默认开启。
-- `DATAAGENT_ORCHESTRATOR=legacy` → 关闭（`POST /api/work/runs` 返回 503，前端隐藏「深度编排」开关）。
-- 前端开关状态存在 `localStorage['dataagent.orchestrate.v1']`，按人而不是按对话。
+- `LAGENT_ORCHESTRATOR=legacy` → 关闭（`POST /api/work/runs` 返回 503，前端隐藏「深度编排」开关）。
+- 前端开关状态存在 `localStorage['lagent.orchestrate.v1']`，按人而不是按对话。

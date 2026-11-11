@@ -11,7 +11,7 @@ const publicCredential = row => Object.fromEntries(['id', 'name', 'provider', 'b
 
 export class CredentialVault {
   #masterKey;
-  constructor({ store, ownerId = 'local', masterKey = process.env.DATAAGENT_CREDENTIAL_MASTER_KEY }) {
+  constructor({ store, ownerId = 'local', masterKey = process.env.LAGENT_CREDENTIAL_MASTER_KEY }) {
     this.store = store; this.ownerId = String(ownerId); this.configKey = `credential-vault-v1:${this.ownerId}`;
     const valid = Buffer.isBuffer(masterKey) ? masterKey.length === 32 : typeof masterKey === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(masterKey) && Buffer.from(masterKey, 'base64').length === 32;
     this.#masterKey = valid ? Buffer.from(masterKey, Buffer.isBuffer(masterKey) ? undefined : 'base64') : null;

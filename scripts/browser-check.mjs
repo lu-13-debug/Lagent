@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.argv[2] || 'playwright');
-const url = process.env.DATAAGENT_URL || 'http://127.0.0.1:5173';
+const url = process.env.LAGENT_URL || 'http://127.0.0.1:5173';
 await mkdir('artifacts', { recursive: true });
 const browser = await chromium.launch({ channel: 'msedge', headless: true });
 const page = await browser.newPage({ viewport: { width: 1500, height: 1000 }, deviceScaleFactor: 1 });

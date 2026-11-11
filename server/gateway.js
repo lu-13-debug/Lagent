@@ -36,7 +36,7 @@ export async function chat({ settings, key, messages, signal, fetchImpl = fetch,
   const combined = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
   const request = modelRequest(normalizeBaseUrl(settings.baseUrl), settings.model, messages, key, maxTokens, connectionTest, settings);
   if (normalizeBaseUrl(settings.baseUrl) === 'https://opencode.ai/inference/go/openai/v1') {
-    request.headers['user-agent'] = 'DataAgent/1.1.0';
+    request.headers['user-agent'] = 'Lagent/1.1.0';
     request.headers['x-opencode-session'] = typeof sessionId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(sessionId) ? sessionId : randomUUID();
   }
   try {

@@ -136,7 +136,7 @@ export function createMcpHandler({ engine, windowBridge } = {}) {
       return {
         protocolVersion: typeof payload.params?.protocolVersion === 'string' ? payload.params.protocolVersion : PROTOCOL_VERSION,
         capabilities: { tools: {} },
-        serverInfo: { name: 'DataAgent', version: '1.1.0' }
+        serverInfo: { name: 'Lagent', version: '1.1.0' }
       };
     }
     if (payload.method === 'notifications/initialized' || payload.method === 'notifications/cancelled') return null;

@@ -10,11 +10,11 @@ test('自动发现显式 Codex 路径与 npm 版 Claude 可执行文件', t => {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const codex = join(dir, 'codex.exe');
   writeFileSync(codex, '');
-  assert.equal(findCodexBinary({ DATAAGENT_CODEX_CLI: codex }), codex);
-  assert.equal(findCodexBinary({ DATAAGENT_CODEX_CLI: join(dir, 'missing.exe') }), null);
+  assert.equal(findCodexBinary({ LAGENT_CODEX_CLI: codex }), codex);
+  assert.equal(findCodexBinary({ LAGENT_CODEX_CLI: join(dir, 'missing.exe') }), null);
 
   const claude = join(dir, 'claude.exe');
   writeFileSync(claude, '');
-  assert.deepEqual(findClaudeCodeCli({ DATAAGENT_CLAUDE_CLI: claude }), { binary: claude, prefix: [] });
+  assert.deepEqual(findClaudeCodeCli({ LAGENT_CLAUDE_CLI: claude }), { binary: claude, prefix: [] });
   assert.equal(findClaudeCodeCli({ APPDATA: dir }), null);
 });

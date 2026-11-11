@@ -7,7 +7,7 @@ const MAX_ERROR = 4000;
 const promptPlaceholder = '{prompt}';
 
 function customArgs(id) {
-  const key = `DATAAGENT_CLI_ARGS_${id.toUpperCase().replace(/-/g, '_')}`;
+  const key = `LAGENT_CLI_ARGS_${id.toUpperCase().replace(/-/g, '_')}`;
   const raw = process.env[key];
   if (typeof raw !== 'string' || !raw.trim()) return null;
   try {
@@ -20,7 +20,7 @@ function customArgs(id) {
 
 /**
  * 各家 CLI 至少都要一个「只读问答」参数，写入时再追加它们自己的自动批准开关。
- * 允许用 DATAAGENT_CLI_ARGS_<ID>（JSON 数组，`{prompt}` 代表提示词）覆盖默认模板：
+ * 允许用 LAGENT_CLI_ARGS_<ID>（JSON 数组，`{prompt}` 代表提示词）覆盖默认模板：
  * 这些国产 CLI 的参数并未完全统一，改参数不该等发版。
  */
 function argTemplate(id, input, readArgs, writeArgs) {
@@ -98,7 +98,7 @@ export const LOCAL_AGENT_PROFILES = Object.freeze({
     }
   },
   // 国产 Agent：这批 CLI 多数沿用 Claude Code 的非交互约定（-p 后跟提示词、stdout 出结论），
-  // 所以按同一套参数接入；各家若改过参数，可用 DATAAGENT_CLI_ARGS_<ID> 覆盖（见 argTemplate）。
+  // 所以按同一套参数接入；各家若改过参数，可用 LAGENT_CLI_ARGS_<ID> 覆盖（见 argTemplate）。
   codebuddy: {
     id: 'codebuddy',
     name: 'CodeBuddy Code（腾讯）',
@@ -150,7 +150,7 @@ function envHint(text) {
   const match = /Missing environment variable:?\s*`?([A-Z][A-Z0-9_]*)`?/i.exec(String(text || ''));
   if (!match) return '';
   const name = match[1].toUpperCase();
-  return `（${name} 没有被传给 CLI：启动服务前先在环境里设置它，或用 DATAAGENT_CLI_ENV_PASSTHROUGH=${name} 启动一次。）`;
+  return `（${name} 没有被传给 CLI：启动服务前先在环境里设置它，或用 LAGENT_CLI_ENV_PASSTHROUGH=${name} 启动一次。）`;
 }
 
 function errorText(stdout, stderr, exitCode) {
@@ -196,7 +196,7 @@ export function localAgentExecutor(profileName, {
   store,
   cwd,
   binary,
-  timeoutMs = Number(process.env.DATAAGENT_CLI_TIMEOUT_MS) || 1_800_000,
+  timeoutMs = Number(process.env.LAGENT_CLI_TIMEOUT_MS) || 1_800_000,
   maxOutputBytes = 8 * 1024 * 1024,
   spawnImpl,
   environment = process.env

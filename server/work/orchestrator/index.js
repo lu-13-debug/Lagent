@@ -28,7 +28,7 @@ export function createOrchestrator({
   listAgents = () => engine.bootstrap().agents || [],
   storageUrl = null,
   stepTimeoutMs = DEFAULT_STEP_TIMEOUT_MS,
-  idleTimeoutMs = Number(process.env.DATAAGENT_STEP_IDLE_MS) > 0 ? Number(process.env.DATAAGENT_STEP_IDLE_MS) : DEFAULT_IDLE_TIMEOUT_MS,
+  idleTimeoutMs = Number(process.env.LAGENT_STEP_IDLE_MS) > 0 ? Number(process.env.LAGENT_STEP_IDLE_MS) : DEFAULT_IDLE_TIMEOUT_MS,
   now = () => new Date().toISOString()
 }) {
   const runs = createRunStore({ store, clock: now });
@@ -422,7 +422,7 @@ export function createOrchestrator({
 
   const storage = new LibSQLStore({
     id: 'work-orchestrator',
-    url: storageUrl || `file:${process.env.DATAAGENT_RUN_DB || 'data/orchestrator.db'}`
+    url: storageUrl || `file:${process.env.LAGENT_RUN_DB || 'data/orchestrator.db'}`
   });
   const mastra = new Mastra({ workflows: { orchestrator: workflow }, storage });
   const bound = mastra.getWorkflow('orchestrator');

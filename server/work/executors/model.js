@@ -4,7 +4,7 @@ import path from 'node:path';
 import { workError } from '../domain.js';
 import { modelRequest, readModelResponse, providerUsage, toolCallsOf, visibleReply } from '../../model-protocol.js';
 
-// 模型 Agent：用已经接入的模型自己推理 + 调工具，把一个任务在项目目录里做完。
+// Lagent：用已经接入的模型自己推理 + 调工具，把一个任务在项目目录里做完。
 // 与 CLI 执行器不同，它的每一步都写进 task.activity，界面因此能像看 dsh 一样看到过程。
 const statusError = (message, status = 400) => Object.assign(workError(message, status), { status });
 const MAX_STEPS = 20;
@@ -14,7 +14,7 @@ const READ_MAX_LINES = 800;
 const LIST_LIMIT = 120;
 const HITS_LIMIT = 40;
 const ACTIVITY_LIMIT = 60;
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.dataagent', 'data', '.venv', '__pycache__', 'coverage', '.spec-workflow', '.browser-smoke-profile', '.playwright-mcp']);
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.lagent', 'data', '.venv', '__pycache__', 'coverage', '.spec-workflow', '.browser-smoke-profile', '.playwright-mcp']);
 const WRITE_TOOLS = new Set(['write_file', 'replace_in_file', 'move_path', 'delete_path']);
 const READ_COMMAND = /^(git\s+(status|diff|log|show|branch)\b[^|;&<>]*|node\s+--check\s+\S+)$/i;
 // 纯查看类命令：只列、只看，不写不改。
@@ -64,7 +64,7 @@ const text = (value, limit) => (typeof value === 'string' ? value.trim().slice(0
 export function normalizeModelInput(input, { maxPromptBytes = 16 * 1024 } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw statusError('executorInput 必须为结构化对象');
   const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
-  if (!prompt) throw statusError('模型 Agent 的 prompt 必须是非空字符串');
+  if (!prompt) throw statusError('Lagent 的 prompt 必须是非空字符串');
   if (prompt.includes('\0')) throw statusError('prompt 不允许 NUL 字符');
   if (Buffer.byteLength(prompt) > maxPromptBytes) throw statusError(`prompt 不能超过 ${maxPromptBytes} 字节`);
   // 8 步太紧：列目录 + 逐项删除 + 复查就刚好用光，连给结论的余量都没有。
@@ -320,8 +320,8 @@ const SHELL = process.platform === 'win32'
   : { file: '/bin/sh', args: value => ['-c', value] };
 
 const PWSH = process.platform === 'win32'
-  ? (process.env.DATAAGENT_POWERSHELL || 'powershell.exe')
-  : (process.env.DATAAGENT_POWERSHELL || 'pwsh');
+  ? (process.env.LAGENT_POWERSHELL || 'powershell.exe')
+  : (process.env.LAGENT_POWERSHELL || 'pwsh');
 
 // execFileSync 默认按 utf8 解码，而 Windows 的 cmd / powershell 输出的是代码页（GBK）。
 // 先按 utf8 解，出现替换字符（U+FFFD）就退回 GBK —— 否则报错信息会变成一片乱码。
@@ -412,7 +412,7 @@ export function modelSystemPrompt({ maxSteps, write, permission = write ? 'works
   const mode = PERMISSIONS.includes(permission) ? permission : 'workspace';
   const extra = roots.length ? `已获得长期授权的其它目录：${roots.join('、')}。` : '';
   return [
-    '你是 DataAgent 的模型 Agent，在一个本地工作目录里独立完成任务。',
+    '你是 Lagent，是这个软件内置的 Agent，在一个本地工作目录里独立完成任务。',
     '每一步只输出一个 JSON 对象，不要输出任何其它文字、不要用代码块包裹：',
     '· 调用工具：{"tool":"read_file","args":{"path":"src/app.tsx"}}',
     '· 结束任务：{"final":{"done":true,"summary":"做了什么、结论是什么","files":["改动过的文件"]}}',
@@ -917,9 +917,9 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
     let truncationRetried = false;
     const deadline = Date.now() + totalTimeoutMs;
     for (let step = 0; step < input.maxSteps; step += 1) {
-      if (task.cancelled) throw statusError('模型 Agent 已停止', 499);
+      if (task.cancelled) throw statusError('Lagent 已停止', 499);
       const remaining = deadline - Date.now();
-      if (remaining <= 1000) throw statusError('模型 Agent 超出总时长限制', 504);
+      if (remaining <= 1000) throw statusError('Lagent 超出总时长限制', 504);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), Math.min(perCallTimeoutMs, remaining));
       let reply = '';
@@ -987,7 +987,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
         const refused = parsed.done === false || PARTIAL.test(summary) || (files.length === 0 && REFUSAL.test(summary));
         pushActivity(task, refused
           ? { kind: 'error', text: summary || '任务没有完成', detail: '模型表示没有做完' }
-          : { kind: 'result', text: summary || '模型 Agent 完成' });
+          : { kind: 'result', text: summary || 'Lagent 完成' });
         return { summary, files, usage, steps: step + 1, ...(refused ? { failed: `任务没有完成：${summary.slice(0, 300)}` } : {}) };
       }
       messages.push({ role: 'assistant', content: reply.slice(0, 4000) });
@@ -1051,12 +1051,12 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
     task.status = cancelled ? 'cancelled' : failed ? 'failed' : 'completed';
     task.endedAt = stamp;
     task.updatedAt = stamp;
-    task.error = cancelled ? '模型 Agent 已停止' : failed ? String(error).slice(0, 2000) : undefined;
+    task.error = cancelled ? 'Lagent 已停止' : failed ? String(error).slice(0, 2000) : undefined;
     task.artifacts = {
       ...(task.artifacts || {}),
       cli: {
         executorId: 'model',
-        summary: (task.effortFallback ? `（所选思考强度未被该模型接受，已按默认档执行）\n` : '') + String(summary || (failed ? '模型 Agent 执行失败' : '')).slice(0, 6000),
+        summary: (task.effortFallback ? `（所选思考强度未被该模型接受，已按默认档执行）\n` : '') + String(summary || (failed ? 'Lagent 执行失败' : '')).slice(0, 6000),
         usage: usage || {},
         error: failed ? String(error).slice(0, 2000) : undefined,
         artifacts: [...new Set(files || [])].slice(0, 100),
@@ -1075,7 +1075,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
 
   return {
     id: 'model',
-    name: '模型 Agent',
+    name: 'Lagent',
     kind: 'cli',
     available: true,
     requiresDataset: false,
@@ -1129,8 +1129,8 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
         .catch(error => {
           const cancelled = task.cancelled === true;
           finalize(task, {
-            summary: cancelled ? '模型 Agent 已停止' : '',
-            error: cancelled ? '模型 Agent 已停止' : error?.message || '模型 Agent 执行失败',
+            summary: cancelled ? 'Lagent 已停止' : '',
+            error: cancelled ? 'Lagent 已停止' : error?.message || 'Lagent 执行失败',
             usage: {},
             files: [],
             steps: 0,
@@ -1172,7 +1172,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       task.status = 'cancelled';
       task.endedAt = new Date().toISOString();
       task.updatedAt = task.endedAt;
-      task.error = '模型 Agent 已停止';
+      task.error = 'Lagent 已停止';
       persist(task);
     },
     close() {
@@ -1181,7 +1181,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
         if (task && task.status === 'running') {
           task.status = 'cancelled';
           task.cancelled = true;
-          task.error = '服务重启，模型 Agent 已中断';
+          task.error = '服务重启，Lagent 已中断';
           persist(task);
         }
       }

@@ -29,7 +29,7 @@ type Props = {
 };
 
 const EXECUTOR_LABELS: Record<string, string> = {
-  model: '内置 Agent',
+  model: 'Lagent',
   'claude-code': 'Claude Code',
   codex: 'Codex',
   'claude-acp': 'Claude ACP',
@@ -123,14 +123,14 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   // 深度编排：开=一次运行里分析/拆解/分发/验证；关=沿用现在的单条工单。
   // 深度编排的模板：空字符串 = 让编排器按目标猜，其余为用户手选。
   const [orchTemplate, setOrchTemplate] = useState(() => {
-    try { return localStorage.getItem('dataagent.orchtemplate.v1') || ''; } catch { return ''; }
+    try { return localStorage.getItem('lagent.orchtemplate.v1') || ''; } catch { return ''; }
   });
   const [orchestrate, setOrchestrate] = useState(() => {
-    try { return localStorage.getItem('dataagent.orchestrate.v1') !== 'off'; } catch { return true; }
+    try { return localStorage.getItem('lagent.orchestrate.v1') !== 'off'; } catch { return true; }
   });
   const [runs, setRuns] = useState<WorkRun[]>([]);
   const [runBusy, setRunBusy] = useState('');
-  // 服务端关掉编排器（DATAAGENT_ORCHESTRATOR=legacy）时不显示开关，免得点了报 503。
+  // 服务端关掉编排器（LAGENT_ORCHESTRATOR=legacy）时不显示开关，免得点了报 503。
   const [orchestratorOn, setOrchestratorOn] = useState(true);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [newExecutors, setNewExecutors] = useState<string[]>([]);
@@ -339,7 +339,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     if (!browserData) await loadDirectory('');
   };
   const pickFolder = async () => {
-    const picker = window.dataagentDesktop?.pickFolder;
+    const picker = window.lagentDesktop?.pickFolder;
     if (!picker) { await openFolderBrowser(); return; }
     try {
       const picked = await picker();
@@ -507,7 +507,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
         setChatDraft('');
         await loadProjects(true);
         if (result.mainChatId) setActiveChatId(result.mainChatId);
-        notify(`已交给 ${collabAgents.length + 1} 个 Agent：内置 Agent 先拆解，其余各自执行，结果汇总回这条对话。`);
+        notify(`已交给 ${collabAgents.length + 1} 个 Agent：Lagent 先拆解，其余各自执行，结果汇总回这条对话。`);
         return;
       }
       // 深度编排：把整句话交给编排器，它自己拆解、分发、验证。
@@ -531,7 +531,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     setOrchestrate(next);
     // 打开深度编排就清掉手选的协作 Agent：两种模式只能留一个。
     if (next) setCollabAgents([]);
-    try { localStorage.setItem('dataagent.orchestrate.v1', next ? 'on' : 'off'); } catch { /* 隐私模式下忽略 */ }
+    try { localStorage.setItem('lagent.orchestrate.v1', next ? 'on' : 'off'); } catch { /* 隐私模式下忽略 */ }
   };
   // 每条会话自己的权限档位：留空表示跟随设置里的全局档位。
   const changePermission = async (next: '' | 'read' | 'workspace' | 'full') => {
@@ -578,7 +578,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     if (adding && !collabAgents.length) {
       // 协作和深度编排是两种模式：点了具体 Agent，就不再让编排器自己挑人。
       setOrchestrate(false);
-      try { localStorage.setItem('dataagent.orchestrate.v1', 'off'); } catch { /* 隐私模式下忽略 */ }
+      try { localStorage.setItem('lagent.orchestrate.v1', 'off'); } catch { /* 隐私模式下忽略 */ }
     }
     setCollabAgents(current => (current.includes(id)
       ? current.filter(item => item !== id)
@@ -589,7 +589,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     // 打开面板就退出「深度编排」：接下来由你挑人，不再让编排器自己分配。
     // 不预选，避免"看起来已经选了却还没确认"。
     setOrchestrate(false);
-    try { localStorage.setItem('dataagent.orchestrate.v1', 'off'); } catch { /* 隐私模式下忽略 */ }
+    try { localStorage.setItem('lagent.orchestrate.v1', 'off'); } catch { /* 隐私模式下忽略 */ }
     setCollabOpen(true);
   };
   const dispatch = async () => {
@@ -646,7 +646,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const openTeamworkFile = async (item: WorkTeamwork) => {
     if (!item.outputPath) return;
     const absolute = `${item.projectPath || project?.path || ''}\\${item.outputPath.replace(/\//g, '\\')}`;
-    const bridge = (window as unknown as { dataagentDesktop?: { openPath?: (target: string) => Promise<unknown> } }).dataagentDesktop;
+    const bridge = (window as unknown as { lagentDesktop?: { openPath?: (target: string) => Promise<unknown> } }).lagentDesktop;
     if (bridge?.openPath) {
       try { await bridge.openPath(absolute); return; } catch { /* 落到复制路径。 */ }
     }
@@ -991,7 +991,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       {collabOpen && <div className="pj-dispatch pj-collab-panel">
         <span className="pj-dispatch-label">一起做的 Agent</span>
         {collabCandidates.map(id => <button type="button" key={id} className={`pj-chip ${collabAgents.includes(id) ? 'on' : ''}`} aria-pressed={collabAgents.includes(id)} onClick={() => toggleCollabTarget(id)}>{collabAgents.includes(id) ? <Check size={12} /> : <Plus size={12} />}{EXECUTOR_LABELS[id] || id}</button>)}
-        <span className="pj-dispatch-hint">内置 Agent 拆解与汇总；最多再选 3 个</span>
+        <span className="pj-dispatch-hint">Lagent 拆解与汇总；最多再选 3 个</span>
         <span className="pj-dispatch-actions">
           <button type="button" className="pj-link" onClick={() => { setCollabAgents([]); setCollabOpen(false); }}>清空</button>
           <button type="button" className="pj-btn pj-primary pj-small" onClick={() => setCollabOpen(false)}>选好了</button>
@@ -1027,7 +1027,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
             <option value="full">完全权限</option>
           </select>
         </label>
-        {chat.executorId === 'model' && <button type="button" className={`pj-chip pj-collab${collabAgents.length ? ' on' : ''}`} aria-expanded={collabOpen} aria-pressed={collabAgents.length > 0} onClick={toggleCollabPanel} title="让内置 Agent 带着另外几个 Agent 一起做：内置 Agent 拆解与汇总，其余各自执行"><Users size={13} />{collabAgents.length ? `协作 ${collabAgents.length + 1} 个 Agent` : '协作 Agent'}</button>}
+        {chat.executorId === 'model' && <button type="button" className={`pj-chip pj-collab${collabAgents.length ? ' on' : ''}`} aria-expanded={collabOpen} aria-pressed={collabAgents.length > 0} onClick={toggleCollabPanel} title="让 Lagent 带着另外几个 Agent 一起做：Lagent 拆解与汇总，其余各自执行"><Users size={13} />{collabAgents.length ? `协作 ${collabAgents.length + 1} 个 Agent` : '协作 Agent'}</button>}
         {orchestratorOn && <button type="button" className={`pj-chip pj-orch${orchestrate ? ' on' : ''}`} aria-pressed={orchestrate} onClick={toggleOrchestrate} title="开着：先分析任务、拆成步骤、分配 Agent，批准后逐步执行并在验证不过时返工">{orchestrate ? <Check size={12} /> : <Plus size={12} />}深度编排</button>}
         {orchestrate && (
           <label className="pj-orch-template" title="用哪套步骤模板；自动识别按目标里的关键词猜">
@@ -1038,7 +1038,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
               onChange={event => {
                 const next = event.target.value;
                 setOrchTemplate(next);
-                try { localStorage.setItem('dataagent.orchtemplate.v1', next); } catch { /* 隐私模式下忽略 */ }
+                try { localStorage.setItem('lagent.orchtemplate.v1', next); } catch { /* 隐私模式下忽略 */ }
               }}
             >
               <option value="">自动识别</option>
@@ -1053,7 +1053,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
         <button type="button" className="pj-btn" disabled={!chatDraft.trim() || planBusy === 'suggest'} onClick={() => void startPlan()}><Sparkles size={14} />{planBusy === 'suggest' ? '拆解中…' : '拆成计划'}</button>
         <button type="button" className="pj-btn pj-primary" disabled={!chatDraft.trim() || busy === 'send'} onClick={() => void send()}><Send size={14} />{busy === 'send' ? '提交中…' : chat.executorId === 'model' && collabAgents.length ? `让 ${collabAgents.length + 1} 个 Agent 一起做` : orchestrate ? '开始编排' : '发送'}</button>
       </div>
-      <p className="pj-note pj-note-bar">{chat.executorId === 'model' && collabAgents.length ? `协作：内置 Agent 先把任务拆清楚，再分给另外 ${collabAgents.length} 个 Agent 并行做，结果汇总回这条对话；子 Agent 挂在右栏。` : orchestrate ? '深度编排：先分析任务、拆成步骤并分给合适的 Agent，逐步执行，验证不过会自动返工（最多 2 轮）。越界操作仍会单独弹窗。' : '消息会立刻交给 Agent 执行；能不能改文件、要不要你确认，取决于设置里的权限档位。'}<button type="button" className="pj-link" onClick={openManualPlan}>手动编排计划</button><span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
+      <p className="pj-note pj-note-bar">{chat.executorId === 'model' && collabAgents.length ? `协作：Lagent 先把任务拆清楚，再分给另外 ${collabAgents.length} 个 Agent 并行做，结果汇总回这条对话；子 Agent 挂在右栏。` : orchestrate ? '深度编排：先分析任务、拆成步骤并分给合适的 Agent，逐步执行，验证不过会自动返工（最多 2 轮）。越界操作仍会单独弹窗。' : '消息会立刻交给 Agent 执行；能不能改文件、要不要你确认，取决于设置里的权限档位。'}<button type="button" className="pj-link" onClick={openManualPlan}>手动编排计划</button><span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
     </div>
   </div> : null;
 

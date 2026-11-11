@@ -233,7 +233,7 @@ test('账本写入失败不使分析失败，取消保留已完成调用',async 
 });
 
 async function fixture(t, { mode = 'automatic', fetchImpl, modelResult, runTool, records, v2 = false, panel = false } = {}) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'dataagent-multi-regression-'));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'lagent-multi-regression-'));
   const store = new Store(dir); const calls = [];
   const workflow = new Workflow(store, {
     hub: { context: stage => ({ settings: { model: stage.id, provider: 'mock', baseUrl: 'https://test.example/v1' }, key: 'fake-key' }), reviewerContext: (stage,index) => ({ settings:{model:stage.reviewers[index].model,provider:'mock',baseUrl:'https://test.example/v1'},key:'review-key' }) },
@@ -438,7 +438,7 @@ test('缺少可绘聚合值时记录原因并继续核验报告', async t => {
 
 test('分阶段真实选择模型、读取 Skill，PDF成功后仅结算一次', async t => {
   assert.equal(typeof multi.configureMultiTask, 'function');
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'dataagent-multi-'));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'lagent-multi-'));
   const store = new Store(dir); const calls = []; let pdfCalls = 0;
   const hub = { context: stage => ({ settings: { baseUrl: 'https://test.example/v1', model: `${stage.id}-model`, provider: 'mock', effort: stage.effort }, key: 'fake-secret' }) };
   const workflow = new Workflow(store, { hub, fetchImpl: async (_url, init) => { const body = JSON.parse(init.body); calls.push(body); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: '基于聚合证据完成', operations: [], approved: true, issues: [] }) } }] })); }, runTool: async () => ({ rows: 2 }), createPdf: async task => { pdfCalls++; assert.equal(task.artifacts.verify.verified, true); return { ready: true, bytes: 10 }; } });
@@ -461,7 +461,7 @@ test('分阶段真实选择模型、读取 Skill，PDF成功后仅结算一次',
 
 test('首次PDF失败保留已核验报告并释放冻结额度', async t => {
   assert.equal(typeof multi.configureMultiTask, 'function');
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'dataagent-pdf-fail-')); const store = new Store(dir);
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'lagent-pdf-fail-')); const store = new Store(dir);
   const workflow = new Workflow(store, { hub: { context: stage => ({ settings: { model: stage.id, provider: 'mock', baseUrl: 'https://test.example/v1' }, key: 'fake' }) }, fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"summary":"核对完成","operations":[],"approved":true}' } }] })), runTool: async () => ({}), createPdf: async () => { throw new Error('PDF运行环境不可用'); } });
   t.after(async () => { workflow.close(); store.close(); await rm(dir, { recursive: true, force: true }); });
   const dataset = createDataset({ users: [{ user_id: 'u', registered_at: '2026-10-01' }] }); store.put('dataset', dataset);

@@ -5,7 +5,7 @@ export interface Appearance extends AppearancePreference { resolvedTheme: 'light
 type PartialAppearance = { theme?: unknown; view?: unknown };
 
 export function appearanceKey(origin?: string, userId?: string) {
-  return `dataagent:appearance:v1:${encodeURIComponent(origin || 'local')}:${userId ? encodeURIComponent(userId) : 'local'}`;
+  return `lagent:appearance:v1:${encodeURIComponent(origin || 'local')}:${userId ? encodeURIComponent(userId) : 'local'}`;
 }
 export function resolveAppearance(stored: PartialAppearance | null | undefined, systemPrefersDark: boolean): Appearance {
   const theme: ThemePreference = stored?.theme === undefined ? 'system' : stored.theme === 'light' || stored.theme === 'dark' || stored.theme === 'system' ? stored.theme : 'light';

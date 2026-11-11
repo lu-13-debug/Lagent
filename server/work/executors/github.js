@@ -129,7 +129,7 @@ function requestHeaders(token, accept = 'application/vnd.github+json') {
     Accept: accept,
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'DataAgent/1.1.0'
+    'User-Agent': 'Lagent/1.1.0'
   };
 }
 

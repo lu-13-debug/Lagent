@@ -27,7 +27,7 @@ test('terminal 只接受受控程序、相对路径和无 shell 元字符', () =
 });
 
 test('terminal 成功执行并写脱敏产物', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-terminal-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-terminal-'));
   const store = new Store(dir);
   let child;
   const executor = terminalExecutor({ store, cwd: dir, spawnImpl: () => (child = new FakeChild()) });
@@ -43,7 +43,7 @@ test('terminal 成功执行并写脱敏产物', async t => {
 });
 
 test('terminal 超时和停止都不会覆盖最终状态', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-terminal-timeout-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-terminal-timeout-'));
   const store = new Store(dir);
   const children = [];
   const executor = terminalExecutor({ store, cwd: dir, timeoutMs: 5, spawnImpl: () => { const child = new FakeChild(); children.push(child); return child; } });

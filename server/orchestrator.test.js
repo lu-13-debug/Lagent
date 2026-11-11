@@ -9,7 +9,7 @@ import { detectTemplate, buildSteps, TEMPLATES } from './work/orchestrator/templ
 import { pickExecutor, matches, capabilitiesOf } from './work/orchestrator/capabilities.js';
 
 function harness(t, options = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-orchestrator-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-orchestrator-'));
   const store = new Store(join(root, 'store.sqlite'));
   const events = [];
   let counter = 0;
@@ -293,7 +293,7 @@ test('能力路由：没人能接的一步标成跳过，并说清缺哪种能�
 });
 
 test('看门狗：一步长时间没有任何输出就停下来，而不是一直等', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-watchdog-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-watchdog-'));
   const rows = new Map();
   const store = {
     get: (kind, id) => rows.get(`${kind}:${id}`) ?? null,
@@ -326,7 +326,7 @@ test('看门狗：一步长时间没有任何输出就停下来，而不是一�
 });
 
 test('实现步骤没写全点名的文件，这一步和整条运行都判失败', async t => {
-  const projectPath = mkdtempSync(join(tmpdir(), 'dataagent-gap-'));
+  const projectPath = mkdtempSync(join(tmpdir(), 'lagent-gap-'));
   const { orchestrator } = harness(t, { projectPath });
   t.after(() => {
     try {

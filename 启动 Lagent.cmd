@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
-title DataAgent - 游戏数据分析
+title Lagent - Agent 工作台
 where node >nul 2>nul
 if errorlevel 1 (
   echo 请先安装 Node.js 24 或更高版本。
@@ -16,7 +16,7 @@ if not exist "node_modules\vite\package.json" (
     exit /b 1
   )
 )
-echo 正在准备 DataAgent...
+echo 正在准备 Lagent...
 call npm.cmd run build
 if errorlevel 1 (
   pause

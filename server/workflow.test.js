@@ -11,7 +11,7 @@ const response = () => new Response(JSON.stringify({ choices: [{ message: { cont
 
 for (const outcome of ['completed', 'failed', 'cancelled']) {
   test(`task-scoped model credential snapshot is removed after ${outcome}`, async t => {
-    const dir = await mkdtemp(path.join(tmpdir(), 'dataagent-workflow-'));
+    const dir = await mkdtemp(path.join(tmpdir(), 'lagent-workflow-'));
     const store = new Store(dir);
     const workflow = new Workflow(store);
     t.after(async () => { workflow.close(); store.close(); await rm(dir, { recursive: true, force: true }); });

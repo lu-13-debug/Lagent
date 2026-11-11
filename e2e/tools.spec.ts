@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test('工具页把内置浏览器加入允许策略', async ({ page }) => {
   await page.request.post('/api/auth/register', { data: { username: `tool${Date.now()}`, displayName: '工具测试', password: 'test-password-123' } });
-  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'DataAgent', version: '1.1.0', capabilities: { superagent: true } } }));
+  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: '1.1.0', capabilities: { superagent: true } } }));
   await page.route('**/api/work/events', route => route.abort());
   await page.route('**/api/work/windows**', route => route.fulfill({ json: { windows: [] } }));
   await page.route('**/api/work/providers**', route => route.fulfill({ json: { providers: [] } }));

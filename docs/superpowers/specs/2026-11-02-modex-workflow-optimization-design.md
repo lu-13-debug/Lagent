@@ -8,7 +8,7 @@ MODEX目录是安装后的Electron应用。实际阅读了 resources/app/templat
 
 核心 workflow_engine、skill_capsule 等是编译模块；目录结构只能说明模块划分，不能证明其内部实现。不反编译，不复制实现代码，不搬运runtime或用户数据库。以下借鉴是根据可读材料提炼的设计，不宣称复刻其引擎。
 
-| MODEX可读材料 | 实际体现的机制 | DataAgent拟采用方式 |
+| MODEX可读材料 | 实际体现的机制 | Lagent拟采用方式 |
 | --- | --- | --- |
 | RESEARCH_CONTRACT_TEMPLATE.md | 当前选定问题、范围、依据、状态；恢复时不加载全部候选方向 | 分析契约：业务问题、指标定义、比较范围、非目标、数据版本、预算 |
 | EXPERIMENT_PLAN_TEMPLATE.md | 每项主张对应最低证据、实验块、成功标准、失败解释与运行顺序 | 问题—分析步骤—证据—可接受结论矩阵 |

@@ -120,7 +120,7 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 
 ## 项目工作区（/api/work/projects、/api/work/chats）
 
-需 `DATAAGENT_WORK_ENABLED=1`；CLI 项目对话还需要 `DATAAGENT_ALLOW_EXTERNAL_EXECUTORS=1` 并在执行器策略中勾选对应执行器。所有写操作仍经工单审批，不新增绕过审批的入口。
+需 `LAGENT_WORK_ENABLED=1`；CLI 项目对话还需要 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1` 并在执行器策略中勾选对应执行器。所有写操作仍经工单审批，不新增绕过审批的入口。
 
 ### 本机 Agent 适配器（opencode / gemini / qwen / cursor-agent / dsh）
 
@@ -135,8 +135,8 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 | `dsh` | `--profile headless <prompt>` | 同左（没有单独写入开关，按 CLI 自身默认权限运行） |
 
 - 可执行文件按 PATH/PATHEXT 解析，`.cmd/.bat` 垫片会自动换成 `node <入口>` 执行；找不到时该执行器 `available:false`，直接派活返回 503。
-- 子进程环境仍走 CLI 白名单，API Key 默认不继承；本机 Agent 自带 provider 时需要 `DATAAGENT_CLI_ENV_PASSTHROUGH=OPENCODE_API_KEY,ANTHROPIC_API_KEY` 显式点名。
-- 超时与输出上限与 codex/claude 一致（默认 900000ms / 8MB，可用 `DATAAGENT_CLI_TIMEOUT_MS` 覆盖）。
+- 子进程环境仍走 CLI 白名单，API Key 默认不继承；本机 Agent 自带 provider 时需要 `LAGENT_CLI_ENV_PASSTHROUGH=OPENCODE_API_KEY,ANTHROPIC_API_KEY` 显式点名。
+- 超时与输出上限与 codex/claude 一致（默认 900000ms / 8MB，可用 `LAGENT_CLI_TIMEOUT_MS` 覆盖）。
 - 这些 id 同时加入 `policy.allowedExecutors` 白名单与项目工作区执行器清单；Agent 页的开关写的就是 `allowedExecutors`。
 
 国内 Agent 沿用同一套约定（`-p` 问答 + 写入自动批准），命令名与开关可覆盖：
@@ -148,7 +148,7 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 | `iflow` | iFlow CLI（心流） | `-p <prompt>` | 追加 `--dangerously-skip-permissions` |
 | `kimi` | Kimi CLI（月之暗面） | `--print <prompt>` | 追加 `--yes` |
 
-- 参数模板可用 `DATAAGENT_CLI_ARGS_<ID>` 覆盖，值是 JSON 字符串数组，`{prompt}` 占位符会被替换（例如 `DATAAGENT_CLI_ARGS_KIMI=["-p","{prompt}"]`）；用户级环境变量覆盖失败时请检查是否为合法 JSON 数组。
+- 参数模板可用 `LAGENT_CLI_ARGS_<ID>` 覆盖，值是 JSON 字符串数组，`{prompt}` 占位符会被替换（例如 `LAGENT_CLI_ARGS_KIMI=["-p","{prompt}"]`）；用户级环境变量覆盖失败时请检查是否为合法 JSON 数组。
 - Trae Agent、文心快码 Comate、通义灵码、CodeGeeX、WorkBuddy 目前只做识别（`executorId: null`）：本机装了 CLI 会显示版本与路径，没装则按运行中的桌面窗口匹配，提示用「窗口 · <进程名>」发送指令。要变成可调度执行器，需要在 `server/work/executors/local-agent.js` 补一档参数模板，并加入 `EXTERNAL_EXECUTORS` 与 `PROJECT_CHAT_EXECUTORS`。
 - `GET /api/work/bootstrap` 额外返回 `workspace`：未绑定工作文件夹的对话，Agent 就在这个目录里读写（本地模式默认是仓库根目录）。项目对话始终以项目路径为 cwd。
 
@@ -158,7 +158,7 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 
 | 工具 | 说明 |
 | --- | --- |
-| `list_files {path?}` | 列目录，跳过 `node_modules`、`.git`、`dist`、`build`、`.dataagent`、`data`、`.venv`、`__pycache__`、`coverage`，最多 120 项 |
+| `list_files {path?}` | 列目录，跳过 `node_modules`、`.git`、`dist`、`build`、`.lagent`、`data`、`.venv`、`__pycache__`、`coverage`，最多 120 项 |
 | `read_file {path,offset?,limit?}` | 读文本文件，单文件上限 400KB，默认返回 8000 字符，超出返回 `truncated:true` |
 | `search_code {pattern,path?}` | 正则搜索，跳过 >200KB 与二进制文件，最多 40 条命中，返回 `{file,line,text}` |
 | `write_file {path,content}` | 仅在 `write:true` 时可用；单次上限 200KB，自动建父目录，返回 `{path,created,before,after}` |
@@ -211,7 +211,7 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 软件在这里是「指挥官」：把一句话目标拆成带依赖的步骤，按能力分给不同 Agent，执行后把各步结果汇总成一份结论。
 
 - `POST /api/work/commander {goal,executors,projectChatId?,projectId?,autoRun?}` → `201 {plan,steps}`。goal 1–300 字；executors 必须在可用执行器里（缺省时由服务端取可用的）。`projectChatId` 与 `projectId` 二选一即可绑定工作文件夹：绑定后每一步都以该目录为 cwd 且带写权限（CLI 类走项目对话；`github`/`browser`/`analysis` 这类不写文件的执行器不需要项目对话，直接参与），未绑定时每一步只读、只出结论。拆解优先走已配置的规划模型；没有配置或调用失败时，回退到**用本机已安装的 Agent 自己拆**（依次尝试 `dsh --profile headless`、`claude -p`、`codex exec`，只取它返回的 JSON 步骤）。规划必须给出 2–5 步，每步含 `executorId`、`text`（1–500 字）、可选 `dependsOn`、可选 `executorInput`（结构化输入，例如交给 `github` 的 `{action:'search',query:'英文关键词',limit:5}`）。生成的工单按依赖放行：无依赖步骤为 `awaiting_review`（`autoRun:true` 时为 `queued`），有依赖步骤为 `waiting`，由 `advancePlan` 在依赖完成后自动放行。
-- 步骤产出会落盘：每一步完成时把「第 N 步 + 工单 + 状态 + 产出」写到 `<项目路径>/.dataagent/runs/<planId>/NN-<executor>.md`（未绑定工作文件夹时写到系统临时目录的 `dataagent-runs/`）。下游步骤放行时，前面已完成步骤的文件内容（截 4000 字，拿不到文件才退回摘要 1500 字）会以「【前序步骤材料 · 由 DataAgent 汇总，供你直接使用】」为标题注入到它的 `executorInput.prompt` 前面，所以后一步能直接读到前一步的完整材料。
+- 步骤产出会落盘：每一步完成时把「第 N 步 + 工单 + 状态 + 产出」写到 `<项目路径>/.lagent/runs/<planId>/NN-<executor>.md`（未绑定工作文件夹时写到系统临时目录的 `lagent-runs/`）。下游步骤放行时，前面已完成步骤的文件内容（截 4000 字，拿不到文件才退回摘要 1500 字）会以「【前序步骤材料 · 由 Lagent 汇总，供你直接使用】」为标题注入到它的 `executorInput.prompt` 前面，所以后一步能直接读到前一步的完整材料。
 - `GET /api/work/commander/:id/report` → `{plan,rows,completed,total,markdown}`。markdown 为 `# 指挥汇总：<目标>`，逐条列出「执行 / 状态 / 产出说明」，未完成步骤单列在「需要你处理」下；只读拼装，不写文件、不改工单状态。
 - 步骤失败只影响依赖它的后续步骤（`advancePlan` 会把这些步骤标为 `blocked` 并写明依赖未完成），其余步骤照常推进。
 - `POST /api/work/analyze {goal,executors?,projectId?,projectChatId?}` → `{goal,category,categoryLabel,project,needs,understanding,conflicts,steps}`。这是**本地的任务理解**，不联网、不调用模型：先从目标里判类型（游戏/前端/数据/文档/修缺陷/调研/自动化），再根据关键词推断要改的目录（`src/**`、`server/**`、`docs/**`、`tests/**`），最后排出「调研 → 写文件 → 验证」的步骤。`steps[i].kind` 为 `research|write|verify`，`scope` 是它被允许改的目录，`readOnly` 表示不要写权限。分工规则：不同目录的写步骤交给不同 Agent（`claude-code`/`codex` 轮转）并行执行；同目录只排一个写步骤；验证步骤优先交给没参与写代码的执行器。未绑定工作文件夹时所有步骤降级为只读，`understanding` 里会明说「只出结论」。`conflicts` 列出目录重叠、已被改成串行的步骤对。`commander` 的内部拆解会把这份理解作为「预设理解」传给规划模型，并在响应里带上 `analysis`。
@@ -228,14 +228,14 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
   1. **第 0 步 `model`**：理解并拆解（prompt 明确「这一步不要修改任何文件」），`profileId` 指定内置 Agent 用哪个模型配置；
   2. **中间每步一个外部 Agent**：`dependsOn:[0]`，因此彼此可并行；`models[executorId]` 会写进该步 `executorInput.model`，由 `claude-code`（`--model`）与 `codex`（`-m`）转成 CLI 参数，其它 CLI 没有这个开关、留空即用它们自己的配置；
   3. **最后一步 `model`**：汇总各步结果，写「每个人做了什么、是否达成、还差什么」，并给出「下一步建议交给谁、做什么」。
-- 计划与工单复用指挥台机制：`autoRun:false`（默认）时全部停在 `awaiting_review` 等你确认；步骤产出照常落盘到 `<项目>/.dataagent/runs/<planId>/`，并在放行下一步时注入 `executorInput.prompt`。
+- 计划与工单复用指挥台机制：`autoRun:false`（默认）时全部停在 `awaiting_review` 等你确认；步骤产出照常落盘到 `<项目>/.lagent/runs/<planId>/`，并在放行下一步时注入 `executorInput.prompt`。
 - 内置 Agent 的模型来自 `profileId`（缺省用工作流默认模型）；未配置模型时 `model` 执行器不可用，接口按执行器校验返回 400/503，不会产生假运行。
 
 ### 深度编排（/api/work/runs）
 
 编排器把一句话目标变成一条可追踪的执行链：分析 → 拆解 → 等批准 → 逐步分发 → 验证（不过则返工，最多 2 轮）→ 汇总。设计说明见 [orchestrator.md](orchestrator.md)。
 
-- `GET /api/work/orchestrator` → `{enabled}`。默认开启；`DATAAGENT_ORCHESTRATOR=legacy` 时 `enabled:false`，下面四个写入接口返回 503。
+- `GET /api/work/orchestrator` → `{enabled}`。默认开启；`LAGENT_ORCHESTRATOR=legacy` 时 `enabled:false`，下面四个写入接口返回 503。
 - `GET /api/work/runs?limit=20` → `{runs:[Run]}`；`GET /api/work/runs/:id` → `{run}`。
 - `POST /api/work/runs {goal,projectId?,chatId?,templateId?}` → `201 {run}`。goal 1–300 字；带 `projectId` 时在该目录里干活，每个执行器一条子对话（`parentChatId` 指向 `chatId`）。`templateId` 可选（`code-change|data-analysis|research|ops`）：给了就按它拆、不再按关键词猜，给了不存在的模板返回 400。
 - `POST /api/work/runs/:id/approve {decision:'approve'|'reject'}` → `{run}`。批准的是一次运行的全部步骤，逐步执行不再问；执行器内部的越权访问、递归删除、白名单外命令仍各自弹窗。
@@ -267,7 +267,7 @@ ProjectWorkspace `{id,name,path,gitBranch,createdAt,updatedAt,chatCount,chats:[P
 
 分享快照补充字段：`period:{start,end}|null` 是严格匹配有效日期的报告期间；每个指标的 `coverage:{start,end}|null` 和 `method:string|null` 仅在已识别的确定性计算口径中提供，无法确认或无数据时为 null，应显示未知。留存指标没有可确认的覆盖日期。`dailyTruncated` 与 `retentionTruncated` 分别表示相应数组因 366 条上限被截断；完整指标并不局限于展示的图表片段。`sample:true|false|null` 依据该任务对应数据集 source 为 demo、upload 或缺失/未知得到，`sampleNotice` 是固定说明；不得将 null 解释为真实数据。以上信息均在创建快照时确定，已有分享快照保持不变。
 
-输入格式契约的唯一来源为 src/input-contract.json，server/datasets.js 导出 SUPPORTED_FORMATS 与 REQUIRED_COLUMNS。生产默认且固定最多 3 个文件；仅非生产环境设置 DATAAGENT_ENABLE_MULTI_SHARD=1 时服务端允许 20 文件实验，生产环境忽略该开关；总大小 20MB、行数 200000 仍然生效。同表分片须有一致的映射后列结构。新增可选 shardManifest、rowSources 与 inspection.unrecognizedColumns；重叠、日期缺口进入 warnings。Parquet 需先运行 node scripts/convert-parquet.mjs input.parquet output.csv，ORC/Avro/JSONL 不支持。转换只转换文件格式，不自动将任意业务字段映射成标准表。
+输入格式契约的唯一来源为 src/input-contract.json，server/datasets.js 导出 SUPPORTED_FORMATS 与 REQUIRED_COLUMNS。生产默认且固定最多 3 个文件；仅非生产环境设置 LAGENT_ENABLE_MULTI_SHARD=1 时服务端允许 20 文件实验，生产环境忽略该开关；总大小 20MB、行数 200000 仍然生效。同表分片须有一致的映射后列结构。新增可选 shardManifest、rowSources 与 inspection.unrecognizedColumns；重叠、日期缺口进入 warnings。Parquet 需先运行 node scripts/convert-parquet.mjs input.parquet output.csv，ORC/Avro/JSONL 不支持。转换只转换文件格式，不自动将任意业务字段映射成标准表。
 
 模型报告生成、恢复重跑与连接测试默认超时为 300000ms（5 分钟），local/cloud 共用此默认值；服务端 modelTimeoutMs 显式覆盖仍有效。取消操作仍立即中断模型请求。模型列表检测与报告探索计算时限不变。
 

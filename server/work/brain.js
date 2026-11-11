@@ -19,7 +19,7 @@ export function brainError(code, message, status = 503) {
 }
 
 const THINK_SYSTEM = [
-  '你是 DataAgent 的任务大脑。用户给一个目标，你要先理解、再调研、最后给出可执行的分派步骤。',
+  '你是 Lagent 的任务大脑。用户给一个目标，你要先理解、再调研、最后给出可执行的分派步骤。',
   '工作方式：',
   '1) 先判断这个目标真正要解决的问题、涉及哪些层（前端/后端/数据/文档/测试）；',
   '2) 需要外部资料时调用工具（github_search 找同类开源项目、fetch_page 读网页、project_files 看项目目录），不要凭空假设；',
@@ -34,7 +34,7 @@ const THINK_SYSTEM = [
 ].join('\n');
 
 const SUMMARY_SYSTEM = [
-  '你是 DataAgent 的项目记忆整理员。给你一次已完成的执行记录，写一条可以给后续会话直接使用的记忆。',
+  '你是 Lagent 的项目记忆整理员。给你一次已完成的执行记录，写一条可以给后续会话直接使用的记忆。',
   '要求：',
   '- summary：这次到底做了什么，1–2 句，不要复述目标；',
   '- improvements：这次对项目产生的实际改进，0–3 条，没有就留空数组；',
@@ -44,7 +44,7 @@ const SUMMARY_SYSTEM = [
 ].join('\n');
 
 const REFINE_SYSTEM = [
-  '你是 DataAgent 的派单员。用户要派活给几个 Agent，但他的话可能不够具体。',
+  '你是 Lagent 的派单员。用户要派活给几个 Agent，但他的话可能不够具体。',
   '你的工作：把他的原话改写成三条可以直接执行的任务书，三条侧重不同，不要只是换措辞。',
   '1) constraints：补齐边界——能改哪些、不能改哪些、技术限制、禁止项；',
   '2) steps：补步骤——先摸现状、再小步实现、最后自检，每步都要能验证；',
@@ -204,7 +204,7 @@ export function createWorkBrain({ modelHub, fetchImpl = fetch, perCallTimeoutMs 
       const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&sort=stars&order=desc&per_page=${limit}`;
       try {
         const response = await fetchImpl(url, {
-          headers: { accept: 'application/vnd.github+json', 'user-agent': 'DataAgent' },
+          headers: { accept: 'application/vnd.github+json', 'user-agent': 'Lagent' },
           signal: AbortSignal.timeout(15000),
         });
         if (!response.ok) return { ok: false, summary: `GitHub 返回 ${response.status}`, data: { error: `HTTP ${response.status}` } };
@@ -236,7 +236,7 @@ export function createWorkBrain({ modelHub, fetchImpl = fetch, perCallTimeoutMs 
         if (!allowed) return { ok: false, summary: `域名不在白名单：${host}`, data: { error: 'host blocked' } };
       }
       try {
-        const response = await fetchImpl(target.toString(), { headers: { 'user-agent': 'DataAgent' }, signal: AbortSignal.timeout(15000), redirect: 'follow' });
+        const response = await fetchImpl(target.toString(), { headers: { 'user-agent': 'Lagent' }, signal: AbortSignal.timeout(15000), redirect: 'follow' });
         if (!response.ok) return { ok: false, summary: `网页返回 ${response.status}`, data: { error: `HTTP ${response.status}` } };
         const body = stripHtml(await response.text()).slice(0, MAX_PAGE_CHARS);
         return { ok: true, summary: `读取 ${body.length} 字`, data: { url: target.toString(), title: text(await Promise.resolve(target.hostname), 80), text: body } };
@@ -254,7 +254,7 @@ export function createWorkBrain({ modelHub, fetchImpl = fetch, perCallTimeoutMs 
         const target = path.resolve(base, relative);
         if (target !== base && !target.startsWith(`${base}${path.sep}`)) return { ok: false, summary: '路径越界', data: { error: 'outside project' } };
         const entries = readdirSync(target, { withFileTypes: true })
-          .filter(entry => !['node_modules', '.git', 'dist', 'build', '.dataagent'].includes(entry.name))
+          .filter(entry => !['node_modules', '.git', 'dist', 'build', '.lagent'].includes(entry.name))
           .slice(0, MAX_FILES)
           .map(entry => ({ name: entry.name, dir: entry.isDirectory() }));
         return { ok: true, summary: `${entries.length} 项`, data: { path: relative || '.', entries } };

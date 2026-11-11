@@ -23,7 +23,7 @@ const bootstrap = {
 
 test('多步计划一次性创建并按步骤展示', async ({ page }) => {
   await page.request.post('/api/auth/register', { data: { username: `plan${Date.now()}`, displayName: '计划测试', password: 'test-password-123' } });
-  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'DataAgent', version: '1.1.0', capabilities: { superagent: true } } }));
+  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: '1.1.0', capabilities: { superagent: true } } }));
   await page.route('**/api/work/events', route => route.abort());
   await page.route('**/api/work/bootstrap', route => route.fulfill({ json: bootstrap }));
   await page.route('**/api/work/tickets/p-0', route => route.fulfill({ json: { ticket: step0, assignments: [], reports: [], team: null } }));

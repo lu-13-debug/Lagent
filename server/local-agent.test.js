@@ -23,7 +23,7 @@ async function waitFor(predicate, message = '等待条件超时', timeoutMs = 25
 }
 
 function fixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-local-agent-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-local-agent-'));
   const binary = join(dir, 'fake-agent.exe');
   writeFileSync(binary, '');
   if (process.platform !== 'win32') chmodSync(binary, 0o755);
@@ -89,7 +89,7 @@ test('L2 纯文本输出把 stdout 当结论，非零退出同时给出错误', 
   assert.equal(failed.summary, '');
   assert.match(failed.error, /OPENCODE_API_KEY/);
   // 只报一句「缺少环境变量」用户不知道要改什么，必须补上该怎么打开透传。
-  assert.match(failed.error, /DATAAGENT_CLI_ENV_PASSTHROUGH=OPENCODE_API_KEY/);
+  assert.match(failed.error, /LAGENT_CLI_ENV_PASSTHROUGH=OPENCODE_API_KEY/);
 
   const inlineError = parseTextOutput({
     stdout: '{"type":"error","error":{"data":{"message":"This API key has expired."}}}',
@@ -141,7 +141,7 @@ test('L4 批量装配只生成 5 个本机 Agent 执行器', () => {
 });
 
 function fixtureForBatch() {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-local-batch-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-local-batch-'));
   const binary = join(dir, 'fake-agent.exe');
   writeFileSync(binary, '');
   return { dir, binary, store: new Store(dir) };

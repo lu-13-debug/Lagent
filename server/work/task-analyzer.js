@@ -25,7 +25,7 @@ const hit = (text, words) => words.filter(word => text.includes(word.toLowerCase
 
 // 看一眼项目目录长什么样，拆任务时才知道「要改的东西」在哪个文件夹里。
 // 只读一层 + 一层子目录的文件名，不递归扫全仓（几十万文件的项目也秒回）。
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'data', '.dataagent', '__pycache__', '.venv', 'venv', 'coverage']);
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'data', '.lagent', '__pycache__', '.venv', 'venv', 'coverage', '.spec-workflow', '.browser-smoke-profile', '.playwright-mcp']);
 const SHAPE_FILE_LIMIT = 60;
 
 export function projectShape(root) {

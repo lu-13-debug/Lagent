@@ -288,7 +288,7 @@ test('断开连接时帮助菜单仍可打开固定反馈地址', async () => {
   const h = mainHarness(); h.run('installMenu()'); await h.run('showConnection()');
   const item = h.getMenu().find(entry => entry.label === '帮助').submenu.find(entry => entry.label === '问题反馈…');
   assert.ok(item); await item.click();
-  assert.deepEqual(h.externals, ['https://github.com/lu-13-debug/DataAgent/issues']);
+  assert.deepEqual(h.externals, ['https://github.com/lu-13-debug/Lagent/issues']);
 });
 
 test('反馈地址打开失败时提供固定地址和联网提示，不暴露异常', async () => {
@@ -296,6 +296,6 @@ test('反馈地址打开失败时提供固定地址和联网提示，不暴露�
   const item = h.getMenu().find(entry => entry.label === '帮助').submenu.find(entry => entry.label === '问题反馈…');
   assert.ok(item); await item.click();
   assert.match(JSON.stringify(h.dialogs), /联网/);
-  assert.match(JSON.stringify(h.dialogs), /https:\/\/github\.com\/lu-13-debug\/DataAgent\/issues/);
+  assert.match(JSON.stringify(h.dialogs), /https:\/\/github\.com\/lu-13-debug\/Lagent\/issues/);
   assert.doesNotMatch(JSON.stringify(h.dialogs), /private external error/);
 });

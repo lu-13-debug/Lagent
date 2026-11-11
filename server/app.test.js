@@ -18,7 +18,7 @@ test('Memory本地显式CRUD、非法输入与软删除恢复',async t=>{
 
 async function setup(t, options = {}) {
   assert.equal(typeof module.createApp, 'function', '必须提供 createApp');
-  const dir = await mkdtemp(path.join(tmpdir(), 'dataagent-test-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'lagent-test-'));
   let app = module.createApp({ dataDir: dir, ...options });
   let server = app.listen(nextPort++, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));

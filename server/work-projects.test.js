@@ -64,7 +64,7 @@ function writeClaudeSession(home, projectDir, sessionId, title) {
 }
 
 test('P1 项目文件夹导入校验路径、去重并读取 Git 分支', t => {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-projects-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-projects-'));
   const store = new Store(root);
   const projectDir = makeProject(root);
   const service = projectService(store, { home: makeHome(root) });
@@ -92,7 +92,7 @@ test('P1 项目文件夹导入校验路径、去重并读取 Git 分支', t => {
 });
 
 test('P1 扫描并导入 Claude Code 项目会话，拒绝其它目录会话', t => {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-projects-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-projects-'));
   const store = new Store(root);
   const projectDir = makeProject(root);
   const home = makeHome(root);
@@ -145,7 +145,7 @@ test('P1 扫描并导入 Claude Code 项目会话，拒绝其它目录会话', t
 });
 
 test('P1 目录浏览只返回文件夹并拒绝文件路径', t => {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-projects-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-projects-'));
   const store = new Store(root);
   const projectDir = makeProject(root);
   mkdirSync(join(projectDir, 'src'));
@@ -171,7 +171,7 @@ test('P1 目录浏览只返回文件夹并拒绝文件路径', t => {
 });
 
 test('P1 项目对话消息经审批后在工作目录续接会话并回写 sessionId', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-projects-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-projects-'));
   const store = new Store(root);
   const projectDir = makeProject(root);
   const home = makeHome(root);
@@ -202,7 +202,7 @@ test('P1 项目对话消息经审批后在工作目录续接会话并回写 sess
   let plannerInput = null;
   const engine = createWorkEngine(store, createExecutorRegistry([claude]), () => {}, {
     policy: { allowedExecutors: ['claude-code'], requireApproval: true },
-    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home,
     planner: async input => {
       plannerInput = input;
@@ -326,7 +326,7 @@ test('P1 项目对话消息经审批后在工作目录续接会话并回写 sess
 });
 
 test('P1 项目简报与变更档案可存储、导出 Markdown 并随项目删除', t => {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-projects-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-projects-'));
   const store = new Store(root);
   const projectDir = makeProject(root);
   const service = projectService(store, { home: makeHome(root) });
@@ -370,7 +370,7 @@ test('P1 项目简报与变更档案可存储、导出 Markdown 并随项目删�
 });
 
 test('P1 项目计划把步骤分派给不同 Agent 并各自建立项目对话', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-projects-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-projects-'));
   const store = new Store(root);
   const projectDir = makeProject(root);
   const home = makeHome(root);
@@ -404,7 +404,7 @@ test('P1 项目计划把步骤分派给不同 Agent 并各自建立项目对话'
   let plannerInput = null;
   const engine = createWorkEngine(store, createExecutorRegistry([claude, codex]), () => {}, {
     policy: { allowedExecutors: ['claude-code', 'codex'], requireApproval: true },
-    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home,
     planner: async input => {
       plannerInput = input;
@@ -455,7 +455,7 @@ test('P1 项目计划把步骤分派给不同 Agent 并各自建立项目对话'
 });
 
 test('P1 窗口 Agent 可与项目内 Agent 并行分派，窗口会话绑定所选句柄', t => {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-projects-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-projects-'));
   const store = new Store(root);
   const projectDir = makeProject(root);
   const home = makeHome(root);
@@ -473,7 +473,7 @@ test('P1 窗口 Agent 可与项目内 Agent 并行分派，窗口会话绑定所
   const window = windowExecutor({ store, bridge, waitMs: 1, pollMs: 1, maxWaitMs: 1 });
   const engine = createWorkEngine(store, createExecutorRegistry([claude, window]), () => {}, {
     policy: { allowedExecutors: ['claude-code', 'window'], requireApproval: true },
-    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home,
     windowBridge: bridge
   });
@@ -505,7 +505,7 @@ test('P1 窗口 Agent 可与项目内 Agent 并行分派，窗口会话绑定所
 });
 
 test('变更档案在没有 git 的目录里也会记下执行器报告的产出文件', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-changes-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-changes-'));
   const store = new Store(root);
   // 故意不建 .git：真实用户经常把普通文件夹导进来，git 差集拿不到东西。
   const projectDir = join(root, 'plain-project');
@@ -529,7 +529,7 @@ test('变更档案在没有 git 的目录里也会记下执行器报告的产出
   });
   const engine = createWorkEngine(store, createExecutorRegistry([model]), () => {}, {
     policy: { allowedExecutors: ['model'], requireApproval: false, permission: 'workspace' },
-    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home
   });
   t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
@@ -549,7 +549,7 @@ test('变更档案在没有 git 的目录里也会记下执行器报告的产出
 });
 
 test('建会话时可以一次挑好协作 Agent，之后改名单也存得住', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-collab-chat-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-collab-chat-'));
   const store = new Store(root);
   const projectDir = join(root, 'collab-project');
   mkdirSync(projectDir, { recursive: true });
@@ -562,7 +562,7 @@ test('建会话时可以一次挑好协作 Agent，之后改名单也存得住',
     fetchImpl: async () => ({ ok: true, status: 200, headers: { get: () => null }, async json() { return { choices: [{ message: { content: '{"final":{"summary":"ok","done":true}}' } }] }; }, async text() { return '{}'; } })
   })]), () => {}, {
     policy: { allowedExecutors: ['model', 'claude-code', 'codex'], requireApproval: false, permission: 'workspace' },
-    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home
   });
   t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
@@ -586,7 +586,7 @@ test('建会话时可以一次挑好协作 Agent，之后改名单也存得住',
 });
 
 test('删掉文件夹或对话时，挂在它上面的编排记录一起清掉', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-run-purge-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-run-purge-'));
   const store = new Store(root);
   const projectDir = join(root, 'purge-project');
   mkdirSync(projectDir, { recursive: true });
@@ -598,7 +598,7 @@ test('删掉文件夹或对话时，挂在它上面的编排记录一起清掉',
     fetchImpl: async () => ({ ok: true, status: 200, headers: { get: () => null }, async json() { return { choices: [{ message: { content: '{"final":{"summary":"ok","done":true}}' } }] }; }, async text() { return '{}'; } })
   })]), () => {}, {
     policy: { allowedExecutors: ['model'], requireApproval: false, permission: 'workspace' },
-    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home
   });
   t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });

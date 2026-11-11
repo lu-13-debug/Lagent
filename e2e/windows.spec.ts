@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test('Agent 页面可以读取并发送到本机窗口', async ({ page }) => {
   await page.request.post('/api/auth/register', { data: { username: `window${Date.now()}`, displayName: '窗口测试', password: 'test-password-123' } });
-  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'DataAgent', version: '1.1.0', capabilities: { superagent: true } } }));
+  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: '1.1.0', capabilities: { superagent: true } } }));
   await page.route('**/api/work/events', route => route.abort());
   await page.route('**/api/work/bootstrap', route => route.fulfill({ json: { capabilities: { work: true }, tickets: [], attention: [], datasets: [], agents: [], tools: [], policy: { mode: 'personal', allowedExecutors: ['analysis'] } } }));
   let sent = null;

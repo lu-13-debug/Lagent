@@ -30,7 +30,7 @@ test('旧版或损坏桥在注销时仍清除当前账号', async () => {
     const states = [{ mode: 'cloud' }, { id: 'user' }, false]; let index = 0;
     const react = { useState(initial) { const n = index++; if (!(n in states)) states[n] = initial; return [states[n], value => { states[n] = typeof value === 'function' ? value(states[n]) : value; }]; }, useCallback: fn => fn, useEffect() {}, useRef: value => ({ current: value }) };
     const authContext = { Provider: 'provider' };
-    const auth = { exports: {}, window: { dataagentDesktop: bridge }, require(name) { if (name === 'react') return react; if (name === 'react/jsx-runtime') return { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) }; if (name === './auth-context') return { AuthContext: authContext }; if (name === './api') return { resetSessionBoundary() {} }; if (name === './desktop-tray') return context.exports; return {}; } };
+    const auth = { exports: {}, window: { lagentDesktop: bridge }, require(name) { if (name === 'react') return react; if (name === 'react/jsx-runtime') return { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) }; if (name === './auth-context') return { AuthContext: authContext }; if (name === './api') return { resetSessionBoundary() {} }; if (name === './desktop-tray') return context.exports; return {}; } };
     vm.runInNewContext(ts.transpileModule(authSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, auth);
     const provider = auth.exports.AuthRoot({ children: null });
     assert.doesNotThrow(() => provider.props.value.endSession('已退出')); assert.equal(states[1], null);

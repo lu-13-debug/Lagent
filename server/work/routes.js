@@ -79,13 +79,13 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/command',(req,res)=>res.status(201).json({ticket:engine.command(req.body)}));
   app.get('/api/work/tickets/:id',(req,res)=>res.json(engine.detail(req.params.id)));
   app.delete('/api/work/tickets/:id',(req,res)=>res.json(engine.deleteTicket(req.params.id)));
-  // 编排器：默认开启；DATAAGENT_ORCHESTRATOR=legacy 退回单工单流程。
+  // 编排器：默认开启；LAGENT_ORCHESTRATOR=legacy 退回单工单流程。
   // 关闭时这些路由返回 503，前端据此隐藏入口，而不是报错。
-  const orchestratorOn = () => (process.env.DATAAGENT_ORCHESTRATOR || '').trim().toLowerCase() !== 'legacy';
+  const orchestratorOn = () => (process.env.LAGENT_ORCHESTRATOR || '').trim().toLowerCase() !== 'legacy';
   let orchestratorPromise = null;
   const orchestrator = async () => {
     if (!orchestratorOn()) {
-      const error = new Error('编排器未启用：去掉 DATAAGENT_ORCHESTRATOR=legacy 并重启服务');
+      const error = new Error('编排器未启用：去掉 LAGENT_ORCHESTRATOR=legacy 并重启服务');
       error.status = 503;
       throw error;
     }

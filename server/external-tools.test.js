@@ -19,7 +19,7 @@ async function waitFor(predicate, message = '等待条件超时', timeoutMs = 25
 }
 
 function fixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-external-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-external-'));
   const store = new Store(dir);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   return { dir, store };
@@ -106,7 +106,7 @@ test('E3 浏览器执行器禁用 JS/下载、限制链接并完整关闭 contex
   });
   const executor = browserExecutor({
     store,
-    environment: { DATAAGENT_BROWSER_ENABLED: '1' },
+    environment: { LAGENT_BROWSER_ENABLED: '1' },
     playwright: harness.playwright,
     lookupHost: async () => [{ address: '93.184.216.34', family: 4 }]
   });
@@ -136,7 +136,7 @@ test('E3 浏览器 DNS 私网与子资源私网请求均被拒绝', async t => {
   const privateDns = browserHarness();
   const dnsExecutor = browserExecutor({
     store,
-    environment: { DATAAGENT_BROWSER_ENABLED: '1' },
+    environment: { LAGENT_BROWSER_ENABLED: '1' },
     playwright: privateDns.playwright,
     lookupHost: async () => [{ address: '10.0.0.7', family: 4 }]
   });
@@ -153,7 +153,7 @@ test('E3 浏览器 DNS 私网与子资源私网请求均被拒绝', async t => {
   const routed = browserHarness();
   const routeExecutor = browserExecutor({
     store,
-    environment: { DATAAGENT_BROWSER_ENABLED: '1' },
+    environment: { LAGENT_BROWSER_ENABLED: '1' },
     playwright: routed.playwright,
     lookupHost: async () => [{ address: '93.184.216.34', family: 4 }]
   });
@@ -179,7 +179,7 @@ test('E3 浏览器超时与 stop 会关闭 context/browser', async t => {
   const timedHarness = browserHarness({ goto: () => new Promise(() => {}) });
   const timed = browserExecutor({
     store,
-    environment: { DATAAGENT_BROWSER_ENABLED: '1' },
+    environment: { LAGENT_BROWSER_ENABLED: '1' },
     playwright: timedHarness.playwright,
     lookupHost: async () => [{ address: '93.184.216.34', family: 4 }],
     timeoutMs: 15
@@ -198,7 +198,7 @@ test('E3 浏览器超时与 stop 会关闭 context/browser', async t => {
   const stoppedHarness = browserHarness({ goto: () => new Promise(() => {}) });
   const stopped = browserExecutor({
     store,
-    environment: { DATAAGENT_BROWSER_ENABLED: '1' },
+    environment: { LAGENT_BROWSER_ENABLED: '1' },
     playwright: stoppedHarness.playwright,
     lookupHost: async () => [{ address: '93.184.216.34', family: 4 }]
   });
@@ -215,8 +215,8 @@ test('E3 浏览器超时与 stop 会关闭 context/browser', async t => {
 });
 
 test('E3 GitHub 输入白名单、无 token 不可用与固定只读请求', async t => {
-  assert.deepEqual(validateGithubInput({ action: 'file', owner: 'acme', repo: 'data-agent', path: 'docs/readme.md' }), {
-    action: 'file', owner: 'acme', repo: 'data-agent', path: 'docs/readme.md'
+  assert.deepEqual(validateGithubInput({ action: 'file', owner: 'acme', repo: 'lagent', path: 'docs/readme.md' }), {
+    action: 'file', owner: 'acme', repo: 'lagent', path: 'docs/readme.md'
   });
   assert.throws(() => validateGithubInput({ action: 'write', owner: 'acme', repo: 'repo' }), { status: 400 });
   assert.throws(() => validateGithubInput({ action: 'repo', owner: '../acme', repo: 'repo' }), { status: 400 });
@@ -247,11 +247,11 @@ test('E3 GitHub 输入白名单、无 token 不可用与固定只读请求', asy
   const fetchImpl = async (url, options) => {
     calls.push({ url, options });
     return jsonResponse({
-      full_name: 'acme/data-agent',
+      full_name: 'acme/lagent',
       description: `read only ${token}`,
       private: false,
       default_branch: 'main',
-      html_url: 'https://github.com/acme/data-agent'
+      html_url: 'https://github.com/acme/lagent'
     });
   };
   const executor = githubExecutor({ store, environment: { GITHUB_TOKEN: token }, fetchImpl });
@@ -259,16 +259,16 @@ test('E3 GitHub 输入白名单、无 token 不可用与固定只读请求', asy
   const task = executor.start(
     { id: 'ticket-github', command: '读取仓库' },
     { id: 'github-repo', ticketId: 'ticket-github', executor: 'github' },
-    { executorInput: { action: 'repo', owner: 'acme', repo: 'data-agent' } }
+    { executorInput: { action: 'repo', owner: 'acme', repo: 'lagent' } }
   );
   await waitFor(() => store.get('task', task.id)?.status === 'completed');
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, 'https://api.github.com/repos/acme/data-agent');
+  assert.equal(calls[0].url, 'https://api.github.com/repos/acme/lagent');
   assert.equal(calls[0].options.method, 'GET');
   assert.equal(calls[0].options.redirect, 'manual');
   assert.equal(calls[0].options.headers.Authorization, `Bearer ${token}`);
   const saved = store.get('task', task.id);
-  assert.equal(saved.artifacts.github.repository.fullName, 'acme/data-agent');
+  assert.equal(saved.artifacts.github.repository.fullName, 'acme/lagent');
   assert.match(saved.artifacts.github.repository.description, /\[REDACTED\]/);
   assert.doesNotMatch(JSON.stringify(saved.artifacts), new RegExp(token));
   executor.close();
@@ -362,13 +362,13 @@ test('E3 GitHub file/checks 摘要、大小上限、HTTP 错误与超时脱敏',
 });
 
 test('E3 Work 对 browser/github 先审批后执行并只公开白名单 artifacts', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-e3-work-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-e3-work-'));
   const store = new Store(dir);
   const events = [];
   const harness = browserHarness({ evaluate: async () => ({ title: 'Public', text: 'visible', links: [], truncated: false }) });
   const browser = browserExecutor({
     store,
-    environment: { DATAAGENT_BROWSER_ENABLED: '1' },
+    environment: { LAGENT_BROWSER_ENABLED: '1' },
     playwright: harness.playwright,
     lookupHost: async () => [{ address: '93.184.216.34', family: 4 }]
   });
@@ -386,7 +386,7 @@ test('E3 Work 对 browser/github 先审批后执行并只公开白名单 artifac
     start() { throw new Error('not used'); }, get() { return null; }
   };
   const registry = createExecutorRegistry([analysis, browser, github]);
-  const engine = createWorkEngine(store, registry, event => events.push(event), { policy: { allowedExecutors: ['browser', 'github'], requireApproval: true }, env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
+  const engine = createWorkEngine(store, registry, event => events.push(event), { policy: { allowedExecutors: ['browser', 'github'], requireApproval: true }, env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
 
   const agents = engine.bootstrap().agents;

@@ -58,7 +58,7 @@ async function probeCloudServer(value, fetchImpl = fetch) {
   const response = await fetchImpl(origin + '/api/runtime', { redirect: 'error', credentials: 'omit', signal: AbortSignal.timeout(10000) });
   if (!response.ok) throw new Error(`服务连接失败（HTTP ${response.status}），请检查地址后重试。`);
   const runtime = await response.json();
-  if (runtime?.mode !== 'cloud' || runtime.authRequired !== true || runtime.serviceName !== 'DataAgent') throw new Error('目标不是 DataAgent 云端账号服务，请确认服务地址。');
+  if (runtime?.mode !== 'cloud' || runtime.authRequired !== true || runtime.serviceName !== 'Lagent') throw new Error('目标不是 Lagent 云端账号服务，请确认服务地址。');
   return origin;
 }
 async function saveCloudConnection(file, value, fetchImpl = fetch) {

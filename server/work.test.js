@@ -24,7 +24,7 @@ const makeDataset = (id, overrides = {}) => ({
 });
 
 function fixture(t, options = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-work-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-work-'));
   const store = new Store(dir);
   const datasets = options.datasets ?? [makeDataset('dataset-one')];
   for (const dataset of datasets) store.put('dataset', dataset);
@@ -273,7 +273,7 @@ test('Work SSE发送三类事件、空闲心跳并关闭连接', async () => {
 });
 
 test('Work默认关闭，开启后契约路由、SSE 与单数据集自动选择可用', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-work-app-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-work-app-'));
   const app = createApp({ dataDir: join(dir, 'enabled'), workEnabled: true });
   const old = createApp({ dataDir: join(dir, 'old'), workEnabled: false });
   t.after(() => { app.locals.close(); old.locals.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -453,7 +453,7 @@ test('E1 执行器注册表校验 ID、可用性与真实 bootstrap 投影', t =
   assert.throws(() => registry.requireAvailable('offline'), /不可用/);
   assert.throws(() => createExecutorRegistry([analysis, { ...analysis }]), /重复/);
 
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-executor-registry-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-executor-registry-'));
   const store = new Store(dir);
   const engine = createWorkEngine(store, registry);
   engine.updatePolicy({ requireApproval: true });
@@ -472,7 +472,7 @@ test('E1 执行器注册表校验 ID、可用性与真实 bootstrap 投影', t =
 });
 
 test('E1 terminal command 批准前冻结输入，批准后才启动并生成 terminal report', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-terminal-engine-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-terminal-engine-'));
   const store = new Store(dir);
   const spawned = [];
   const terminal = terminalExecutor({
@@ -539,7 +539,7 @@ test('E1 terminal 白名单、输出截断、环境过滤、超时、非零退�
   assert.throws(() => validateTerminalInput({ program: 'ls', args: ['../secret'] }), { status: 400 });
   assert.throws(() => validateTerminalInput({ program: 'pwd', args: ['-a'] }), { status: 400 });
 
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-terminal-unit-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-terminal-unit-'));
   const store = new Store(dir);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   const run = async (name, child, options = {}) => {
@@ -573,7 +573,7 @@ test('E1 terminal 白名单、输出截断、环境过滤、超时、非零退�
       PATH: process.env.PATH,
       Path: process.env.Path,
       OPENAI_API_KEY: 'must-not-leak',
-      DATAAGENT_CREDENTIAL_MASTER_KEY: 'must-not-leak'
+      LAGENT_CREDENTIAL_MASTER_KEY: 'must-not-leak'
     }
   });
   assert.equal(filtered.task.status, 'completed');
@@ -582,7 +582,7 @@ test('E1 terminal 白名单、输出截断、环境过滤、超时、非零退�
   assert.equal(filtered.captured.cwd, resolve(dir));
   assert.equal(filtered.captured.shell, false);
   assert.equal(filtered.captured.env.OPENAI_API_KEY, undefined);
-  assert.equal(filtered.captured.env.DATAAGENT_CREDENTIAL_MASTER_KEY, undefined);
+  assert.equal(filtered.captured.env.LAGENT_CREDENTIAL_MASTER_KEY, undefined);
 
   const nonzero = await run('nonzero', fakeTerminalChild({ stderr: 'bad state', code: 7 }));
   assert.equal(nonzero.task.status, 'failed');
@@ -613,7 +613,7 @@ test('E1 terminal 白名单、输出截断、环境过滤、超时、非零退�
 });
 
 test('E1 terminal 非零退出通过 Work failed report 暴露退出码', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-terminal-report-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-terminal-report-'));
   const store = new Store(dir);
   const terminal = terminalExecutor({
     store,
@@ -638,7 +638,7 @@ test('E1 terminal 非零退出通过 Work failed report 暴露退出码', async 
 });
 
 test('E1 Work app 注册 terminal，cloud 账号使用各自 dataDir 作为 cwd', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-terminal-app-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-terminal-app-'));
   const apps = [];
   t.after(() => {
     for (const app of apps) app.locals.close();
@@ -801,7 +801,7 @@ test('E8 父子工单按工作区隔离，其他工作区不可查看或交接',
 });
 
 test('E8 handoff action 首次返回 201，重复交接返回 200 和同一子工单', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-work-handoff-route-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-work-handoff-route-'));
   const app = createApp({ dataDir: dir, cloud: true, workEnabled: true });
   t.after(() => { app.locals.close(); rmSync(dir, { recursive: true, force: true }); });
   const source = call(app, '/api/work/command', {
@@ -894,7 +894,7 @@ test('E9 计划推进在重启后保持幂等', async t => {
 });
 
 test('E9 计划路由创建、查询与取消', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-work-plan-route-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-work-plan-route-'));
   const app = createApp({ dataDir: dir, cloud: true, workEnabled: true, serveStatic: false });
   t.after(() => { app.locals.close(); rmSync(dir, { recursive: true, force: true }); });
   const created = call(app, '/api/work/plans', {
@@ -953,7 +953,7 @@ test('E10 规划输出非法或规划器缺失时拒绝', async t => {
 });
 
 test('E10 规划建议路由只返回步骤且不创建工单', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-work-plan-suggest-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-work-plan-suggest-'));
   const app = createApp({ dataDir: dir, cloud: true, workEnabled: true, serveStatic: false, workPlanner: async () => ({ steps: [{ executorId: 'terminal', text: '查看目录' }, { executorId: 'terminal', text: '确认版本' }] }) });
   t.after(() => { app.locals.close(); rmSync(dir, { recursive: true, force: true }); });
   let output;
@@ -1069,7 +1069,7 @@ test('P1 重启后读取已持久化策略不因实体 id 字段崩溃', async t
 });
 
 test('P2 窗口桥 API 列出、读取、发送并写脱敏审计', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-window-api-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-window-api-'));
   const calls = [];
   const bridge = {
     listWindows: async () => [{ id: '42', handle: 42, pid: 7, process: 'Codex', title: 'Codex 窗口' }],

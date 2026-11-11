@@ -16,21 +16,21 @@ npm.cmd run cloud
 
 打开启动日志中的本机地址（默认 `http://127.0.0.1:3002`），注册两个不同用户名，分别上传自己的数据、创建报告、查看额度。桌面客户端可连接同一地址进行开发验收。本机地址只供当前电脑使用。
 
-账号服务使用独立的账号与用户工作空间目录。设置 `DATAAGENT_DATA_DIR` 可以明确指定持久化位置；不要把用户数据放在源码仓库或容器临时文件系统里。
+账号服务使用独立的账号与用户工作空间目录。设置 `LAGENT_DATA_DIR` 可以明确指定持久化位置；不要把用户数据放在源码仓库或容器临时文件系统里。
 
 ## 在服务器启动
 
 准备能够运行 Docker Compose 的服务器、一个指向该服务器的域名，以及可访问的 80/443 端口。部署以下源码：
 
 ```bash
-git clone https://github.com/lu-13-debug/DataAgent.git
-cd DataAgent
+git clone https://github.com/lu-13-debug/Lagent.git
+cd Lagent
 cp .env.example .env
 ```
 
-修改 `.env` 中的 `DATAAGENT_DOMAIN` 为实际域名，例如 `analysis.your-domain.com`。`DATAAGENT_MODEL_HOSTS` 默认包含 `api.deepseek.com,api.anthropic.com,api.openai.com`，开放三家的官方兼容接口。填写其他主机列表会覆盖默认值，只填精确主机名，英文逗号分隔，不含协议、路径、端口或通配符；显式设置为空可关闭 AI。API Key 由各用户在登录后填写，不写进这个文件。
+修改 `.env` 中的 `LAGENT_DOMAIN` 为实际域名，例如 `analysis.your-domain.com`。`LAGENT_MODEL_HOSTS` 默认包含 `api.deepseek.com,api.anthropic.com,api.openai.com`，开放三家的官方兼容接口。填写其他主机列表会覆盖默认值，只填精确主机名，英文逗号分隔，不含协议、路径、端口或通配符；显式设置为空可关闭 AI。API Key 由各用户在登录后填写，不写进这个文件。
 
-如管理员确认 OpenCode Go 适用于自己的使用场景，可将 `opencode.ai` 加入上述完整主机列表并重新部署服务，例如 `DATAAGENT_MODEL_HOSTS=api.deepseek.com,api.anthropic.com,api.openai.com,opencode.ai`。由于环境变量会替换默认列表，不要只填写新主机而误关闭已有供应商。OpenCode Go 主要面向编码代理，游戏数据分析是否符合套餐范围应向供应商确认；各模型的数据使用政策也需核对。
+如管理员确认 OpenCode Go 适用于自己的使用场景，可将 `opencode.ai` 加入上述完整主机列表并重新部署服务，例如 `LAGENT_MODEL_HOSTS=api.deepseek.com,api.anthropic.com,api.openai.com,opencode.ai`。由于环境变量会替换默认列表，不要只填写新主机而误关闭已有供应商。OpenCode Go 主要面向编码代理，游戏数据分析是否符合套餐范围应向供应商确认；各模型的数据使用政策也需核对。
 
 ```bash
 docker compose up -d --build
@@ -40,7 +40,7 @@ docker compose logs --tail=100 app caddy
 
 Compose 只向外发布 Caddy 的 80/443 端口，分析服务端口留在内部网络。Caddy 根据域名自动申请 HTTPS 证书；证书申请需要 DNS 和公网端口均正确。`accounts_data` 保存账号、报告、上传数据与额度，不随容器重建丢失。
 
-部署完成后访问 `https://你的域名/api/runtime`，应包含 `serviceName: "DataAgent"`、`mode: "cloud"`、`authRequired: true`。随后用浏览器或桌面客户端实际注册和登录，检查上传数据及报告流程。
+部署完成后访问 `https://你的域名/api/runtime`，应包含 `serviceName: "Lagent"`、`mode: "cloud"`、`authRequired: true`。随后用浏览器或桌面客户端实际注册和登录，检查上传数据及报告流程。
 
 当前工作环境没有 Docker 引擎，容器配置随源码提供；本机 Node 服务及打包客户端的实际验收结果记录在版本说明中，不能据此声称服务器或 Docker 已在公网部署成功。
 
@@ -77,7 +77,7 @@ mkdir -p backups
 docker compose stop app
 docker compose run --rm --no-deps --user 0 --entrypoint tar \
   -v "$PWD/backups:/backup" app \
-  -czf /backup/dataagent-backup.tgz -C /app/data .
+  -czf /backup/lagent-backup.tgz -C /app/data .
 docker compose start app
 ```
 
@@ -101,7 +101,7 @@ docker compose up -d --build
 
 ## 持久凭据库与分析工具部署
 
-新版支持每账号多凭据。配置 `DATAAGENT_CREDENTIAL_MASTER_KEY` 为32字节随机值的base64，并通过Compose环境变量注入；例如在可信管理终端运行 `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`，将结果写入不提交Git的部署 `.env`。主密钥应独立备份，不能随着数据库一起公开；丢失后无法解密已有Key。更换主密钥前需制定迁移方案，当前不提供自动批量轮换。
+新版支持每账号多凭据。配置 `LAGENT_CREDENTIAL_MASTER_KEY` 为32字节随机值的base64，并通过Compose环境变量注入；例如在可信管理终端运行 `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`，将结果写入不提交Git的部署 `.env`。主密钥应独立备份，不能随着数据库一起公开；丢失后无法解密已有Key。更换主密钥前需制定迁移方案，当前不提供自动批量轮换。
 
 数据库中只保存认证加密密文；退出、重启和会话过期不会删除持久凭据。旧会话Key仍会清除。缺少主密钥时新凭据库不可写，旧功能可用。不要记录凭据请求体、Authorization、模型提示或主密钥。
 

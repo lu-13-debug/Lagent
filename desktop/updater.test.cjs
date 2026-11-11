@@ -7,7 +7,7 @@ const path = require('node:path');
 const { selectRelease, requestBounded, createUpdater } = require('./updater.cjs');
 const bytes = Buffer.from('verified installer');
 const digest = 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex');
-const release = (overrides = {}) => ({ tag_name: 'v1.2.0', draft: false, prerelease: false, assets: [{ name: 'DataAgent-Setup-1.2.0-x64.exe', digest, browser_download_url: 'https://github.com/lu-13-debug/DataAgent/releases/download/v1.2.0/DataAgent-Setup-1.2.0-x64.exe' }], ...overrides });
+const release = (overrides = {}) => ({ tag_name: 'v1.2.0', draft: false, prerelease: false, assets: [{ name: 'Lagent-Setup-1.2.0-x64.exe', digest, browser_download_url: 'https://github.com/lu-13-debug/Lagent/releases/download/v1.2.0/Lagent-Setup-1.2.0-x64.exe' }], ...overrides });
 const response = (body, options = {}) => new Response(body, options);
 test('accepts only newer stable exact asset with official SHA256', () => {
   assert.equal(selectRelease(release(), '1.1.0').version, '1.2.0');
@@ -16,11 +16,11 @@ test('accepts only newer stable exact asset with official SHA256', () => {
   assert.equal(selectRelease(release(), '1.10.0'), null);
 });
 test('rejects unsafe redirects and oversized bodies', async () => {
-  await assert.rejects(requestBounded('https://api.github.com/repos/lu-13-debug/DataAgent/releases/latest', { fetch: async () => response('', {status:302, headers:{location:'https://evil.test'}}), limit:20, timeout:1000, kind:'api' }));
-  await assert.rejects(requestBounded('https://api.github.com/repos/lu-13-debug/DataAgent/releases/latest', { fetch: async () => response('123456'), limit:5, timeout:1000, kind:'api' }));
+  await assert.rejects(requestBounded('https://api.github.com/repos/lu-13-debug/Lagent/releases/latest', { fetch: async () => response('', {status:302, headers:{location:'https://evil.test'}}), limit:20, timeout:1000, kind:'api' }));
+  await assert.rejects(requestBounded('https://api.github.com/repos/lu-13-debug/Lagent/releases/latest', { fetch: async () => response('123456'), limit:5, timeout:1000, kind:'api' }));
 });
 test('requires verified bytes and a second verification before reveal', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dataagent-update-test-'));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lagent-update-test-'));
   let launched = 0;
   const fetch = async url => url.includes('api.github.com') ? response(JSON.stringify(release())) : response(bytes);
   const updater = createUpdater({fetch, userData:dir, currentVersion:'1.1.0', showFile: () => { launched++; }});
@@ -32,7 +32,7 @@ test('requires verified bytes and a second verification before reveal', async ()
   } finally { await fs.rm(dir, {recursive:true, force:true}); }
 });
 test('download digest mismatch cannot reveal', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dataagent-update-test-'));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lagent-update-test-'));
   let launched = 0;
   const updater = createUpdater({fetch: async url => url.includes('api.github.com') ? response(JSON.stringify(release())) : response('wrong'), userData:dir, currentVersion:'1.1.0', showFile: () => { launched++; }});
   try { await updater.check(); await assert.rejects(updater.download()); await assert.rejects(updater.reveal()); assert.equal(launched,0); }
@@ -51,7 +51,7 @@ test('update flow requires explicit reveal and warns about active tasks', async 
 test('failed update offers only fixed manual release page', async () => {
   const { runUpdate } = require('./update-ui.cjs'); let opened;
   await runUpdate({ updater: { check: async () => { throw new Error('offline'); } }, show: async () => ({response:0}), open: async url => {opened = url;} });
-  assert.equal(opened, 'https://github.com/lu-13-debug/DataAgent/releases/latest');
+  assert.equal(opened, 'https://github.com/lu-13-debug/Lagent/releases/latest');
 });
 test('reports check and download progress to the native menu', async () => {
   const { runUpdate } = require('./update-ui.cjs'); const statuses = [];
@@ -59,7 +59,7 @@ test('reports check and download progress to the native menu', async () => {
   assert.deepEqual(statuses, ['正在检查更新…', '正在下载更新…', '检查更新…']);
 });
 test('times out stalled network and rejects overlapping operations', async () => {
-  await assert.rejects(requestBounded('https://api.github.com/repos/lu-13-debug/DataAgent/releases/latest', { fetch: () => new Promise(() => {}), limit:100, timeout:15, kind:'api' }), /超时/);
+  await assert.rejects(requestBounded('https://api.github.com/repos/lu-13-debug/Lagent/releases/latest', { fetch: () => new Promise(() => {}), limit:100, timeout:15, kind:'api' }), /超时/);
   let finish; const pending = new Promise(resolve => { finish = resolve; });
   const updater = createUpdater({fetch: () => pending, userData:os.tmpdir(), currentVersion:'1.1.0', showFile: () => {}});
   const first = updater.check(); await assert.rejects(updater.check(), /正在进行/);
@@ -68,14 +68,14 @@ test('times out stalled network and rejects overlapping operations', async () =>
 test('late network response after timeout cannot write download chunks', async () => {
   let resolveResponse; let writes = 0;
   const pending = new Promise(resolve => { resolveResponse = resolve; });
-  const request = requestBounded('https://github.com/lu-13-debug/DataAgent/releases/download/v1.2.0/DataAgent-Setup-1.2.0-x64.exe', { fetch: () => pending, limit:100, timeout:15, kind:'asset', onChunk: async () => { writes++; } });
+  const request = requestBounded('https://github.com/lu-13-debug/Lagent/releases/download/v1.2.0/Lagent-Setup-1.2.0-x64.exe', { fetch: () => pending, limit:100, timeout:15, kind:'asset', onChunk: async () => { writes++; } });
   await assert.rejects(request, /超时/);
   resolveResponse(response('late'));
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(writes, 0);
 });
 test('real updater keeps verified download after later and asks again without redownloading', async () => {
-  const { runUpdate } = require('./update-ui.cjs'); const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dataagent-later-'));
+  const { runUpdate } = require('./update-ui.cjs'); const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lagent-later-'));
   let requests = 0, launches = 0; const messages = [], choices = [0, 1, 0];
   const updater = createUpdater({userData:dir, currentVersion:'1.1.0', showFile: () => { launches++; }, fetch: async url => { requests++; return url.includes('api.github.com') ? response(JSON.stringify(release())) : response(bytes); }});
   try {
@@ -86,7 +86,7 @@ test('real updater keeps verified download after later and asks again without re
   } finally { await fs.rm(dir, {recursive:true, force:true}); }
 });
 test('restart removes only marked owned download and never executes stale file', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dataagent-restart-')); let launches = 0;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lagent-restart-')); let launches = 0;
   const options = {userData:dir, currentVersion:'1.1.0', showFile: () => { launches++; }, fetch: async url => url.includes('api.github.com') ? response(JSON.stringify(release())) : response(bytes)};
   try {
     const first = createUpdater(options); await first.initialize(); await first.check(); await first.download(); const previous = first.verifiedPath();
@@ -99,7 +99,7 @@ test('restart removes only marked owned download and never executes stale file',
 test('invalidated downloads can be checked and downloaded again after missing, non-file, or unreadable installer', async () => {
   const { runUpdate } = require('./update-ui.cjs');
   for (const fault of ['missing', 'directory', 'unreadable']) {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dataagent-invalid-')); let requests = 0, launches = 0;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lagent-invalid-')); let requests = 0, launches = 0;
     const updater = createUpdater({userData:dir, currentVersion:'1.1.0', showFile: () => { launches++; }, fetch: async url => { requests++; return url.includes('api.github.com') ? response(JSON.stringify(release())) : response(bytes); }});
     const choices = [0, 1]; const show = async () => ({response:choices.shift()}); const open = async () => {};
     let originalOpen;
@@ -118,7 +118,7 @@ test('invalidated downloads can be checked and downloaded again after missing, n
   }
 });
 test('manual update only reveals internally verified file after explicit user choice', async () => {
-  const { runUpdate } = require('./update-ui.cjs'); const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dataagent-manual-'));
+  const { runUpdate } = require('./update-ui.cjs'); const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lagent-manual-'));
   const shown = []; const dialogs = []; const choices = [0, 1, 0];
   const updater = createUpdater({userData:dir, currentVersion:'1.1.0', showFile: file => { shown.push(file); }, fetch: async url => url.includes('api.github.com') ? response(JSON.stringify(release())) : response(bytes)});
   const show = async opts => { dialogs.push(opts); return {response:choices.shift()}; };
@@ -131,7 +131,7 @@ test('manual update only reveals internally verified file after explicit user ch
   } finally { await fs.rm(dir, {recursive:true, force:true}); }
 });
 test('manual reveal ignores caller supplied paths and preserves saved copies during cleanup', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dataagent-save-')); const shown = [];
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lagent-save-')); const shown = [];
   const options = {userData:dir, currentVersion:'1.1.0', showFile: file => { shown.push(file); }, fetch: async url => url.includes('api.github.com') ? response(JSON.stringify(release())) : response(bytes)};
   try {
     const updater = createUpdater(options); await updater.initialize(); await updater.check(); await updater.download();

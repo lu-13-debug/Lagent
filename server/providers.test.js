@@ -69,6 +69,37 @@ test('Provider 把运行中的桌面版 DeepSeek Harness 识别为已安装', as
   assert.doesNotMatch(acp.message, /undefined/);
 });
 
+test('Provider 把运行中的 Codex 桌面版识别为桌面执行器', async () => {
+  const registry = createProviderRegistry({
+    env: { PATH: '', PATHEXT: '.EXE' },
+    spawnImpl: fakeSpawn().spawnImpl,
+    desktopProbe: async () => [{ id: '2', handle: 7, pid: 88, process: 'Codex', title: 'Codex' }],
+    now: () => 1000
+  });
+  const rows = await registry.snapshots({ force: true });
+  const desktop = rows.find(item => item.id === 'codex-desktop');
+  assert.equal(desktop.installed, true);
+  assert.equal(desktop.kind, 'desktop');
+  assert.equal(desktop.status, 'ready');
+  assert.equal(desktop.command, 'Codex');
+  assert.match(desktop.message, /Codex 桌面版/);
+  assert.ok(desktop.capabilities.includes('window'));
+});
+
+test('未运行 Codex 桌面版时仍按桌面类型提示，不误报为 CLI', async () => {
+  const registry = createProviderRegistry({
+    env: { PATH: '', PATHEXT: '.EXE' },
+    spawnImpl: fakeSpawn().spawnImpl,
+    desktopProbe: async () => []
+  });
+  const rows = await registry.snapshots({ force: true });
+  const desktop = rows.find(item => item.id === 'codex-desktop');
+  assert.equal(desktop.installed, false);
+  assert.equal(desktop.status, 'not_installed');
+  assert.equal(desktop.kind, 'desktop');
+  assert.match(desktop.message, /桌面版窗口/);
+});
+
 test('Provider 忽略桌面探测失败，其余探测保持正常', async () => {
   const registry = createProviderRegistry({
     env: { PATH: '', PATHEXT: '.EXE' },

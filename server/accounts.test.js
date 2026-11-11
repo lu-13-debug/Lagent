@@ -15,7 +15,7 @@ test('scrypt uses fresh salts and bounded concurrency rejects excess queued work
 });
 
 test('expired API credentials are unavailable immediately and are removed from memory', async t => {
-  let time = 1000000; const dir = await mkdtemp(path.join(tmpdir(), 'dataagent-accounts-'));
+  let time = 1000000; const dir = await mkdtemp(path.join(tmpdir(), 'lagent-accounts-'));
   const accounts = new Accounts(dir, { now: () => time, sessionTtlMs: 100 });
   t.after(async () => { accounts.close(); await rm(dir, { recursive: true, force: true }); });
   const user = accounts.register('expiry_user', '过期测试', 'hash'); const token = accounts.createSession(user.id); const hash = tokenHash(token);
@@ -26,7 +26,7 @@ test('expired API credentials are unavailable immediately and are removed from m
 });
 
 test('revoke and change password remove all affected credentials while preserving other users', async t => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'dataagent-revoke-')); const accounts = new Accounts(dir);
+  const dir = await mkdtemp(path.join(tmpdir(), 'lagent-revoke-')); const accounts = new Accounts(dir);
   t.after(async () => { accounts.close(); await rm(dir, { recursive: true, force: true }); });
   const a = accounts.register('revoke_a', '甲', 'hash'); const b = accounts.register('revoke_b', '乙', 'hash');
   const hashes = [accounts.createSession(a.id), accounts.createSession(a.id), accounts.createSession(b.id)].map(tokenHash);

@@ -2,8 +2,8 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const API = 'https://api.github.com/repos/lu-13-debug/DataAgent/releases/latest';
-const RELEASES = 'https://github.com/lu-13-debug/DataAgent/releases/latest';
+const API = 'https://api.github.com/repos/lu-13-debug/Lagent/releases/latest';
+const RELEASES = 'https://github.com/lu-13-debug/Lagent/releases/latest';
 const MAX_DOWNLOAD = 512 * 1024 * 1024;
 function version(value) {
   if (typeof value !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value)) throw new Error('版本号格式无效。');
@@ -18,10 +18,10 @@ function selectRelease(release, current) {
   let compare = 0;
   for (let i = 0; i < 3; i++) { if (parts[i] !== currentParts[i]) { compare = parts[i] > currentParts[i] ? 1 : -1; break; } }
   if (compare <= 0) return null;
-  const name = `DataAgent-Setup-${v}-x64.exe`;
+  const name = `Lagent-Setup-${v}-x64.exe`;
   const candidates = Array.isArray(release.assets) ? release.assets.filter(a => a.name === name) : [];
   if (candidates.length !== 1 || !/^sha256:[a-f0-9]{64}$/.test(candidates[0].digest || '')) throw new Error('发布文件缺少唯一的 SHA256 校验值，请手动下载。');
-  const url = `https://github.com/lu-13-debug/DataAgent/releases/download/${tag}/${name}`;
+  const url = `https://github.com/lu-13-debug/Lagent/releases/download/${tag}/${name}`;
   if (candidates[0].browser_download_url !== url) throw new Error('发布文件地址不可信，请手动下载。');
   return { version: v, name, url, digest: candidates[0].digest.slice(7) };
 }
@@ -40,7 +40,7 @@ async function requestBounded(url, { fetch: fetcher = fetch, limit, timeout, kin
     let target = url;
     for (let redirects = 0; redirects <= 5; redirects++) {
       if (!allowed(target, kind, url)) throw new Error('更新地址或重定向不可信。');
-      const res = await fetcher(target, { redirect: 'manual', signal: controller.signal, headers: { 'User-Agent': 'DataAgent-Desktop', Accept: kind === 'api' ? 'application/vnd.github+json' : 'application/octet-stream' } });
+      const res = await fetcher(target, { redirect: 'manual', signal: controller.signal, headers: { 'User-Agent': 'Lagent-Desktop', Accept: kind === 'api' ? 'application/vnd.github+json' : 'application/octet-stream' } });
       if (controller.signal.aborted) throw new Error('更新请求已取消。');
       if ([301, 302, 303, 307, 308].includes(res.status)) { const location = res.headers.get('location'); if (!location) throw new Error('重定向缺少地址。'); target = new URL(location, target).href; continue; }
       if (!res.ok || !res.body) throw new Error(`更新服务器响应失败 (${res.status})。`);
@@ -64,16 +64,16 @@ function createUpdater({ fetch: fetcher = fetch, userData, currentVersion, showF
   }
   async function removeOwned(name) {
     if (!/^download-[a-f0-9]{32}$/.test(name)) return;
-    const dir = path.join(base, name), marker = path.join(dir, '.dataagent-update.json');
+    const dir = path.join(base, name), marker = path.join(dir, '.lagent-update.json');
     try {
       const info = await fs.lstat(dir), markInfo = await fs.lstat(marker);
       if (!info.isDirectory() || info.isSymbolicLink() || !markInfo.isFile() || markInfo.isSymbolicLink() || markInfo.size > 1024) return;
       const data = JSON.parse(await fs.readFile(marker, 'utf8'));
-      if (!data || typeof data !== 'object' || data.token !== name.slice(9) || typeof data.file !== 'string' || !/^DataAgent-Setup-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-x64\.exe$/.test(data.file)) return;
+      if (!data || typeof data !== 'object' || data.token !== name.slice(9) || typeof data.file !== 'string' || !/^Lagent-Setup-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-x64\.exe$/.test(data.file)) return;
       const file = path.join(dir, data.file);
       try { const item = await fs.lstat(file); if (!item.isFile() || item.isSymbolicLink()) return; await fs.unlink(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       const entries = await fs.readdir(dir);
-      if (entries.length !== 1 || entries[0] !== '.dataagent-update.json') return;
+      if (entries.length !== 1 || entries[0] !== '.lagent-update.json') return;
       await fs.unlink(marker); await fs.rmdir(dir);
     } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
   }
@@ -96,7 +96,7 @@ function createUpdater({ fetch: fetcher = fetch, userData, currentVersion, showF
       const file = path.join(dir, selected.name);
       let handle;
       try {
-        await fs.writeFile(path.join(dir, '.dataagent-update.json'), JSON.stringify({ token, file: selected.name }), { flag: 'wx', mode: 0o600 });
+        await fs.writeFile(path.join(dir, '.lagent-update.json'), JSON.stringify({ token, file: selected.name }), { flag: 'wx', mode: 0o600 });
         handle = await fs.open(file, 'wx', 0o600); const hash = crypto.createHash('sha256');
         await requestBounded(selected.url, { fetch: fetcher, limit: MAX_DOWNLOAD, timeout: 5 * 60 * 1000, kind: 'asset', onChunk: async chunk => { hash.update(chunk); await handle.writeFile(chunk); } });
         await handle.close(); handle = null;

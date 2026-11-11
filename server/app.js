@@ -82,7 +82,7 @@ export function createApp(options = {}) {
   const app = express();
   const enableWork=workEnabled(options);let closeWork;let mobileGateway;let ownsMobileGateway=false;
   app.disable('x-powered-by');
-  const storeDir = options.dataDir || process.env.DATAAGENT_DATA_DIR || path.join(root, 'data');
+  const storeDir = options.dataDir || process.env.LAGENT_DATA_DIR || path.join(root, 'data');
   const store = new Store(storeDir);
   let key = ''; let keyBaseUrl = '';
   let settings = store.config('settings') || { ...DEFAULT_SETTINGS };
@@ -175,7 +175,7 @@ export function createApp(options = {}) {
     next();
   });
   registerMemory(app, store, options.userId || 'local');
-  const configuredMasterKey = options.credentialMasterKey || process.env.DATAAGENT_CREDENTIAL_MASTER_KEY || (options.cloud ? undefined : localCredentialKey(storeDir));
+  const configuredMasterKey = options.credentialMasterKey || process.env.LAGENT_CREDENTIAL_MASTER_KEY || (options.cloud ? undefined : localCredentialKey(storeDir));
   modelHub = registerModelHub(app, { store, ownerId: options.userId || 'local', masterKey: configuredMasterKey, assertModelSettings: options.assertModelSettings, fetchImpl: options.fetchImpl });
   const agentPlanner = createAgentPlanner({ env: process.env });
   const workBrain = createWorkBrain({ modelHub, fetchImpl: options.fetchImpl || fetch });
@@ -194,10 +194,10 @@ export function createApp(options = {}) {
     const workCwd=options.cloud?storeDir:root;
     const acp = acpExecutors({ store, cwd: workCwd });
     const terminal=terminalExecutor({store,cwd:workCwd});
-    const cliTimeoutMs=Number(process.env.DATAAGENT_CLI_TIMEOUT_MS);
+    const cliTimeoutMs=Number(process.env.LAGENT_CLI_TIMEOUT_MS);
     const cliTimeout=Number.isFinite(cliTimeoutMs)&&cliTimeoutMs>0?{timeoutMs:cliTimeoutMs}:{};
-    const codex=codexExecutor({store,cwd:workCwd,binary:process.env.DATAAGENT_CODEX_CLI,...cliTimeout});
-    const claudeCode=claudeCodeExecutor({store,cwd:workCwd,binary:process.env.DATAAGENT_CLAUDE_CLI,...cliTimeout});
+    const codex=codexExecutor({store,cwd:workCwd,binary:process.env.LAGENT_CODEX_CLI,...cliTimeout});
+    const claudeCode=claudeCodeExecutor({store,cwd:workCwd,binary:process.env.LAGENT_CLAUDE_CLI,...cliTimeout});
     const localAgents=options.cloud?[]:localAgentExecutors({store,cwd:workCwd,...cliTimeout});
     const browser=browserExecutor({store});
     const github=githubExecutor({store,fetchImpl:options.fetchImpl||fetch});
@@ -222,14 +222,14 @@ export function createApp(options = {}) {
     const mobileOwnerId=options.userId||'local';
     const windowBridge=options.cloud?null:(options.windowBridge??createWindowBridge());
     const providerRegistry=options.providerRegistry??createProviderRegistry(windowBridge?{desktopProbe:()=>windowBridge.listWindows()}:{});
-    const window=windowBridge?windowExecutor({store,bridge:windowBridge,...(process.env.DATAAGENT_WINDOW_WAIT_MS?{maxWaitMs:Number(process.env.DATAAGENT_WINDOW_WAIT_MS)}:{})}):null;
+    const window=windowBridge?windowExecutor({store,bridge:windowBridge,...(process.env.LAGENT_WINDOW_WAIT_MS?{maxWaitMs:Number(process.env.LAGENT_WINDOW_WAIT_MS)}:{})}):null;
     const executors=createExecutorRegistry([analysis,terminal,codex,claudeCode,...localAgents,browser,github,modelAgent,...(window?[window]:[]),...acp]);
     mobileGateway=options.mobileGateway||new MobileGateway({dataDir:path.join(storeDir,'mobile'),now:options.now});
     ownsMobileGateway=!options.mobileGateway;
     registerMobilePairingRoutes(app,mobileGateway,{desktopOwner:options.mobileDesktopOwner||(()=>mobileOwnerId)});
     closeWork=registerWork(app,store,executors,{isSessionValid:options.isSessionValid,onConnect:options.onTaskEventConnect,mobileGateway,mobileOwnerId,onMobileEventConnect:options.onMobileEventConnect,workspace:workCwd,brain:workBrain,planner:options.workPlanner??(async input=>{try{return await modelHub.suggestWorkPlan(input);}catch(error){try{return await agentPlanner(input);}catch(fallbackError){throw fallbackError?.message?Object.assign(error,{message:`${error.message}；本机 Agent 也无法拆解：${fallbackError.message}`}):error;}}}),windowBridge,providerRegistry,allowFilesystemBrowser:!options.cloud});
   }
-  app.get('/api/runtime', (_req, res) => res.json({ mode: 'local', authRequired: false, serviceName: 'DataAgent', version: '1.1.0', capabilities: taskCapabilities(enableWork) }));
+  app.get('/api/runtime', (_req, res) => res.json({ mode: 'local', authRequired: false, serviceName: 'Lagent', version: '1.1.0', capabilities: taskCapabilities(enableWork) }));
   app.get('/api/model-usage', (req, res) => {
     const days = req.query.days ?? '30';
     if (typeof days !== 'string' || !['7', '30', '90', 'all'].includes(days)) return res.status(400).json({ error: '用量范围仅支持7、30、90或all' });
@@ -410,14 +410,14 @@ export function createApp(options = {}) {
       if (options.isSessionValid && !options.isSessionValid(req)) throw statusError('登录已失效，请重新登录', 401);
       if (res.destroyed) return;
       const artifact = store.get('report-pdf', task.id);
-      res.setHeader('Content-Disposition', `attachment; filename="dataagent-report-${task.id}.pdf"`);
+      res.setHeader('Content-Disposition', `attachment; filename="lagent-report-${task.id}.pdf"`);
       res.type('application/pdf').send(Buffer.from(artifact.content, 'base64'));
     } finally { res.off('close', abort); }
   }));
   app.get('/api/tasks/:id/report.md', (req, res) => {
     const task = taskById(req.params.id);
     if (task.status !== 'completed' || !task.report) throw statusError('报告尚未完成', 409);
-    res.setHeader('Content-Disposition', `attachment; filename="dataagent-report-${task.id}.md"`);
+    res.setHeader('Content-Disposition', `attachment; filename="lagent-report-${task.id}.md"`);
     res.type('text/markdown; charset=utf-8').send(reportMarkdown(task));
   });
   app.get('/api/wallet', (_req, res) => res.json({ ...store.walletSnapshot(), transactions: store.transactions() }));

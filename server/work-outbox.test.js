@@ -18,7 +18,7 @@ import {
 } from './work/outbox.js';
 
 function tempStore(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-outbox-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-outbox-'));
   const store = new Store(dir);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   return store;
@@ -29,7 +29,7 @@ function dataset(id = 'dataset-one') {
 }
 
 function fixture(t, { outboxEnabled = true, startError } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-outbox-engine-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-outbox-engine-'));
   const store = new Store(dir);
   store.put('dataset', dataset());
   let engine;

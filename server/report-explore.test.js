@@ -101,7 +101,7 @@ test('partial tables and payments-only skipped branches retain source quality wh
 });
 
 async function setup(t, options = {}, cloud = false) {
-  const dir = await mkdtemp(path.join(tmpdir(), 'dataagent-explore-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'lagent-explore-'));
   const app = (cloud ? createCloudApp : createApp)({ dataDir: dir, serveStatic: false, ...options });
   const server = app.listen(nextPort++, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;

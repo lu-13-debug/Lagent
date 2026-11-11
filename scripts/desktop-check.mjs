@@ -6,7 +6,7 @@ import { root, desktopEnvironment, startCloudFixture } from './desktop-cloud-har
 
 const require = createRequire(import.meta.url);
 const { _electron } = require(process.argv[2] || 'playwright');
-const executablePath = path.resolve(process.argv[3] || path.join(root, 'release/win-unpacked/DataAgent.exe'));
+const executablePath = path.resolve(process.argv[3] || path.join(root, 'release/win-unpacked/Lagent.exe'));
 const directory = path.join(root, 'artifacts', `desktop-check-cloud-${Date.now()}`);
 const clientDirectory = path.join(directory, 'client');
 await mkdir(clientDirectory, { recursive: true });
@@ -62,12 +62,12 @@ async function newAnalysis(title, mode, datasetId, upload = false) {
 try {
   // Start at the real local connection page; the test supplies the external cloud service by hand.
   const env = desktopEnvironment('');
-  app = await _electron.launch({ executablePath, args: [`--dataagent-user-data=${clientDirectory}`], env, timeout: 30000 });
+  app = await _electron.launch({ executablePath, args: [`--lagent-user-data=${clientDirectory}`], env, timeout: 30000 });
   page = await app.firstWindow();
   page.setDefaultTimeout(30000);
   page.on('pageerror', error => errors.push(error.message));
   await page.getByRole('heading', { name: '连接你的分析工作台', exact: true }).waitFor();
-  const localIsolation = await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.dataagentConnection) }));
+  const localIsolation = await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.lagentConnection) }));
   assert.deepEqual(localIsolation, { node: 'undefined', process: 'undefined', bridge: ['connect'] });
   await page.getByLabel('服务地址', { exact: true }).fill('http://example.com');
   await page.getByRole('button', { name: '验证并连接', exact: true }).click();
@@ -79,7 +79,7 @@ try {
   page.setDefaultTimeout(30000);
   page.on('pageerror', error => errors.push(error.message));
   await page.getByRole('button', { name: '登录工作台', exact: true }).waitFor();
-  const remoteIsolation = await page.evaluate(() => typeof window.require === 'undefined' && typeof window.process === 'undefined' && typeof window.dataagentConnection === 'undefined' && JSON.stringify(Object.keys(window.dataagentDesktop).sort()) === JSON.stringify(['onNewAnalysis', 'setTaskSummaries', 'setTrayState', 'showWindow', 'setTheme', 'onSystemThemeChanged'].sort()));
+  const remoteIsolation = await page.evaluate(() => typeof window.require === 'undefined' && typeof window.process === 'undefined' && typeof window.lagentConnection === 'undefined' && JSON.stringify(Object.keys(window.lagentDesktop).sort()) === JSON.stringify(['onNewAnalysis', 'setTaskSummaries', 'setTrayState', 'showWindow', 'setTheme', 'onSystemThemeChanged'].sort()));
   assert.equal(remoteIsolation, true);
   assert.deepEqual(JSON.parse(await readFile(path.join(clientDirectory, 'connection.json'), 'utf8')), { serverUrl: fixture.origin });
   const runtime = await app.evaluate(({ app, BrowserWindow }) => ({ packaged: app.isPackaged, version: app.getVersion(), preferences: BrowserWindow.getAllWindows().find(win => win.webContents.getURL().startsWith('http'))?.webContents.getLastWebPreferences() }));

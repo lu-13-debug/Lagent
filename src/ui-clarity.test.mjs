@@ -80,7 +80,7 @@ test('diagnostics contain only allowlisted metadata even when an exception conta
 
 test('帮助入口提供固定反馈链接并说明诊断不会自动发送', () => {
   const source = readFileSync(new URL('./components/HelpModal.tsx', import.meta.url), 'utf8');
-  assert.match(source, /https:\/\/github\.com\/lu-13-debug\/DataAgent\/issues/);
+  assert.match(source, /https:\/\/github\.com\/lu-13-debug\/Lagent\/issues/);
   assert.match(source, /不会自动发送/);
   assert.match(source, /复制诊断信息/);
 });

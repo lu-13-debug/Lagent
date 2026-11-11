@@ -26,7 +26,7 @@ export function HelpModal({ close, section = 'general', onReviewOnboarding, onSt
         : <button className="button secondary review-onboarding" onClick={onReviewOnboarding}>重看三步清单<ArrowRight size={14} /></button>}
       {steps.map((step, index) => <div className="guide-step" key={step.title}><span>{index + 1}</span><div><h3>{step.title}</h3><p>{step.text}</p></div></div>)}
       {!collaboration && <button className="text-button" onClick={onShortcuts}>查看快捷键（?）<ArrowRight size={14} /></button>}
-      {!collaboration && <details className="guide-details"><summary>问题反馈与诊断</summary><p>可前往 <a href="https://github.com/lu-13-debug/DataAgent/issues" target="_blank" rel="noopener noreferrer">GitHub Issues 提交反馈</a>。桌面版可在顶部“帮助”菜单中选择“复制诊断信息”，包含客户端版本、当前服务地址和日志目录；信息不会自动发送，请检查后自行决定是否提供。</p></details>}
+      {!collaboration && <details className="guide-details"><summary>问题反馈与诊断</summary><p>可前往 <a href="https://github.com/lu-13-debug/Lagent/issues" target="_blank" rel="noopener noreferrer">GitHub Issues 提交反馈</a>。桌面版可在顶部“帮助”菜单中选择“复制诊断信息”，包含客户端版本、当前服务地址和日志目录；信息不会自动发送，请检查后自行决定是否提供。</p></details>}
       {!collaboration && <details className="guide-details"><summary>数据字段、保存位置与导出说明</summary><p>用户表（注册表）：user_id、registered_at；活跃表：user_id、event_time；支付表：order_id、user_id、paid_at、amount、currency、status。支持常见中文别名。</p><p>{cloud ? '上传数据和报告保存在当前服务，并按账号隔离；API Key 只保留在本次登录会话的服务端内存中。' : '数据和报告保存在本机；API Key 只保留在本次服务进程内存中。'}额度为试用账本，暂不提供真实支付充值。</p><p>完整报告支持 Markdown 下载，以及打印 / 保存 PDF。模型只接收业务背景与聚合指标。</p></details>}
       {collaboration && !canStart && <p className="quota-notice" role="note">可继续阅读说明。当前额度不足，开始真实分析需 {ANALYSIS_COST} 额度。</p>}
     </div>

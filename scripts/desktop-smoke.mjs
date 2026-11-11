@@ -4,13 +4,13 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { root, desktopEnvironment, startCloudFixture } from './desktop-cloud-harness.mjs';
 
-const executable = path.resolve(process.argv[2] || path.join(root, 'release/win-unpacked/DataAgent.exe'));
+const executable = path.resolve(process.argv[2] || path.join(root, 'release/win-unpacked/Lagent.exe'));
 const directory = path.join(root, 'artifacts', `desktop-smoke-cloud-${Date.now()}`);
 await mkdir(directory, { recursive: true });
 const fixture = await startCloudFixture(directory);
 let child, deadline, output = '';
 try {
-  child = spawn(executable, ['--smoke-test', `--dataagent-user-data=${path.join(directory, 'client')}`], { cwd: root, env: desktopEnvironment(fixture.origin), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  child = spawn(executable, ['--smoke-test', `--lagent-user-data=${path.join(directory, 'client')}`], { cwd: root, env: desktopEnvironment(fixture.origin), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.on('data', chunk => { output += chunk; });
   child.stderr.on('data', chunk => { output += chunk; });
   deadline = setTimeout(() => child.kill(), 60000);

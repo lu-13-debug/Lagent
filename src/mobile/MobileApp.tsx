@@ -23,8 +23,8 @@ type MobileBootstrap = {
   plans?: { id: string; goal: string; status: string; currentStep: number; totalSteps: number; updatedAt?: string }[];
 };
 
-const DEVICE_KEY = 'dataagent:mobile:device:v1';
-const BOOT_APPEARANCE_KEY = 'dataagent:appearance:boot:v1';
+const DEVICE_KEY = 'lagent:mobile:device:v1';
+const BOOT_APPEARANCE_KEY = 'lagent:appearance:boot:v1';
 const statusNames: Record<string, string> = {
   queued: '排队中', working: '执行中', awaiting_review: '待确认', blocked: '受阻', failed: '失败',
   waiting: '等待触发', completed: '已完成', cancelled: '已停止', pending: '待执行', running: '执行中', accepted: '已接受'
@@ -121,8 +121,8 @@ function useServerEvents(token: string, onEvent: () => void, onUnauthorized: () 
 
 export function MobileApp() {
   useEffect(() => {
-    document.title = 'DataAgent 指挥台';
-    return () => { document.title = 'DataAgent · 数据分析工作台'; };
+    document.title = 'Lagent 指挥台';
+    return () => { document.title = 'Lagent · 数据分析工作台'; };
   }, []);
   const [capability, setCapability] = useState<'checking' | 'ready' | 'off'>('checking');
   useEffect(() => {
@@ -136,8 +136,8 @@ export function MobileApp() {
   const [device, setDevice] = useState<MobileDevice | null>(() => readDevice());
   if (capability === 'checking') return <main className="mob-pair"><p className="mob-loading"><RefreshCw size={16} className="mob-spin" />正在确认指挥服务…</p></main>;
   if (capability === 'off') return <main className="mob-pair">
-    <header className="mob-brand"><span className="brand-dot" /><strong>DataAgent</strong><small>PERSONAL AGENT</small></header>
-    <section className="mob-pair-card"><p className="mob-eyebrow">REMOTE CONTROL</p><h1>手机指挥尚未启用</h1><p>请在电脑端启用 Work 指挥服务后再打开本页。云端账号版默认提供此能力。</p><p className="mob-note"><ShieldCheck size={13} />本地开发可设置 <code>DATAAGENT_WORK_ENABLED=1</code>。</p></section>
+    <header className="mob-brand"><span className="brand-dot" /><strong>Lagent</strong><small>PERSONAL AGENT</small></header>
+    <section className="mob-pair-card"><p className="mob-eyebrow">REMOTE CONTROL</p><h1>手机指挥尚未启用</h1><p>请在电脑端启用 Work 指挥服务后再打开本页。云端账号版默认提供此能力。</p><p className="mob-note"><ShieldCheck size={13} />本地开发可设置 <code>LAGENT_WORK_ENABLED=1</code>。</p></section>
   </main>;
   if (!device) return <PairScreen onPaired={device => { saveDevice(device); setDevice(device); }} />;
   return <MobileHome device={device} onSignOut={() => { clearDevice(); setDevice(null); }} />;
@@ -161,7 +161,7 @@ function PairScreen({ onPaired }: { onPaired: (device: MobileDevice) => void }) 
     finally { setBusy(false); }
   };
   return <main className="mob-pair">
-    <header className="mob-brand"><span className="brand-dot" /><strong>DataAgent</strong><small>PERSONAL AGENT</small></header>
+    <header className="mob-brand"><span className="brand-dot" /><strong>Lagent</strong><small>PERSONAL AGENT</small></header>
     <section className="mob-pair-card">
       <p className="mob-eyebrow">REMOTE CONTROL</p>
       <h1>连接你的指挥台</h1>
@@ -281,7 +281,7 @@ function MobileHome({ device, onSignOut }: { device: MobileDevice; onSignOut: ()
 
   return <div className="mob-shell">
     <header className="mob-topbar">
-      <div className="mob-brand"><span className="brand-dot" /><strong>DataAgent</strong></div>
+      <div className="mob-brand"><span className="brand-dot" /><strong>Lagent</strong></div>
       <div className="mob-topbar-actions">
         <span className={`mob-online ${online ? 'is-online' : ''}`} role="status"><span className="online-dot" />{online ? '在线' : '重连中'}</span>
         <button type="button" className="mob-icon" onClick={toggle} aria-label={theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}>{theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}</button>
@@ -383,7 +383,7 @@ function CommandView({ token, bootstrap, loading, error, allowed, agents, datase
       {executorId === 'github' && <div className="mob-field-row">
         <label>动作<select value={githubAction} onChange={event => setGithubAction(event.target.value)}><option value="repo">仓库</option><option value="issues">Issues</option><option value="pulls">Pull Requests</option><option value="checks">CI Checks</option><option value="file">文件</option></select></label>
         <label>owner<input value={owner} onChange={event => setOwner(event.target.value)} placeholder="acme" /></label>
-        <label>repo<input value={repo} onChange={event => setRepo(event.target.value)} placeholder="data-agent" /></label>
+        <label>repo<input value={repo} onChange={event => setRepo(event.target.value)} placeholder="lagent" /></label>
         {['issues', 'pulls', 'checks'].includes(githubAction) && <label>编号<input inputMode="numeric" value={number} onChange={event => setNumber(event.target.value)} /></label>}
         {githubAction === 'file' && <label>文件路径<input value={path} onChange={event => setPath(event.target.value)} placeholder="docs/readme.md" /></label>}
       </div>}

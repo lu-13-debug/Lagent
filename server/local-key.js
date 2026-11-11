@@ -6,7 +6,7 @@ const KEY_PATTERN = /^[A-Za-z0-9+/]{43}=$/;
 
 /**
  * 本机单用户模式的凭据主密钥。
- * 部署方显式配置 DATAAGENT_CREDENTIAL_MASTER_KEY 时优先使用环境变量；
+ * 部署方显式配置 LAGENT_CREDENTIAL_MASTER_KEY 时优先使用环境变量；
  * 没有配置时，为本地模式生成一次并保存在数据目录，避免「凭据库不可用 → 模型中心无法配置」。
  * 云端模式不会调用这里，仍要求显式主密钥。
  */

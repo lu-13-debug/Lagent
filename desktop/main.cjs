@@ -1,4 +1,11 @@
 const { app, BrowserWindow, Menu, dialog, shell, ipcMain, session, screen, Tray, clipboard, nativeTheme } = require('electron');
+
+// 旧版本的环境变量前缀是 DATAAGENT_，这里先搬到 LAGENT_ 上，保住用户已有的配置。
+for (const key of Object.keys(process.env)) {
+  if (!key.startsWith('DATAAGENT_')) continue;
+  const current = 'LAGENT_' + key.slice('DATAAGENT_'.length);
+  if (process.env[current] === undefined || process.env[current] === '') process.env[current] = process.env[key];
+}
 const path = require('node:path');
 const { trustedSender, validateSummaries, createTrayController } = require('./tray.cjs');
 const { createNotificationPolicy } = require('./permissions.cjs');
@@ -10,11 +17,11 @@ const { mkdirSync, appendFileSync, readFileSync, writeFileSync } = require('node
 const { pathToFileURL } = require('node:url');
 const { desktopPaths, allowedNavigation, safeExternalUrl, buildSupportDiagnostic, loadServerUrl, isConnectionSender, probeCloudServer, saveCloudConnection } = require('./runtime.cjs');
 
-app.setName('DataAgent');
-app.setAppUserModelId('com.dataagent.desktop');
+app.setName('Lagent');
+app.setAppUserModelId('com.lagent.desktop');
 const smoke = process.argv.includes('--smoke-test');
-const customData = process.argv.find(arg => arg.startsWith('--dataagent-user-data='));
-if (customData) app.setPath('userData', path.resolve(customData.slice('--dataagent-user-data='.length)));
+const customData = process.argv.find(arg => arg.startsWith('--lagent-user-data='));
+if (customData) app.setPath('userData', path.resolve(customData.slice('--lagent-user-data='.length)));
 const paths = desktopPaths(app.getPath('userData'));
 const connectionFile = path.join(app.getPath('userData'), 'connection.json');
 const traySettingsFile = path.join(app.getPath('userData'), 'desktop-settings.json');
@@ -37,7 +44,7 @@ async function start() {
   log(`启动云端客户端 ${app.getVersion()} / Electron ${process.versions.electron}`);
   updater = makeUpdater();
   try { await updater.initialize(); } catch (error) { log(`清理旧更新文件失败：${error.message}`); }
-  ipcMain.handle('dataagent:connect', async (event, value) => {
+  ipcMain.handle('lagent:connect', async (event, value) => {
     if (!isConnectionSender(event, connectionWindow?.webContents, connectionUrl)) throw new Error('连接请求来源无效。');
     if (switching) return { ok: false, error: '正在连接，请稍候。' };
     switching = true;
@@ -47,21 +54,21 @@ async function start() {
       return { ok: true };
     } catch (error) { switching = false; return { ok: false, error: friendlyError(error) }; }
   });
-  ipcMain.handle('dataagent:pick-folder', async event => {
+  ipcMain.handle('lagent:pick-folder', async event => {
     if (!trustedSender(event, window?.webContents, cloudOrigin)) throw new Error('选择文件夹的请求来源无效。');
     const result = await dialog.showOpenDialog(window, { title: '选择要导入的项目文件夹', buttonLabel: '导入项目', properties: ['openDirectory'] });
     return result.canceled || !result.filePaths?.[0] ? null : result.filePaths[0];
   });
-  ipcMain.handle('dataagent:tray-summary', handleTraySummary);
-  ipcMain.handle('dataagent:tray-state', handleTrayState);
-  ipcMain.handle('dataagent:show-window', event => { if (!trustedSender(event, window?.webContents, cloudOrigin)) return false; showMainWindow(); return true; });
+  ipcMain.handle('lagent:tray-summary', handleTraySummary);
+  ipcMain.handle('lagent:tray-state', handleTrayState);
+  ipcMain.handle('lagent:show-window', event => { if (!trustedSender(event, window?.webContents, cloudOrigin)) return false; showMainWindow(); return true; });
   const appearance = createAppearancePolicy({ nativeTheme, getWindow: () => appearanceWindow || window, getOrigin: () => cloudOrigin });
   ipcMain.on('appearance:set-theme', (event, theme) => appearance.set(event, theme));
   nativeTheme.on('updated', appearance.update);
   startTray();
   installMenu();
   try {
-    const target = await loadServerUrl({ environmentUrl: process.env.DATAAGENT_SERVER_URL, connectionFile, bundledFile: path.join(__dirname, '..', 'build', 'cloud-config.json') });
+    const target = await loadServerUrl({ environmentUrl: process.env.LAGENT_SERVER_URL, connectionFile, bundledFile: path.join(__dirname, '..', 'build', 'cloud-config.json') });
     if (target) await connectToServer(target);
     else await showConnection();
   } catch (error) { if (smoke) throw error; await showConnection({ error: friendlyError(error) }); }
@@ -92,7 +99,7 @@ function startTray() {
     newAnalysis: () => {
       showMainWindow();
       const contents = window?.webContents;
-      if (contents && trustedSender({ sender: contents, senderFrame: contents.mainFrame }, contents, cloudOrigin)) contents.send('dataagent:tray-new');
+      if (contents && trustedSender({ sender: contents, senderFrame: contents.mainFrame }, contents, cloudOrigin)) contents.send('lagent:tray-new');
     },
     quit: () => app.quit(),
     save: value => writeFileSync(traySettingsFile, JSON.stringify({ closeToTray: value }), 'utf8'),
@@ -133,7 +140,7 @@ function trackWindowState(win, restored) {
 function makeWindow(local) {
   const state = local ? null : restoreWindowState();
   const win = new BrowserWindow({
-    title: local ? '连接 DataAgent 服务' : 'DataAgent · 数据分析工作台',
+    title: local ? '连接 Lagent 服务' : 'Lagent · 数据分析工作台',
     width: local ? 760 : 1500, height: local ? 760 : 960, minWidth: local ? 520 : 1000, minHeight: local ? 620 : 700,
     ...(state ? { ...state.bounds, minWidth: Math.min(1000, state.bounds.width), minHeight: Math.min(700, state.bounds.height) } : {}),
     backgroundColor: local ? '#f6f8fb' : '#0d1110', show: false, autoHideMenuBar: true, icon: path.join(__dirname, '..', 'build', 'icon.png'),
@@ -148,7 +155,7 @@ function makeWindow(local) {
   const notificationPolicy = createNotificationPolicy({
     getOrigin: () => local ? null : cloudOrigin,
     getContents: () => win.webContents,
-    confirm: async () => (await dialog.showMessageBox(win, { type: 'question', buttons: ['允许任务通知', '暂不开启'], defaultId: 1, cancelId: 1, title: '任务完成通知', message: '允许 DataAgent 发送任务完成或失败通知？', detail: '只对当前连接的服务生效，其他设备权限继续保持关闭。' })).response === 0,
+    confirm: async () => (await dialog.showMessageBox(win, { type: 'question', buttons: ['允许任务通知', '暂不开启'], defaultId: 1, cancelId: 1, title: '任务完成通知', message: '允许 Lagent 发送任务完成或失败通知？', detail: '只对当前连接的服务生效，其他设备权限继续保持关闭。' })).response === 0,
   });
   win.webContents.session.setPermissionRequestHandler(notificationPolicy.request);
   win.webContents.session.setPermissionCheckHandler(notificationPolicy.check);
@@ -234,14 +241,14 @@ async function clearCloudSession() {
 }
 function installMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: '文件', submenu: [{ label: '切换服务器…', click: () => void switchServer().catch(fail) }, { type: 'separator' }, { label: '退出 DataAgent', role: 'quit' }] },
+    { label: '文件', submenu: [{ label: '切换服务器…', click: () => void switchServer().catch(fail) }, { type: 'separator' }, { label: '退出 Lagent', role: 'quit' }] },
     { label: '编辑', submenu: [{ label: '撤销', role: 'undo' }, { label: '重做', role: 'redo' }, { type: 'separator' }, { label: '剪切', role: 'cut' }, { label: '复制', role: 'copy' }, { label: '粘贴', role: 'paste' }, { label: '全选', role: 'selectAll' }] },
     { label: '视图', submenu: [{ label: '重新载入', role: 'reload' }, { label: '实际大小', role: 'resetZoom' }, { label: '放大', role: 'zoomIn' }, { label: '缩小', role: 'zoomOut' }, { label: '全屏', role: 'togglefullscreen' }] },
-    { label: '帮助', submenu: [{ id: 'check-updates', label: '检查更新…', click: () => void checkForUpdates() }, { label: '问题反馈…', click: openFeedback }, { label: '复制诊断信息', click: copySupportDiagnostic }, { label: '打开日志目录', click: () => void shell.openPath(paths.logs) }, { label: '关于 DataAgent', click: () => void dialog.showMessageBox(window, { type: 'info', title: '关于 DataAgent', message: 'DataAgent', detail: `版本 ${app.getVersion()}\n多领域 AI 数据分析工作台\n云端账号客户端 · 数据保存在所连接的服务` }) }] },
+    { label: '帮助', submenu: [{ id: 'check-updates', label: '检查更新…', click: () => void checkForUpdates() }, { label: '问题反馈…', click: openFeedback }, { label: '复制诊断信息', click: copySupportDiagnostic }, { label: '打开日志目录', click: () => void shell.openPath(paths.logs) }, { label: '关于 Lagent', click: () => void dialog.showMessageBox(window, { type: 'info', title: '关于 Lagent', message: 'Lagent', detail: `版本 ${app.getVersion()}\n多领域 AI 数据分析工作台\n云端账号客户端 · 数据保存在所连接的服务` }) }] },
   ]));
   session.defaultSession.on('will-download', (_event, item) => { item.setSaveDialogOptions({ title: '保存分析报告', defaultPath: path.join(app.getPath('downloads'), item.getFilename()), filters: downloadFilters(item.getFilename()) }); });
 }
-const feedbackUrl = 'https://github.com/lu-13-debug/DataAgent/issues';
+const feedbackUrl = 'https://github.com/lu-13-debug/Lagent/issues';
 async function openFeedback() {
   try { await shell.openExternal(feedbackUrl); }
   catch { await dialog.showMessageBox({ type: 'error', title: '无法打开反馈页面', message: '无法打开反馈页面', detail: `请联网后在浏览器中访问以下地址，可复制地址使用：\n${feedbackUrl}` }); }
@@ -270,7 +277,7 @@ async function smokeTest(remote, origin) {
     if (loginPage) break;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  const nodeIsolated = await remote.webContents.executeJavaScript("typeof window.require === 'undefined' && typeof window.process === 'undefined' && typeof window.dataagentConnection === 'undefined'");
+  const nodeIsolated = await remote.webContents.executeJavaScript("typeof window.require === 'undefined' && typeof window.process === 'undefined' && typeof window.lagentConnection === 'undefined'");
   const anonymousStatus = await remote.webContents.executeJavaScript("fetch('/api/bootstrap').then(response => response.status)");
   if (!loginPage || !nodeIsolated || anonymousStatus !== 401) throw new Error('打包验收失败：账号登录页、未登录保护或远程页面隔离异常。');
   const result = { ok: true, mode: 'cloud', appVersion: app.getVersion(), electron: process.versions.electron, node: process.versions.node, serverUrl: origin, loginPage, nodeIsolated, anonymousStatus, packaged: app.isPackaged };
@@ -285,5 +292,5 @@ function friendlyError(error) {
 function fail(error) {
   log(`连接失败：${error?.stack || error}`);
   if (smoke) { writeFileSync(path.join(app.getPath('userData'), 'desktop-smoke-result.json'), JSON.stringify({ ok: false, error: friendlyError(error) })); app.exit(1); }
-  else void showConnection({ error: friendlyError(error) }).catch(fatal => { log(`连接页面无法打开：${fatal.stack || fatal}`); dialog.showErrorBox('DataAgent 无法打开', `请检查安装文件并查看日志：\n${paths.logs}`); app.exit(1); });
+  else void showConnection({ error: friendlyError(error) }).catch(fatal => { log(`连接页面无法打开：${fatal.stack || fatal}`); dialog.showErrorBox('Lagent 无法打开', `请检查安装文件并查看日志：\n${paths.logs}`); app.exit(1); });
 }

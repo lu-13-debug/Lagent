@@ -11,7 +11,7 @@ test('OpenCode Go uses official Chat Completions endpoint with a task session', 
   assert.equal(seen.url, `${baseUrl}/chat/completions`);
   assert.equal(seen.init.headers.authorization, 'Bearer private-test-key');
   assert.equal(seen.init.headers['x-opencode-session'], 'task-123');
-  assert.match(seen.init.headers['user-agent'], /^DataAgent\//);
+  assert.match(seen.init.headers['user-agent'], /^Lagent\//);
   assert.equal(seen.init.redirect, 'error');
   assert.equal('temperature' in seen.body, false);
   assert.equal(validateSettings({ baseUrl: `${baseUrl}/chat/completions` }).baseUrl, baseUrl);
@@ -23,7 +23,7 @@ test('OpenCode Go discovers models from its dedicated catalog without exposing k
   const data = await listModels({ settings: { baseUrl }, key: 'private-test-key', fetchImpl: async (url, init) => { captured = { url, init }; return Response.json({ data: [{ id: 'glm-5.3' }, { id: 'kimi-k3' }] }); } });
   assert.equal(captured.url, 'https://opencode.ai/inference/go/v1/models');
   assert.equal(captured.init.headers.authorization, 'Bearer private-test-key');
-  assert.match(captured.init.headers['user-agent'], /^DataAgent\//);
+  assert.match(captured.init.headers['user-agent'], /^Lagent\//);
   assert.deepEqual(data.models.map(x => x.id), ['glm-5.3', 'kimi-k3']);
   assert.equal(JSON.stringify(data).includes('private-test-key'), false);
 });

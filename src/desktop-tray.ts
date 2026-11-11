@@ -9,7 +9,7 @@ export interface DesktopBridge {
   showWindow?: () => unknown;
   pickFolder?: () => Promise<string | null>;
 }
-declare global { interface Window { dataagentDesktop?: DesktopBridge } }
+declare global { interface Window { lagentDesktop?: DesktopBridge } }
 export function taskSummaries(tasks: Task[]): DesktopSummary[] {
   return tasks.filter((task): task is Task & { status: DesktopSummary['status'] } => (task.status === 'running' || task.status === 'awaiting_approval') && typeof task.id === 'string' && !!task.id.trim() && task.id.length <= 128 && typeof task.title === 'string' && !!task.title.trim()).slice(0, 20).map(task => ({ id: task.id, title: task.title.slice(0, 120), status: task.status }));
 }

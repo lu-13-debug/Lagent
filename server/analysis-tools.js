@@ -110,12 +110,12 @@ function childEnvironment(directory) {
   return env;
 }
 
-export async function runAnalysisTool(name, input, { dataset, report, signal, timeoutMs = 30000, pythonExecutable = process.env.DATAAGENT_PYTHON || 'python' } = {}) {
+export async function runAnalysisTool(name, input, { dataset, report, signal, timeoutMs = 30000, pythonExecutable = process.env.LAGENT_PYTHON || 'python' } = {}) {
   signal?.throwIfAborted();
   validateAnalysisTool(name, input);
   const data = JSON.stringify({ name, input, ...projection(dataset, report, input) });
   if (Buffer.byteLength(data) > MAX_INPUT) throw fail('分析工具输入超过 24MB 上限');
-  const directory = await mkdtemp(join(tmpdir(), 'dataagent-tool-'));
+  const directory = await mkdtemp(join(tmpdir(), 'lagent-tool-'));
   try {
     signal?.throwIfAborted();
     const result = await new Promise((resolve, reject) => {
@@ -127,7 +127,7 @@ export async function runAnalysisTool(name, input, { dataset, report, signal, ti
       const abort = () => stop(signal.reason || new DOMException('已取消', 'AbortError'));
       const timer = setTimeout(() => stop(fail('分析工具执行超时', 'ANALYSIS_TOOL_TIMEOUT')), Math.max(1, Math.min(Number(timeoutMs) || 30000, 60000)));
       signal?.addEventListener('abort', abort, { once: true });
-      child.once('error', error => finish(fail(error.code === 'ENOENT' ? 'Python 运行环境不可用，请配置 DATAAGENT_PYTHON 并安装固定工具依赖' : '分析工具进程无法启动', 'ANALYSIS_TOOL_UNAVAILABLE')));
+      child.once('error', error => finish(fail(error.code === 'ENOENT' ? 'Python 运行环境不可用，请配置 LAGENT_PYTHON 并安装固定工具依赖' : '分析工具进程无法启动', 'ANALYSIS_TOOL_UNAVAILABLE')));
       child.stdout.on('data', chunk => { bytes += chunk.length; if (bytes > MAX_OUTPUT) stop(fail('分析工具输出超过 2MB 上限')); else chunks.push(chunk); });
       child.stderr.on('data', chunk => { stderrBytes += chunk.length; if (stderrBytes > 65536) stop(fail('分析工具诊断输出超过上限')); });
       child.stdin.on('error', () => {});

@@ -42,7 +42,7 @@ export function createAcpExecutor({
   command,
   args = [],
   environment = process.env,
-  timeoutMs = Number(process.env.DATAAGENT_CLI_TIMEOUT_MS) || 1_800_000,
+  timeoutMs = Number(process.env.LAGENT_CLI_TIMEOUT_MS) || 1_800_000,
   spawnImpl,
   capabilities = ['acp', 'agent', 'chat']
 } = {}) {
@@ -216,9 +216,9 @@ export function createAcpExecutor({
 
 export function acpExecutors({ store, cwd, environment = process.env } = {}) {
   const definitions = [
-    { id: 'codex-acp', name: 'Codex ACP', commands: ['codex-acp'], envKey: 'DATAAGENT_CODEX_ACP' },
-    { id: 'claude-acp', name: 'Claude ACP', commands: ['claude-agent-acp', 'claude-code-acp', 'claude-acp'], envKey: 'DATAAGENT_CLAUDE_ACP' },
-    { id: 'dsh-acp', name: 'DeepSeek Harness ACP', commands: ['dsh-acp'], envKey: 'DATAAGENT_DSH_ACP' }
+    { id: 'codex-acp', name: 'Codex ACP', commands: ['codex-acp'], envKey: 'LAGENT_CODEX_ACP' },
+    { id: 'claude-acp', name: 'Claude ACP', commands: ['claude-agent-acp', 'claude-code-acp', 'claude-acp'], envKey: 'LAGENT_CLAUDE_ACP' },
+    { id: 'dsh-acp', name: 'DeepSeek Harness ACP', commands: ['dsh-acp'], envKey: 'LAGENT_DSH_ACP' }
   ];
   return definitions.map(definition => {
     const override = environment[definition.envKey];

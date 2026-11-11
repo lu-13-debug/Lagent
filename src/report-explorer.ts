@@ -61,7 +61,7 @@ export type AnnotationType = 'version' | 'campaign' | 'event';
 export interface ReportAnnotation { id: string; date: string; type: AnnotationType; text: string }
 export const annotationTypeLabels: Record<AnnotationType, string> = { version: '版本发布', campaign: '运营活动', event: '背景记录' };
 export function annotationStorageKey(runtime: string, userId: string | undefined, origin: string, taskId: string) {
-  return `dataagent:report-annotations:v1:${[origin, runtime, userId || (runtime === 'cloud' ? 'anonymous' : 'local'), taskId].map(encodeURIComponent).join(':')}`;
+  return `lagent:report-annotations:v1:${[origin, runtime, userId || (runtime === 'cloud' ? 'anonymous' : 'local'), taskId].map(encodeURIComponent).join(':')}`;
 }
 function cleanAnnotations(value: unknown): ReportAnnotation[] {
   if (!Array.isArray(value)) return [];

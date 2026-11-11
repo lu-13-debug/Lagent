@@ -48,7 +48,7 @@ export default function App() {
   const [exportFocusRequest, setExportFocusRequest] = useState(0);
   const [helpSection, setHelpSection] = useState<'general' | 'collaboration'>('general');
   const [data, setData] = useState<Bootstrap | null>(null); const [error, setError] = useState(''); const [view, setView] = useState<View>('workspace'); const [activeId, setActiveId] = useState<string | null>(null);
-  const [mode, setMode] = useState<Mode>(() => { try { return readChoices(localStorage, choiceKey(runtime.mode, user?.id, window.location.origin)).mode || 'collaborative'; } catch { return 'collaborative'; } }); const [newDraft, setNewDraft] = useState<{ goal: string; datasetId?: string; mode?: Mode; context?: string; source?: Task } | null>(null); const [settingsOpen, setSettingsOpen] = useState(false); const [domainOpen, setDomainOpen] = useState(false); const [selectedDomain, setSelectedDomain] = useState(() => { try { return localStorage.getItem('dataagent.domain') || 'game'; } catch { return 'game'; } }); const chooseDomain = useCallback((id: string) => { setSelectedDomain(id); try { localStorage.setItem('dataagent.domain', id); } catch { /* 存储禁用时仅当前会话生效。 */ } }, []); const [helpOpen, setHelpOpen] = useState(false); const [preview, setPreview] = useState<Dataset | null>(null); const [skill, setSkill] = useState<Skill | null>(null); const [fullReport, setFullReport] = useState(false); const [sidebarOpen, setSidebarOpen] = useState(false); const [panelOpen, setPanelOpen] = useState(false); const [exportOpen, setExportOpen] = useState(false); const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
+  const [mode, setMode] = useState<Mode>(() => { try { return readChoices(localStorage, choiceKey(runtime.mode, user?.id, window.location.origin)).mode || 'collaborative'; } catch { return 'collaborative'; } }); const [newDraft, setNewDraft] = useState<{ goal: string; datasetId?: string; mode?: Mode; context?: string; source?: Task } | null>(null); const [settingsOpen, setSettingsOpen] = useState(false); const [domainOpen, setDomainOpen] = useState(false); const [selectedDomain, setSelectedDomain] = useState(() => { try { return localStorage.getItem('lagent.domain') || 'game'; } catch { return 'game'; } }); const chooseDomain = useCallback((id: string) => { setSelectedDomain(id); try { localStorage.setItem('lagent.domain', id); } catch { /* 存储禁用时仅当前会话生效。 */ } }, []); const [helpOpen, setHelpOpen] = useState(false); const [preview, setPreview] = useState<Dataset | null>(null); const [skill, setSkill] = useState<Skill | null>(null); const [fullReport, setFullReport] = useState(false); const [sidebarOpen, setSidebarOpen] = useState(false); const [panelOpen, setPanelOpen] = useState(false); const [exportOpen, setExportOpen] = useState(false); const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
   const onboarding = useOnboarding(data);
   const sampleReport = data?.tasks.find(candidate => Boolean(candidate.report) && isPresetSample(candidate));
   const notify = useCallback((text: string, isError = false) => setToast({ text, error: isError }), []);
@@ -77,14 +77,14 @@ export default function App() {
   const monitor = useTaskMonitor({ data, activeId, runtime, onSnapshot, onDetails: onUpdate, onBootstrap: onCalibrated, onTerminal, onFocusTask: focusTask });
   const onNew = useCallback((goal = '', datasetId?: string, draftMode?: Mode) => { if (datasetId) onboarding.mark('selectedData'); setNewDraft({ goal, datasetId, mode: draftMode }); setExportOpen(false); }, [onboarding.mark]);
   useEffect(() => {
-    const bridge = window.dataagentDesktop;
+    const bridge = window.lagentDesktop;
     if (!bridge) return;
     if (!data) return;
     setDesktopState(bridge, 'ready');
     setDesktopSummaries(bridge, taskSummaries(data.tasks));
   }, [data]);
   useEffect(() => {
-    const bridge = window.dataagentDesktop;
+    const bridge = window.lagentDesktop;
     if (!bridge) return;
     const unsubscribe = subscribeDesktopNew(bridge, () => { if (data) onNew(); });
     return () => { unsubscribe(); setDesktopSummaries(bridge, []); };
@@ -144,7 +144,7 @@ export default function App() {
     const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>('.export-dropdown .dropdown-menu button')?.focus());
     return () => cancelAnimationFrame(frame);
   }, [exportOpen, view, exportFocusRequest]);
-  if (!data) return <div className="app-loading"><div className="loading-brand"><Logo /><strong>DataAgent.</strong></div>{error ? <><h2>连接分析服务时遇到问题</h2><p role="alert">{error}</p><button className="button primary" onClick={() => void load()}><RefreshCw size={15} />重试连接</button><small>{cloud ? '请检查网络；若问题持续，请联系本服务管理员。' : '开发环境请运行 npm run dev；生产环境请运行 npm start。'}</small></> : <><Spinner size={24} /><p role="status">正在准备你的分析工作空间…</p></>}</div>;
+  if (!data) return <div className="app-loading"><div className="loading-brand"><Logo /><strong>Lagent.</strong></div>{error ? <><h2>连接分析服务时遇到问题</h2><p role="alert">{error}</p><button className="button primary" onClick={() => void load()}><RefreshCw size={15} />重试连接</button><small>{cloud ? '请检查网络；若问题持续，请联系本服务管理员。' : '开发环境请运行 npm run dev；生产环境请运行 npm start。'}</small></> : <><Spinner size={24} /><p role="status">正在准备你的分析工作空间…</p></>}</div>;
   if (runtime.capabilities?.superagent) return <SuperAgentShell user={user} runtime={runtime} settings={data.settings} onSettingsSaved={settings => setData(previous => previous ? { ...previous, settings } : previous)} notify={notify} />;
   const access = analysisAccess(runtime, data.settings, data.wallet);
   const currentDataset = data.datasets.find(d => d.id === task?.datasetId);

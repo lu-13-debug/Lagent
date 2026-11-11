@@ -10,7 +10,7 @@ export function normalizeReportMetadata(value: unknown): ReportMetadata | undefi
   if (typeof data.favorite !== 'boolean' || typeof data.pinned !== 'boolean' || !Array.isArray(data.tags) || data.tags.length > 8 || data.tags.some(tag => typeof tag !== 'string' || !tag.trim() || [...tag.trim()].length > 20) || !Number.isSafeInteger(data.revision) || (data.revision as number) < 0) return;
   return { favorite: data.favorite, pinned: data.pinned, tags: [...new Set((data.tags as string[]).map(tag => tag.trim()))], revision: data.revision as number };
 }
-export function metadataStorageKey(runtime: string, userId: string | undefined, origin: string) { return `dataagent:report-metadata:v1:${runtime}:${encodeURIComponent(origin)}:${runtime === 'cloud' ? encodeURIComponent(userId || 'anonymous') : 'local'}`; }
+export function metadataStorageKey(runtime: string, userId: string | undefined, origin: string) { return `lagent:report-metadata:v1:${runtime}:${encodeURIComponent(origin)}:${runtime === 'cloud' ? encodeURIComponent(userId || 'anonymous') : 'local'}`; }
 export function readLocalMetadata(storage: Pick<Storage, 'getItem'>, key: string): Record<string, ReportMetadata> {
   try {
     const data = JSON.parse(storage.getItem(key) || '{}'); if (!data || typeof data !== 'object' || Array.isArray(data)) return {};

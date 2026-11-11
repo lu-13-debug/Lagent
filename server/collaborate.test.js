@@ -20,7 +20,7 @@ async function waitFor(predicate, message = '等待条件超时', timeoutMs = 40
 }
 
 function harness(t) {
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-collaborate-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-collaborate-'));
   const home = join(root, 'home');
   mkdirSync(home, { recursive: true });
   const store = new Store(join(home, 'store.sqlite'));
@@ -35,7 +35,7 @@ function harness(t) {
   const events = [];
   const engine = createWorkEngine(store, createExecutorRegistry([claude, codex, model]), event => events.push(event), {
     policy: { allowedExecutors: ['claude-code', 'codex', 'model'] },
-    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
     home
   });
   t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
@@ -118,7 +118,7 @@ test('团队协作：只在项目里开一条主对话，其他 Agent 挂成从�
 
 test('对话消息可指定模型与思考强度，并落进执行器输入', async t => {
   const { engine, store } = harness(t);
-  const projectDir = join(tmpdir(), `dataagent-chat-model-${Date.now()}`);
+  const projectDir = join(tmpdir(), `lagent-chat-model-${Date.now()}`);
   mkdirSync(projectDir, { recursive: true });
   t.after(() => rmSync(projectDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const project = engine.importProject({ path: projectDir }).project;
@@ -138,7 +138,7 @@ test('对话消息可指定模型与思考强度，并落进执行器输入', as
 
 test('单条对话可以有自己的权限档位，优先于全局设置', async t => {
   const { engine, store } = harness(t);
-  const projectDir = join(tmpdir(), `dataagent-chat-perm-${Date.now()}`);
+  const projectDir = join(tmpdir(), `lagent-chat-perm-${Date.now()}`);
   mkdirSync(projectDir, { recursive: true });
   t.after(() => rmSync(projectDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const project = engine.importProject({ path: projectDir }).project;
@@ -170,7 +170,7 @@ test('单条对话可以有自己的权限档位，优先于全局设置', async
 
 test('删除对话里的一条消息会连同执行记录一起清掉', async t => {
   const { engine, store, events } = harness(t);
-  const projectDir = join(tmpdir(), `dataagent-chat-delete-${Date.now()}`);
+  const projectDir = join(tmpdir(), `lagent-chat-delete-${Date.now()}`);
   mkdirSync(projectDir, { recursive: true });
   t.after(() => rmSync(projectDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const project = engine.importProject({ path: projectDir }).project;
@@ -202,7 +202,7 @@ test('不属于任何对话的工单不能从对话页删除', async t => {
 
 test('删除工作文件夹或对话时，名下的工单一起清掉，不留幽灵待确认', async t => {
   const { engine, store } = harness(t);
-  const projectDir = join(tmpdir(), `dataagent-cascade-${Date.now()}`);
+  const projectDir = join(tmpdir(), `lagent-cascade-${Date.now()}`);
   mkdirSync(projectDir, { recursive: true });
   t.after(() => rmSync(projectDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const project = engine.importProject({ path: projectDir }).project;
@@ -239,7 +239,7 @@ test('派单前的任务书：没有模型时用本地模板给三版', async t 
 
 test('项目记忆按项目隔离，摘要里说明只记关键改动', async t => {
   const { engine, store } = harness(t);
-  const root = mkdtempSync(join(tmpdir(), 'dataagent-memory-iso-'));
+  const root = mkdtempSync(join(tmpdir(), 'lagent-memory-iso-'));
   t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   mkdirSync(join(root, 'one'), { recursive: true });
   mkdirSync(join(root, 'two'), { recursive: true });
@@ -276,7 +276,7 @@ test('项目记忆按项目隔离，摘要里说明只记关键改动', async t 
 
 test('协作时把项目关键改动同步给外部 Agent', async t => {
   const { engine, store } = harness(t);
-  const projectDir = mkdtempSync(join(tmpdir(), 'dataagent-memory-share-'));
+  const projectDir = mkdtempSync(join(tmpdir(), 'lagent-memory-share-'));
   t.after(() => rmSync(projectDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const project = engine.importProject({ path: projectDir }).project;
   store.put('work-project-memory', {

@@ -6,6 +6,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export const DEFAULT_WINDOW_PROCESSES = Object.freeze([
   'codex',
+  'Codex',
+  'Codex Desktop',
+  'codex-desktop',
   'ChatGPT',
   'claude',
   'WindowsTerminal',
@@ -271,7 +274,7 @@ export function createWindowBridge({
   scriptPath = path.join(root, 'scripts', 'window-bridge.ps1'),
   spawnImpl = spawn,
   timeoutMs = DEFAULT_TIMEOUT_MS,
-  allowedProcesses = process.env.DATAAGENT_WINDOW_PROCESSES ? process.env.DATAAGENT_WINDOW_PROCESSES.split(',') : DEFAULT_WINDOW_PROCESSES
+  allowedProcesses = process.env.LAGENT_WINDOW_PROCESSES ? process.env.LAGENT_WINDOW_PROCESSES.split(',') : DEFAULT_WINDOW_PROCESSES
 } = {}) {
   const allow = normalizeAllowedProcesses(allowedProcesses);
   const budget = Math.max(1, Math.min(Number(timeoutMs) || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS));

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 export const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function desktopEnvironment(serverUrl) {
-  const env = { ...process.env, DATAAGENT_SERVER_URL: serverUrl };
+  const env = { ...process.env, LAGENT_SERVER_URL: serverUrl };
   delete env.ELECTRON_RUN_AS_NODE;
   return env;
 }
@@ -28,7 +28,7 @@ export async function startCloudFixture(directory) {
       });
     });
     const runtime = await fetch(origin + '/api/runtime', { signal: AbortSignal.timeout(5000) }).then(response => response.json());
-    if (runtime.mode !== 'cloud' || runtime.authRequired !== true || runtime.serviceName !== 'DataAgent') throw new Error('验收只能使用真实云端账号服务。');
+    if (runtime.mode !== 'cloud' || runtime.authRequired !== true || runtime.serviceName !== 'Lagent') throw new Error('验收只能使用真实云端账号服务。');
   } catch (error) { child.kill(); throw error; }
   return {
     origin,

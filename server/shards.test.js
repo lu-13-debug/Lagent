@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-process.env.DATAAGENT_ENABLE_MULTI_SHARD = '1';
+process.env.LAGENT_ENABLE_MULTI_SHARD = '1';
 const { parseFiles } = await import('./datasets.js');
 const csv = (name, text) => ({ originalname:name, buffer:Buffer.from(text) });
 test('four CSV shards preserve raw activity rows, provenance, overlaps and unknown columns', async () => {

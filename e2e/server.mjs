@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createCloudApp } from '../server/cloud-app.js';
-const dir=await mkdtemp(path.join(tmpdir(),'dataagent-e2e-'));let calls=0; const stageCalls=[];
+const dir=await mkdtemp(path.join(tmpdir(),'lagent-e2e-'));let calls=0; const stageCalls=[];
 const cloud=createCloudApp({dataDir:dir,credentialMasterKey:Buffer.alloc(32,4).toString('base64'),production:false,now:()=>Date.parse('2026-10-30T12:00:00Z'),fetchImpl:async(_url,init)=>{
  const body=JSON.parse(init.body);calls++;
  if(body.model==='mock-401') return Response.json({}, {status:401});

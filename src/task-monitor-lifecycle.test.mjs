@@ -50,8 +50,8 @@ function hookHarness({ bootstrapFails = false, bootstrapFailures = 0, hiddenDesk
   let now = 100000; let intervals = []; let timeouts = []; const effects = []; const states = []; const sources = [];
   let bootstrapCalls = 0; let summaryCalls = 0; let calibrated = 0; const bootstrapTimes = []; const listeners = {};
   class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
-  const document = { hidden: hiddenDesktop || hiddenBrowser, title: 'DataAgent', addEventListener(name, fn) { listeners[name] = fn; }, removeEventListener(name) { delete listeners[name]; } };
-  const window = { EventSource: true, ...(hiddenDesktop ? { dataagentDesktop: {} } : {}), addEventListener() {}, removeEventListener() {} };
+  const document = { hidden: hiddenDesktop || hiddenBrowser, title: 'Lagent', addEventListener(name, fn) { listeners[name] = fn; }, removeEventListener(name) { delete listeners[name]; } };
+  const window = { EventSource: true, ...(hiddenDesktop ? { lagentDesktop: {} } : {}), addEventListener() {}, removeEventListener() {} };
   const old = { id: 'history', title: '历史', status: 'completed', updatedAt: new Date(now).toISOString(), createdAt: new Date(now).toISOString(), progress: 100, steps: [{ id: 'quality', description: '已校准' }], report: {} };
   const options = { data: { tasks: [old] }, activeId: old.id, runtime: { capabilities: { taskEvents: true, taskSummaries: true } }, onBootstrap() { calibrated++; }, onSnapshot() {}, onDetails() {}, onTerminal() {}, onFocusTask() {} };
   const react = { useCallback: fn => fn, useRef: value => ({ current: value }), useState: value => [typeof value === 'function' ? value() : value, value => states.push(value)], useEffect: fn => effects.push(fn) };

@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export const workEnabled = options => options?.workEnabled === true || (options?.workEnabled === undefined && process.env.DATAAGENT_WORK_ENABLED === '1');
+export const workEnabled = options => options?.workEnabled === true || (options?.workEnabled === undefined && process.env.LAGENT_WORK_ENABLED === '1');
 
 export const EXTERNAL_EXECUTORS = Object.freeze([
   'codex',
@@ -143,7 +143,7 @@ export function normalizePolicy(input = {}, base = defaults) {
 }
 
 export function externalExecutorsEnabled(env = process.env) {
-  return env.DATAAGENT_ALLOW_EXTERNAL_EXECUTORS === '1';
+  return env.LAGENT_ALLOW_EXTERNAL_EXECUTORS === '1';
 }
 
 export function externalExecutorAllowed(id, policy, env = process.env) {

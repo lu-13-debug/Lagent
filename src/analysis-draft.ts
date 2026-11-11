@@ -1,6 +1,6 @@
 import type { Dataset, Mode } from './types';
 export interface AnalysisChoices { mode?: Mode; datasetId?: string; useAI?: boolean }
-export function choiceKey(mode: string, userId: string | undefined, origin: string) { return `dataagent:analysis-choices:v1:${mode}:${encodeURIComponent(origin)}:${mode === 'cloud' ? encodeURIComponent(userId || 'anonymous') : 'local'}`; }
+export function choiceKey(mode: string, userId: string | undefined, origin: string) { return `lagent:analysis-choices:v1:${mode}:${encodeURIComponent(origin)}:${mode === 'cloud' ? encodeURIComponent(userId || 'anonymous') : 'local'}`; }
 export function readChoices(storage: Pick<Storage, 'getItem'>, key: string): AnalysisChoices {
   try {
     const value = JSON.parse(storage.getItem(key) || '{}');

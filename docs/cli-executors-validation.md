@@ -5,7 +5,7 @@
 ## 实现
 
 - 新增 `server/work/executors/cli.js` 通用受控 CLI 适配器，以及 `codex.js`、`claude-code.js` 两个注册执行器。
-- 可执行文件只读取 `DATAAGENT_CODEX_CLI` / `DATAAGENT_CLAUDE_CLI` 指向的绝对文件路径；路径缺失、非文件或相对路径时执行器 `available:false`，不会回退到 PATH 搜索。
+- 可执行文件只读取 `LAGENT_CODEX_CLI` / `LAGENT_CLAUDE_CLI` 指向的绝对文件路径；路径缺失、非文件或相对路径时执行器 `available:false`，不会回退到 PATH 搜索。
 - Codex 固定参数模板：`exec --json --sandbox read-only -C <workspace> <wrapped-prompt>`。
 - Claude Code 固定参数模板：`-p --output-format stream-json --max-turns <n> <wrapped-prompt>`。
 - `executorInput` 仅允许 `{prompt,maxTurns?}`；默认 5 回合，范围 1-20，prompt 去首尾空白、拒绝 NUL 且最多 16KiB。参数以 argv 数组传入，不支持附加 shell、任意参数或自定义 binary。
@@ -17,7 +17,7 @@
 ## 进程与网络边界
 
 - `spawn` 固定 `shell:false`、工作区 cwd、`windowsHide:true`、stdin 忽略、stdout/stderr 管道；本地模式 cwd 为项目根，cloud 模式 cwd 为账号各自 `Store` 的 dataDir。
-- 环境变量采用白名单：保留 PATH、Windows 基础变量、临时目录、语言/终端变量、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`；不传 `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`DATAAGENT_CREDENTIAL_MASTER_KEY` 等应用凭据。
+- 环境变量采用白名单：保留 PATH、Windows 基础变量、临时目录、语言/终端变量、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`；不传 `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`LAGENT_CREDENTIAL_MASTER_KEY` 等应用凭据。
 - 默认超时 300 秒；stdout+stderr 合计 512KiB，超限截断。stop/Abort 终止子进程并写 cancelled artifact；不自动重试。
 - 两个执行器分别限制最多 2 个并发 CLI 子进程。服务重启时，已启动但无活动子进程的 CLI task 标记为 failed，避免恢复出僵死任务。
 - Codex 使用其自身 `--sandbox read-only` 策略。Claude Code 当前固定模板没有等价的强隔离参数；写入/联网限制主要依赖提示词和本机 Claude Code 配置。

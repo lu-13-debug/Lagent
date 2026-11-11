@@ -8,7 +8,7 @@
 - 浏览器仅允许 HTTP/HTTPS 与 80/443 端口；拒绝 URL 凭据、`localhost`、`.localhost`、`.local`、IPv4/IPv6 回环、私网、链路本地、保留及组播地址。主机名在启动前与每个请求路由阶段均进行 DNS 全地址检查，重定向和子资源也经过同一层校验。
 - Playwright 使用临时 Chromium context：禁用页面 JavaScript、阻止 service worker、拒绝下载、不传入 cookie/凭据/storage state；不执行用户脚本，不提供点击、输入、上传或持久 profile 能力。
 - 页面结果只投影 `title`、最终 URL、可见文本和最多 30 条 HTTP(S) 链接。默认/输入超时 30 秒，stop、close、超时和 Abort 会关闭 context 与 browser。
-- 可用条件为 `DATAAGENT_BROWSER_ENABLED=1` 且 Playwright 模块可加载；`bootstrap.agents` 输出真实 `available/unavailable` 状态。Chromium 可执行文件可选用 `DATAAGENT_CHROMIUM_EXECUTABLE_PATH` 指向本机已安装版本。
+- 可用条件为 `LAGENT_BROWSER_ENABLED=1` 且 Playwright 模块可加载；`bootstrap.agents` 输出真实 `available/unavailable` 状态。Chromium 可执行文件可选用 `LAGENT_CHROMIUM_EXECUTABLE_PATH` 指向本机已安装版本。
 - 新增 `server/work/executors/github.js`，注册 id 为 `github`、kind 为 `tool`，只接受 `executorInput:{action,owner,repo,number?,path?}`。action 白名单为 `repo|issues|pulls|checks|file`；`checks` 必须提供 PR number，`file` 必须提供仓库根目录下的 POSIX 相对路径。
 - GitHub host 固定为 `https://api.github.com`，请求固定 `GET`，拒绝重定向；owner/repo、number 与 file path 均严格校验。JSON 响应上限 1MiB，文件默认上限 256KiB，超时 30 秒。
 - GitHub token 仅从进程环境 `GITHUB_TOKEN` 读取；无 token 时 `available:false` 且启动返回 503。token 不写 Store、ticket、report、SSE 或错误信息，请求头不进入工件；错误使用白名单消息并做 token/凭据模式脱敏。

@@ -8,7 +8,7 @@ import { EFFORTS, EFFORT_LABELS } from '../workflow-types';
 type Profile = { id: string; name: string; model: string; capabilities?: { efforts: string[] } };
 export type ChatModelChoice = { profileId: string; effort: string };
 
-const storageKey = (chatId: string) => `dataagent.chatmodel.v1.${chatId}`;
+const storageKey = (chatId: string) => `lagent.chatmodel.v1.${chatId}`;
 
 export function readChatModel(chatId: string): ChatModelChoice {
   try {

@@ -19,7 +19,7 @@ async function waitFor(predicate, message = '等待条件超时', timeoutMs = 25
 }
 
 function fixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'dataagent-cli-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-cli-'));
   const binary = join(dir, 'fake-cli.exe');
   writeFileSync(binary, '');
   if (process.platform !== 'win32') chmodSync(binary, 0o755);
@@ -82,7 +82,7 @@ test('E2 Codex 固定 argv、环境过滤、JSONL 脱敏与 artifact 统计', as
       PATH: process.env.PATH,
       OPENAI_API_KEY: 'must-not-leak',
       ANTHROPIC_API_KEY: 'must-not-leak',
-      DATAAGENT_CREDENTIAL_MASTER_KEY: 'must-not-leak'
+      LAGENT_CREDENTIAL_MASTER_KEY: 'must-not-leak'
     },
     spawnImpl: (executable, args, options) => {
       invocation = { executable, args, options };
@@ -106,7 +106,7 @@ test('E2 Codex 固定 argv、环境过滤、JSONL 脱敏与 artifact 统计', as
   assert.equal(invocation.options.shell, false);
   assert.equal(invocation.options.env.OPENAI_API_KEY, undefined);
   assert.equal(invocation.options.env.ANTHROPIC_API_KEY, undefined);
-  assert.equal(invocation.options.env.DATAAGENT_CREDENTIAL_MASTER_KEY, undefined);
+  assert.equal(invocation.options.env.LAGENT_CREDENTIAL_MASTER_KEY, undefined);
   assert.equal(saved.artifacts.cli.summary.includes('private chain of thought'), false);
   assert.match(saved.artifacts.cli.summary, /\[REDACTED\]/);
   assert.deepEqual(saved.artifacts.cli.usage, { input_tokens: 12, output_tokens: 7 });
@@ -240,12 +240,12 @@ test('E2 CLI 子进程默认零凭据，只透传显式点名的环境变量', (
   const opted = cliEnvironment({
     PATH: '/usr/bin',
     OPENCODE_API_KEY: 'oc-key',
-    DATAAGENT_CLI_ENV_PASSTHROUGH: 'OPENCODE_API_KEY, not a name, '
+    LAGENT_CLI_ENV_PASSTHROUGH: 'OPENCODE_API_KEY, not a name, '
   });
   assert.equal(opted.OPENCODE_API_KEY, 'oc-key');
   assert.equal(opted.OPENAI_API_KEY, undefined);
   assert.equal(opted['not a name'], undefined);
-  assert.equal(opted.DATAAGENT_CLI_ENV_PASSTHROUGH, undefined);
+  assert.equal(opted.LAGENT_CLI_ENV_PASSTHROUGH, undefined);
 });
 
 test('E2 codex 失败时优先给出真正的错误，配置提示不算失败', () => {

@@ -97,7 +97,7 @@
 
 ### 2. 纯函数（新增 `src/model-usage.ts` + `src/model-usage.test.mjs`）
 
-- `modelRateKey(runtime, userId, origin)`：`dataagent:model-rates:v1:${runtime}:${encodeURIComponent(origin)}:${cloud ? encodeURIComponent(userId || 'anonymous') : 'local'}`。
+- `modelRateKey(runtime, userId, origin)`：`lagent:model-rates:v1:${runtime}:${encodeURIComponent(origin)}:${cloud ? encodeURIComponent(userId || 'anonymous') : 'local'}`。
 - `readModelRates(storage, key)` / `writeModelRates(storage, key, rates)`：
   - `rates` 形如 `{ [provider + '\u0000' + model]: { input: number, output: number } }`；
   - 只接受有限非负数；损坏数据返回空对象，不抛错。

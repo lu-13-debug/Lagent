@@ -1,4 +1,4 @@
-# DataAgent 服务器部署与 HTTPS 从零教程
+# Lagent 服务器部署与 HTTPS 从零教程
 
 本教程使用 **全新的 Ubuntu 24.04 LTS 服务器、Docker Compose 和 Caddy**，适用于 1.1.0 账号版。最终获得类似 `https://analysis.example.com` 的地址，用户在 Windows 软件里连接它，就能注册和登录。
 
@@ -78,8 +78,8 @@ A 记录应指向你的服务器。只有配置好 IPv6 才保留 AAAA，不要�
 ```bash
 mkdir -p /opt
 cd /opt
-git clone https://github.com/lu-13-debug/DataAgent.git
-cd DataAgent
+git clone https://github.com/lu-13-debug/Lagent.git
+cd Lagent
 cp .env.example .env
 nano .env
 ```
@@ -87,19 +87,19 @@ nano .env
 已克隆时在原目录执行 `git pull --ff-only`，保留已有 `.env`，不要再次复制模板覆盖它。编辑内容，例如：
 
 ```dotenv
-DATAAGENT_DOMAIN=analysis.example.com
-DATAAGENT_MODEL_HOSTS=api.deepseek.com,api.anthropic.com,api.openai.com
+LAGENT_DOMAIN=analysis.example.com
+LAGENT_MODEL_HOSTS=api.deepseek.com,api.anthropic.com,api.openai.com
 ```
 
 域名不加协议、端口或路径。模型白名单默认开放 DeepSeek、Claude（Anthropic）、OpenAI 三家的官方 HTTPS 主机；配置此变量会覆盖默认列表，多个用英文逗号分隔，不填 URL 或通配符。供应商基础地址和填写方法见 [模型与 Key](../README.md#模型与-key)。
 
-只验证注册和确定性分析时，可以显式设置 `DATAAGENT_MODEL_HOSTS=` 关闭 AI。**用户 Key 在登录后的软件设置中填写，不写进 `.env`。** 在 nano 按 Ctrl+O、回车保存，Ctrl+X 退出。
+只验证注册和确定性分析时，可以显式设置 `LAGENT_MODEL_HOSTS=` 关闭 AI。**用户 Key 在登录后的软件设置中填写，不写进 `.env`。** 在 nano 按 Ctrl+O、回车保存，Ctrl+X 退出。
 
 Compose 会同时给 Caddy 和应用设置该域名，并自动生成 `PUBLIC_URL=https://你的域名`。
 
 ## 6. 启动并启用 HTTPS
 
-在 `/opt/DataAgent` 执行：
+在 `/opt/Lagent` 执行：
 
 ```bash
 docker compose config --quiet
@@ -111,7 +111,7 @@ docker compose logs --tail=100 app caddy
 首次会下载镜像、安装依赖和编译。等待 app healthy、caddy 正常运行。仓库的 Caddy 配置已经准备好：
 
 ```caddyfile
-{$DATAAGENT_DOMAIN} {
+{$LAGENT_DOMAIN} {
     encode zstd gzip
     reverse_proxy app:3002
 }
@@ -130,13 +130,13 @@ curl -fsS https://analysis.example.com/api/runtime
 curl -sS -o /dev/null -w '%{http_code}\n' https://analysis.example.com/api/bootstrap
 ```
 
-第一个应返回包含 `mode: cloud`、`authRequired: true`、`serviceName: DataAgent`、`version: 1.1.0` 的 JSON。第二个未登录时应该为 **401**，表示业务接口受登录保护。
+第一个应返回包含 `mode: cloud`、`authRequired: true`、`serviceName: Lagent`、`version: 1.1.0` 的 JSON。第二个未登录时应该为 **401**，表示业务接口受登录保护。
 
 再用浏览器打开该 HTTPS 地址，创建账号、上传数据、运行分析；退出后创建第二个账号，确认数据和额度独立。证书、注册和登录实际正常后，才算这台服务器部署成功。
 
 ## 8. 让 Windows 软件连接
 
-用户从 [1.1.0 发布页](https://github.com/lu-13-debug/DataAgent/releases/tag/v1.1.0) 安装 EXE，首次填写你的服务根地址：
+用户从 [1.1.0 发布页](https://github.com/lu-13-debug/Lagent/releases/tag/v1.1.0) 安装 EXE，首次填写你的服务根地址：
 
 ```text
 https://analysis.example.com

@@ -1,4 +1,4 @@
 const { contextBridge, ipcRenderer } = require('electron');
-contextBridge.exposeInMainWorld('dataagentConnection', Object.freeze({
-  connect: serverUrl => ipcRenderer.invoke('dataagent:connect', serverUrl),
+contextBridge.exposeInMainWorld('lagentConnection', Object.freeze({
+  connect: serverUrl => ipcRenderer.invoke('lagent:connect', serverUrl),
 }));

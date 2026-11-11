@@ -25,7 +25,7 @@ export async function listModels({ settings, key, signal, fetchImpl = fetch, tim
   const baseUrl = normalizeBaseUrl(settings.baseUrl);
   const claude = settings.protocol ? settings.protocol === 'anthropic' : new URL(baseUrl).hostname === 'api.anthropic.com';
   const headers = { authorization: `Bearer ${key}`, ...(claude ? { 'x-api-key': key, 'anthropic-version': '2026-10-21' } : {}) };
-  if (baseUrl === 'https://opencode.ai/inference/go/openai/v1') headers['user-agent'] = 'DataAgent/1.1.0';
+  if (baseUrl === 'https://opencode.ai/inference/go/openai/v1') headers['user-agent'] = 'Lagent/1.1.0';
   const combined = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
   const models = new Map(); const cursors = new Set(); let cursor = ''; let partial = false;
   try {

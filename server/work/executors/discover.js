@@ -22,7 +22,7 @@ function existingFile(candidate) {
 }
 
 export function findCodexBinary(environment = process.env) {
-  const explicit = existingFile(environment.DATAAGENT_CODEX_CLI);
+  const explicit = existingFile(environment.LAGENT_CODEX_CLI);
   if (explicit) return explicit;
   const aliasRoot = environment.LOCALAPPDATA ? path.join(environment.LOCALAPPDATA, 'Microsoft', 'WindowsApps') : null;
   const onPath = findOnPath('codex', environment);
@@ -41,7 +41,7 @@ export function findCodexBinary(environment = process.env) {
 }
 
 export function findClaudeCodeCli(environment = process.env) {
-  const explicit = existingFile(environment.DATAAGENT_CLAUDE_CLI);
+  const explicit = existingFile(environment.LAGENT_CLAUDE_CLI);
   if (explicit) return { binary: explicit, prefix: [] };
   const onPath = findOnPath('claude', environment);
   if (onPath) return { binary: onPath, prefix: [] };

@@ -7,7 +7,7 @@ import { createApp } from './app.js';
 import { stageReply } from './stage-reply-fixture.js';
 
 test('模型中心可经应用配置并启动真实阶段任务，PDF重试不重复收费', async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'dataagent-multi-api-'));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'lagent-multi-api-'));
   let calls = 0, pdfCalls = 0;
   const app = createApp({ dataDir: dir, credentialMasterKey: Buffer.alloc(32, 7).toString('base64'), fetchImpl: async (_url, init) => { calls++; return Response.json({ choices: [{ message: { content: JSON.stringify(stageReply(JSON.parse(init.body))) } }] }); }, analysisTool: async () => ({}), pdfBuilder: async () => { pdfCalls++; return Buffer.from('%PDF-1.7\ntest'); } });
   const server = app.listen(0, '127.0.0.1');

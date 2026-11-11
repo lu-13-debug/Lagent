@@ -6,10 +6,10 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3002
-      PUBLIC_URL: https://${DATAAGENT_DOMAIN:?请先在.env中填写DATAAGENT_DOMAIN}
-      DATAAGENT_DATA_DIR: /app/data
-      DATAAGENT_CREDENTIAL_MASTER_KEY: ${DATAAGENT_CREDENTIAL_MASTER_KEY-}
-      DATAAGENT_MODEL_HOSTS: ${DATAAGENT_MODEL_HOSTS-api.deepseek.com,api.anthropic.com,api.openai.com}
+      PUBLIC_URL: https://${LAGENT_DOMAIN:?请先在.env中填写LAGENT_DOMAIN}
+      LAGENT_DATA_DIR: /app/data
+      LAGENT_CREDENTIAL_MASTER_KEY: ${LAGENT_CREDENTIAL_MASTER_KEY-}
+      LAGENT_MODEL_HOSTS: ${LAGENT_MODEL_HOSTS-api.deepseek.com,api.anthropic.com,api.openai.com}
       TRUST_PROXY: 1
     expose:
       - "3002"
@@ -24,7 +24,7 @@ services:
       app:
         condition: service_healthy
     environment:
-      DATAAGENT_DOMAIN: ${DATAAGENT_DOMAIN:?请先在.env中填写DATAAGENT_DOMAIN}
+      LAGENT_DOMAIN: ${LAGENT_DOMAIN:?请先在.env中填写LAGENT_DOMAIN}
     ports:
       - "80:80"
       - "443:443"

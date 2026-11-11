@@ -26,7 +26,7 @@
 
 ## 当前边界
 
-- 持久凭据需管理员配置 DATAAGENT_CREDENTIAL_MASTER_KEY；Python、Chromium和中文字体部署说明见README及cloud-deployment。容器构建、公网部署未实测。
+- 持久凭据需管理员配置 LAGENT_CREDENTIAL_MASTER_KEY；Python、Chromium和中文字体部署说明见README及cloud-deployment。容器构建、公网部署未实测。
 - 清洗当前只提供非破坏性预览，未形成供下游使用的持久派生数据版本；不自动删行或填补。
 - 新恢复尝试仍会重建AI阶段，尚未完整复用已有阶段产物；只重试PDF不重跑AI。
 - 未提供拖拽编排器或多个命名工作流模板；当前每账号保存一份阶段配置。

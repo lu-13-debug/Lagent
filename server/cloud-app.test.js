@@ -23,7 +23,7 @@ test('模型用量需要登录并按账号隔离',async t=>{
  const s=await setup(t);assert.equal((await s.client().api('/api/model-usage?days=all')).status,401);
  const a=await s.register('usageowner'),b=await s.register('usageother');
  const boot=await a.api('/api/bootstrap');await b.api('/api/bootstrap');
- const db=new DatabaseSync(path.join(s.dir,'users',a.user.id,'dataagent.sqlite'));
+ const db=new DatabaseSync(path.join(s.dir,'users',a.user.id,'lagent.sqlite'));
  const entry={id:'owner-call',taskId:boot.tasks[0].id,stageId:'insights',stageName:'洞察',kind:'stage',provider:'测试',model:'mock',recordedAt:new Date().toISOString(),inputTokens:7,outputTokens:3,totalTokens:10};
  db.prepare('INSERT INTO entities(kind,id,body) VALUES(?,?,?)').run('model-call',entry.id,JSON.stringify(entry));db.close();
  assert.equal((await a.api('/api/model-usage?days=all')).totals.calls,1);
@@ -44,7 +44,7 @@ test('Super-agent Work需登录且按云账号隔离',async t=>{
 });
 async function setup(t, options = {}) {
   assert.equal(typeof module.createCloudApp, 'function', '必须提供 createCloudApp');
-  const dir = await mkdtemp(path.join(tmpdir(), 'dataagent-cloud-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'lagent-cloud-'));
   const publicUrl = options.production ? 'https://cloud.example.test' : 'http://localhost:3002';
   let app, server, base;
   const start = async () => {
@@ -149,7 +149,7 @@ test('OpenCode Go requires an explicit cloud allowlist and keeps credentials ses
 test('cloud runtime, password hashing, opaque secure cookie and duplicate identity validation', async t => {
   const s = await setup(t, { production: true });
   const anon = s.client();
-  assert.deepEqual(await anon.api('/api/runtime'), { mode: 'cloud', authRequired: true, serviceName: 'DataAgent', version: '1.1.0', modelHosts: ['api.deepseek.com', 'api.anthropic.com', 'api.openai.com'], capabilities: { taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, modelHub: true, reportPdf: true, agentTrace: true, memory: true, modelUsage: true, reportSharing: true }, status: 200, setCookie: null });
+  assert.deepEqual(await anon.api('/api/runtime'), { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: '1.1.0', modelHosts: ['api.deepseek.com', 'api.anthropic.com', 'api.openai.com'], capabilities: { taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, modelHub: true, reportPdf: true, agentTrace: true, memory: true, modelUsage: true, reportSharing: true }, status: 200, setCookie: null });
   assert.equal((await anon.api('/api/bootstrap')).status, 401);
   assert.equal((await anon.api('/api/auth/session')).user, null);
   const r = await anon.api('/api/auth/register', 'POST', { username: 'Alice_01', displayName: '阿丽丝', password });
@@ -190,12 +190,12 @@ test('default whitelist permits the three official providers and rejects lookali
 });
 
 test('explicit environment whitelist replaces defaults and an empty value disables AI', async t => {
-  const previous = process.env.DATAAGENT_MODEL_HOSTS;
-  t.after(() => { if (previous === undefined) delete process.env.DATAAGENT_MODEL_HOSTS; else process.env.DATAAGENT_MODEL_HOSTS = previous; });
-  process.env.DATAAGENT_MODEL_HOSTS = 'trusted.example.test';
+  const previous = process.env.LAGENT_MODEL_HOSTS;
+  t.after(() => { if (previous === undefined) delete process.env.LAGENT_MODEL_HOSTS; else process.env.LAGENT_MODEL_HOSTS = previous; });
+  process.env.LAGENT_MODEL_HOSTS = 'trusted.example.test';
   const custom = await setup(t);
   assert.deepEqual((await custom.client().api('/api/runtime')).modelHosts, ['trusted.example.test']);
-  process.env.DATAAGENT_MODEL_HOSTS = '';
+  process.env.LAGENT_MODEL_HOSTS = '';
   const disabled = await setup(t);
   assert.deepEqual((await disabled.client().api('/api/runtime')).modelHosts, []);
 });
@@ -292,7 +292,7 @@ test('cloud caps concurrent tasks, dataset count and active workspaces without e
 });
 
 test('unconfigured development service accepts its actual loopback port while production requires PUBLIC_URL', async t => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'dataagent-cloud-dynamic-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'lagent-cloud-dynamic-'));
   const app = module.createCloudApp({ dataDir: dir, production: false });
   const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
   t.after(async () => { await new Promise(resolve => server.close(resolve)); app.locals.close(); await rm(dir, { recursive: true, force: true }); });

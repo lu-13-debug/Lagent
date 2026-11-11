@@ -6,7 +6,7 @@
 
 - `mode:'personal'`、`acceptMode:'explicit'`、`requireApproval:true`。
 - `allowedExecutors:['analysis','terminal']`。
-- `codex`、`claude-code`、`browser`、`github` 默认拒绝；必须同时在 policy 中加入并设置 `DATAAGENT_ALLOW_EXTERNAL_EXECUTORS=1`。
+- `codex`、`claude-code`、`browser`、`github` 默认拒绝；必须同时在 policy 中加入并设置 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1`。
 - `budgets`: 并发最多 2、每 ticket 最多 12 次执行、最长运行 1 小时、Token 上限 200000（当前用于策略记录，执行器自身仍有独立上限）。
 - `limits.browserHosts` / `limits.githubRepos` 默认空数组；执行器内部仍有自己的 URL/仓库校验。
 
