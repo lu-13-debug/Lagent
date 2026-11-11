@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FolderGit2, GitBranch, Globe, Menu, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Users, Wrench, X } from 'lucide-react';
+import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FolderGit2, GitBranch, Globe, ListChecks, Menu, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Trash2, Users, Wrench, X } from 'lucide-react';
 import { api } from '../api';
 import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
@@ -225,6 +225,12 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [chatRename, setChatRename] = useState<{ projectId: string; chatId: string; value: string } | null>(null);
   const [folderToDelete, setFolderToDelete] = useState<WorkProject | null>(null);
   const [chatToDelete, setChatToDelete] = useState<{ projectId: string; chat: WorkProjectChat } | null>(null);
+  // 侧栏多选：勾选多条对话一次删掉，省得一条条点叉。
+  const [selectMode, setSelectMode] = useState(false);
+  const [pickedChats, setPickedChats] = useState<string[]>([]);
+  const [pickedTickets, setPickedTickets] = useState<string[]>([]);
+  const [bulkConfirm, setBulkConfirm] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   // 侧栏折叠、右侧检查器、底部用户菜单：让主区尽量宽，工作与过程都放在主区
   const [railCollapsed, setRailCollapsed] = useState<boolean>(() => readJson<boolean>(RAIL_COLLAPSED_KEY, false));
@@ -486,7 +492,45 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       void load();
     } catch (cause) { notify((cause as Error).message, true); }
   };
-  const commitFolderRename = async () => {    if (!folderRename) return;
+  const exitSelect = () => {
+    setSelectMode(false);
+    setPickedChats([]);
+    setPickedTickets([]);
+    setBulkConfirm(false);
+  };
+  const togglePick = (kind: 'chat' | 'ticket', id: string) => {
+    const update = (list: string[]) => (list.includes(id) ? list.filter(entry => entry !== id) : [...list, id]);
+    if (kind === 'chat') setPickedChats(update); else setPickedTickets(update);
+  };
+  const pickedTotal = pickedChats.length + pickedTickets.length;
+  const removePicked = async () => {
+    const chats = [...pickedChats];
+    const tickets = [...pickedTickets];
+    setBulkConfirm(false);
+    if (!chats.length && !tickets.length) return;
+    setBulkBusy(true);
+    let done = 0;
+    let firstError = '';
+    for (const id of chats) {
+      try { await api.workDeleteProjectChat(id); done += 1; }
+      catch (cause) { firstError ||= (cause as Error).message; }
+    }
+    for (const id of tickets) {
+      try { await api.workDeleteTicket(id); done += 1; }
+      catch (cause) { firstError ||= (cause as Error).message; }
+    }
+    setBulkBusy(false);
+    exitSelect();
+    if (view === 'chat' && folderState.chatId && chats.includes(folderState.chatId)) setView('projects');
+    const failed = chats.length + tickets.length - done;
+    if (failed) notify(`删掉 ${done} 条，${failed} 条没删成：${firstError}`, true);
+    else notify(`已删除 ${done} 条对话。`);
+    await reloadProjects();
+    // 被删对话名下的工单也要从快照里去掉，右侧「执行详情」不留空卡。
+    void load();
+  };
+  const commitFolderRename = async () => {
+    if (!folderRename) return;
     const name = folderRename.value.trim();
     const target = folderRename;
     setFolderRename(null);
@@ -1427,13 +1471,15 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
                   }
                   const unread = chatUnread(entry);
                   const subs = item.chats.filter(chat => chat.parentChatId === entry.id).length;
-                  return <div className="sa-folder-chat-row" key={entry.id}>
-                    <button type="button" className={`sa-conv sa-conv-sub ${active ? 'active' : ''} ${unread ? 'has-unread' : ''}`} title={`${executorNames[entry.executorId] || entry.executorId} · 写入 ${item.path}（双击重命名）`} onClick={() => openFolderChat(item.id, entry.id)} onDoubleClick={event => { event.preventDefault(); setChatRename({ projectId: item.id, chatId: entry.id, value: entry.title }); }}>
+                  const picked = pickedChats.includes(entry.id);
+                  return <div className={`sa-folder-chat-row ${selectMode ? 'is-selecting' : ''} ${picked ? 'is-picked' : ''}`} key={entry.id}>
+                    {selectMode && <span className="sa-check" aria-hidden="true">{picked ? <Check size={10} /> : null}</span>}
+                    <button type="button" className={`sa-conv sa-conv-sub ${active ? 'active' : ''} ${unread ? 'has-unread' : ''}`} title={selectMode ? `选中「${entry.title}」` : `${executorNames[entry.executorId] || entry.executorId} · 写入 ${item.path}（双击重命名）`} aria-pressed={selectMode ? picked : undefined} onClick={() => (selectMode ? togglePick('chat', entry.id) : openFolderChat(item.id, entry.id))} onDoubleClick={event => { if (selectMode) return; event.preventDefault(); setChatRename({ projectId: item.id, chatId: entry.id, value: entry.title }); }}>
                       <span className="sa-conv-body">
                         <span className="sa-conv-title">{entry.title}{subs > 0 && <em className="sa-chat-sub">{subs} 个 Agent</em>}{unread && <em className="sa-unread" aria-label="有新的执行结果" />}</span>
                       </span>
                     </button>
-                    <button type="button" className="sa-folder-chat-del" aria-label={`删除对话 ${entry.title}`} title="删除对话" onClick={() => setChatToDelete({ projectId: item.id, chat: entry })}><X size={11} /></button>
+                    {!selectMode && <button type="button" className="sa-folder-chat-del" aria-label={`删除对话 ${entry.title}`} title="删除对话" onClick={() => setChatToDelete({ projectId: item.id, chat: entry })}><X size={11} /></button>}
                   </div>;
                   });
                 })()}
@@ -1444,7 +1490,9 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         {dropActive && <div className="sa-drop-hint"><FolderGit2 size={16} />松开导入这个文件夹</div>}
       </section>
       <section className="sa-conv-section">
-        <div className="sa-side-title"><span>对话</span><span>{conversationTickets.length}</span></div>
+        <div className="sa-side-title"><span>对话</span><span>{conversationTickets.length}</span>
+          <button type="button" className={`sa-side-more ${selectMode ? 'is-on' : ''}`} aria-pressed={selectMode} title={selectMode ? '退出多选' : '多选对话，批量删除'} onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}>{selectMode ? '完成' : '多选'}</button>
+        </div>
         <label className="sa-conv-search"><Search size={13} /><input type="search" value={convQuery} onChange={event => setConvQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setConvQuery(''); } }} placeholder="搜索对话" aria-label="搜索对话" /></label>
         <div className="sa-conversations">
           {conversationGroups.length ? conversationGroups.map(group => <div key={group.label}>
@@ -1452,17 +1500,34 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             {group.items.map(item => {
               const active = item.kind === 'group' ? item.id === activeGroupId : item.id === activeTicketId && !activeGroupId;
               const status = item.kind === 'group' && item.group ? groupStatusOf(item.group) : item.ticket?.status || 'waiting';
-              return <button type="button" key={item.id} className={`sa-conv ${active ? 'active' : ''}`} aria-current={active ? 'true' : undefined} title={item.kind === 'group' ? `${item.group?.agentIds.length || 0} 个 Agent 交叉验证` : executorNames[item.ticket?.executor || ''] || item.ticket?.executor} onClick={() => { setNavOpen(false); if (item.kind === 'group' && item.group) viewGroup(item.group); else if (item.ticket) viewTicket(item.ticket.id); }}>
+              // 交叉验证分组没有单条删除接口，多选只对独立对话生效。
+              const pickable = selectMode && item.kind !== 'group' && Boolean(item.ticket);
+              const picked = pickable && pickedTickets.includes(item.id);
+              const body = <>
                 <span className="sa-conv-icon">{item.kind === 'group' ? <Users size={12} /> : <em className={`sa-dot sa-dot-${status}`} />}</span>
                 <span className="sa-conv-body">
                   <span className="sa-conv-title">{item.title}</span>
                 </span>
-              </button>;
+              </>;
+              if (pickable) {
+                return <div className={`sa-pick-row ${picked ? 'is-picked' : ''}`} key={item.id}>
+                  <span className="sa-check" aria-hidden="true">{picked ? <Check size={10} /> : null}</span>
+                  <button type="button" className={`sa-conv ${picked ? 'is-picked' : ''}`} aria-pressed={picked} title={`选中「${item.title}」`} onClick={() => togglePick('ticket', item.id)}>{body}</button>
+                </div>;
+              }
+              return <button type="button" key={item.id} className={`sa-conv ${active ? 'active' : ''}`} aria-current={active ? 'true' : undefined} title={item.kind === 'group' ? `${item.group?.agentIds.length || 0} 个 Agent 交叉验证` : executorNames[item.ticket?.executor || ''] || item.ticket?.executor} onClick={() => { setNavOpen(false); if (item.kind === 'group' && item.group) viewGroup(item.group); else if (item.ticket) viewTicket(item.ticket.id); }}>{body}</button>;
             })}
           </div>) : <p className="sa-conv-empty">{convQuery.trim() ? `没有匹配「${convQuery.trim()}」的对话。` : '还没有对话。在上方描述目标即可开始。'}</p>}
         </div>
       </section>
       </div>
+      {selectMode && (
+        <div className="sa-select-bar" role="region" aria-label="批量删除">
+          <span>已选 {pickedTotal} 条</span>
+          <button type="button" className="sa-select-cancel" onClick={exitSelect}>取消</button>
+          <button type="button" className="sa-select-delete" disabled={!pickedTotal || bulkBusy} onClick={() => setBulkConfirm(true)}><Trash2 size={12} />删除所选</button>
+        </div>
+      )}
       <div className="sa-sidebar-foot">
         {userMenuOpen && <div className="sa-usermenu" role="menu" aria-label="个人工作区">
           {navItems.map(item => <button type="button" key={item.id} role="menuitem" className={view === item.id ? 'active' : ''} onClick={() => { setView(item.id); setNavOpen(false); setUserMenuOpen(false); }}>
@@ -1600,6 +1665,16 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       <div className="sa-confirm">
         <p>删除后这条对话的历史消息也会一起移除。这一步无法撤销，确认继续？</p>
         <div className="sa-confirm-actions"><button type="button" className="sa-button" onClick={() => setChatToDelete(null)}>取消</button><button type="button" className="sa-button sa-danger" onClick={() => { const target = chatToDelete; setChatToDelete(null); void removeChat(target); }}>删除对话</button></div>
+      </div>
+    </Modal>}
+    {bulkConfirm && <Modal title={`删除选中的 ${pickedTotal} 条对话？`} subtitle="只移除软件里的记录，Agent 端的会话文件不会被删除。" close={() => setBulkConfirm(false)}>
+      <div className="sa-confirm">
+        <ul className="sa-confirm-list">
+          {pickedChats.length > 0 && <li>工作文件夹里的 <strong>{pickedChats.length}</strong> 条会话，连同它们的历史消息与本目录内的执行记录</li>}
+          {pickedTickets.length > 0 && <li><strong>{pickedTickets.length}</strong> 条独立对话，连同执行记录、报告与改动快照</li>}
+        </ul>
+        <p>这一步无法撤销，确认继续？</p>
+        <div className="sa-confirm-actions"><button type="button" className="sa-button" onClick={() => setBulkConfirm(false)}>取消</button><button type="button" className="sa-button sa-danger" disabled={bulkBusy} onClick={() => void removePicked()}>{bulkBusy ? '正在删除…' : `删除 ${pickedTotal} 条`}</button></div>
       </div>
     </Modal>}
     {toast && <Toast message={toast.text} error={toast.error} close={() => setToast(null)} />}
