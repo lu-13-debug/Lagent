@@ -15,8 +15,26 @@ const ACTIVITY_LIMIT = 60;
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.dataagent', 'data', '.venv', '__pycache__', 'coverage']);
 const WRITE_TOOLS = new Set(['write_file', 'replace_in_file', 'move_path', 'delete_path']);
 const READ_COMMAND = /^(git\s+(status|diff|log|show|branch)\b[^|;&<>]*|node\s+--check\s+\S+)$/i;
-// 纯查看类命令：只列、只看，不写不改。带管道/重定向/分号的一律不算（可能被用来夹带写操作）。
+// 纯查看类命令：只列、只看，不写不改。
 const SAFE_READ = /^(?:Get-ChildItem|Get-Content|Get-Item|Get-Location|Get-ChildItem|Test-Path|Resolve-Path|dir|ls|type|cat)\b[^;|&<>$]*$/i;
+// 管道后面接这些「只是整理输出」的 cmdlet 也算查看：`Get-Content x | Select -First 80`。
+// 只要有一段不在名单里（比如 ForEach-Object、Set-Content），仍然要问用户。
+const READ_CMDLETS = new Set([
+  'get-childitem', 'get-content', 'get-item', 'get-location', 'test-path', 'resolve-path',
+  'select-object', 'select-string', 'where-object', 'sort-object', 'measure-object', 'group-object',
+  'format-table', 'format-list', 'out-string', 'select', 'get-unique', 'dir', 'ls', 'type', 'cat'
+]);
+function isReadOnlyShell(command) {
+  const value = String(command || '').trim();
+  if (!value) return false;
+  if (/[;<>&$`]/.test(value)) return false;
+  const stages = value.split('|').map(part => part.trim()).filter(Boolean);
+  if (!stages.length) return false;
+  return stages.every(stage => {
+    const name = stage.split(/\s+/)[0].replace(/^\.\\/, '').toLowerCase();
+    return READ_CMDLETS.has(name);
+  });
+}
 // 三档权限，语义与 dsh 一致：仅查看 / 只在工作区内修改 / 完全权限。
 const PERMISSIONS = ['read', 'workspace', 'full'];
 const PERMISSION_LABELS = { read: '仅查看', workspace: '仅工作区内修改', full: '完全权限' };
@@ -325,7 +343,7 @@ function runCommand(guard, command, { approved = false, shell = '' } = {}) {
   const explicitShell = shell === 'powershell' ? 'powershell' : '';
   const readOnly = !explicitShell && READ_COMMAND.test(value);
   // 查看类命令走 PowerShell：Get-ChildItem 这类是 cmdlet，交给 cmd 会报"不是内部或外部命令"。
-  const safeRead = !explicitShell && !readOnly && SAFE_READ.test(value);
+  const safeRead = !explicitShell && !readOnly && (SAFE_READ.test(value) || isReadOnlyShell(value));
   if (!readOnly && !safeRead && !approved) throw new Error('这条命令不在只读白名单内：需要用户在弹窗里确认后才能执行');
   const options = { cwd: guard.base, timeout: readOnly || safeRead ? 15000 : 60000, encoding: 'buffer', windowsHide: true, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] };
   const unwrapped = explicitShell ? { flags: [], script: value } : unwrapPowerShell(value);
@@ -845,7 +863,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       // 模型爱把只读命令包一层 powershell -Command：剥出脚本本体再判断，否则 node --check 也要弹窗。
       const body = shell ? value : (unwrapPowerShell(value)?.script || value);
       // 只读的查看类命令（列目录/看文件/语法检查）不该每次都弹窗——用户已经抱怨过"点不完"。
-      const readable = READ_COMMAND.test(body) || SAFE_READ.test(body);
+      const readable = READ_COMMAND.test(body) || SAFE_READ.test(body) || isReadOnlyShell(body);
       if (readable) return runCommand(guard, value);
       if (permission === 'read') throw new Error(`当前是「${PERMISSION_LABELS.read}」模式，只能执行只读命令（查看目录/文件、git status/diff/log/show/branch、node --check）。`);
       if (permission === 'workspace') {

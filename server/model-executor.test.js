@@ -442,6 +442,28 @@ test('查看目录的命令不用逐次确认，直接执行', async t => {
   assert.match(observed, /退出码 0|目录/);
 });
 
+// 真实踩过的坑：模型常把「看文件前几行」写成 `Get-Content x | Select -First 5`，
+// 管道让它掉出只读白名单，于是一个纯查看动作也要用户点一次允许。
+test('管道只是整理输出时也不用逐次确认', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-cmd-pipe-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'notes.txt'), 'alpha\nbeta\ngamma\n');
+  const hub = fakeModelHub([
+    '{"tool":"run_command","args":{"command":"Get-Content notes.txt | Select-Object -First 2"}}',
+    '{"final":{"summary":"前两行是 alpha 和 beta","files":[]}}'
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '看文件前两行' }, { id: 'assign-cmd-pipe' }, {
+    executorInput: { prompt: '看文件前两行', workspace: dir, write: false }
+  });
+  const done = await settle(executor, 'assign-cmd-pipe');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(done.activity.some(item => item.kind === 'waiting'), false, '只读的管道命令不该弹确认');
+  const observed = done.activity.filter(item => item.kind === 'observation').map(item => `${item.text || ''} ${item.detail || ''}`).join('\n');
+  assert.match(observed, /alpha/);
+});
+
 // 真实踩过的坑：`cmd.exe /d /s /c "powershell -Command "..."` 会把内层引号吃掉，
 // PowerShell 只回显脚本、退出码还是 0 —— 命令看着成功，其实什么都没做。
 test('shell=powershell 的脚本带引号也能真正执行，不会被 cmd 吃掉', async t => {

@@ -350,7 +350,13 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   };
   const stepContext = (plan, upTo) => {
     const lines = [];
+    // 汇总类步骤要带上前面几步的产出，但执行器的输入有字节上限（模型 16KB），
+    // 所以「每一步」和「合计」都设上限，超出的部分明确标成截断。
+    const PER_STEP = 1200;
+    const TOTAL = 5000;
+    let used = 0;
     for (const step of plan.steps.slice(0, upTo)) {
+      if (used >= TOTAL) break;
       const ticket = db.get('ticket', step.ticketId);
       if (!ticket || ticket.status !== 'completed') continue;
       const reports = related('report', ticket.id);
@@ -365,9 +371,12 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         const file = path.join(planRunDir(project), String(ticket.planId), `${String(step.index + 1).padStart(2, '0')}-${ticket.executor}.md`);
         if (fs.existsSync(file)) body = fs.readFileSync(file, 'utf8').replace(/^# 第 \d+ 步 · .*\n+/, '').trim();
       } catch { body = ''; }
-      if (!body) body = summary.slice(0, 1500);
+      if (!body) body = summary.slice(0, 800);
       if (!body) continue;
-      lines.push(`### 第 ${step.index + 1} 步 · ${step.executorId}\n${body.slice(0, 4000)}`);
+      const room = Math.min(PER_STEP, TOTAL - used);
+      const chunk = body.length > room ? `${body.slice(0, room)}\n…（这一段的其余内容已省略）` : body;
+      used += chunk.length;
+      lines.push(`### 第 ${step.index + 1} 步 · ${step.executorId}\n${chunk}`);
     }
     return lines.length ? `【前序步骤材料 · 由 DataAgent 汇总，供你直接使用】\n${lines.join('\n\n')}\n\n` : '';
   };
@@ -963,9 +972,13 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       return true;
     } catch (error) {
       const ticket = db.get('ticket', ticketId);
+      const message = String(error?.message || '启动失败');
       if (ticket && ['queued', 'working'].includes(ticket.status)) {
-        const waiting = { ...ticket, status: 'waiting', attention: undefined, summary: `等待执行器空闲：${String(error?.message || '启动失败').slice(0, 80)}`, updatedAt: now() };
+        const waiting = { ...ticket, status: 'waiting', attention: undefined, summary: `等待执行器空闲：${message.slice(0, 80)}`, updatedAt: now() };
         write(waiting);
+      } else if (ticket?.status === 'blocked' && ticket.summary !== `这一步没能启动：${message.slice(0, 120)}`) {
+        // 启动时就失败了（比如输入超过执行器上限）：把原因写在票面上，别让它只留一句旧的「待确认」。
+        write({ ...ticket, summary: `这一步没能启动：${message.slice(0, 120)}`, updatedAt: now() });
       }
       return false;
     }
@@ -983,12 +996,23 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       for (const step of stored.steps) {
         const ticket = tickets[step.index];
         if (!ticket) continue;
-        const blockedRecovery = ticket.status === 'blocked' && (step.dependsOn || []).length > 0;
+        // 被阻塞的步骤只有在「依赖后来补齐了」时才值得再试一次。
+        // 早先这里对任何 blocked 步骤都重新推进，启动失败又落回 blocked，
+        // store 订阅再触发一轮 —— 一秒内重试十几次，直到撞上调用预算上限。
+        // 现在限制自动重试次数，并留一点冷却时间，把决定权交回用户。
+        const recoveries = Number(ticket.recoveries || 0);
+        const cooling = Date.now() - Date.parse(ticket.updatedAt || 0) < 4000;
+        const blockedRecovery = ticket.status === 'blocked'
+          && (step.dependsOn || []).length > 0
+          && recoveries < 2
+          && !cooling;
         if (ticket.status !== 'waiting' && !blockedRecovery) continue;
         const deps = (step.dependsOn || []).map(index => tickets[index]);
         const failedDep = deps.findIndex(dep => dep && ['failed', 'blocked', 'cancelled'].includes(dep.status));
         if (failedDep >= 0) {
-          const blocked = { ...ticket, status: 'blocked', attention: undefined, summary: `依赖步骤 ${(step.dependsOn[failedDep] ?? 0) + 1} 未完成`, updatedAt: now() };
+          const summary = `依赖步骤 ${(step.dependsOn[failedDep] ?? 0) + 1} 未完成`;
+          if (ticket.status === 'blocked' && ticket.summary === summary) continue;
+          const blocked = { ...ticket, status: 'blocked', attention: undefined, summary, updatedAt: now() };
           transaction.put('ticket', blocked); tickets[step.index] = blocked; changed = true;
           transaction.event('ticket', blocked);
           audit(planId, 'plan/block', ticket.executor, 'blocked');
@@ -1028,6 +1052,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           stage: target.requiresDataset === false ? 'approval' : 'dataset',
           summary: autoRun ? '自动计划执行中' : `计划第 ${step.index + 1}/${stored.steps.length} 步，依赖已满足，等待确认`,
           ...(autoRun ? { attention: undefined } : { attention: review(reviewQuestion(ticket.executor)) }),
+          ...(blockedRecovery ? { recoveries: recoveries + 1 } : {}),
           updatedAt: now()
         };
         transaction.put('ticket', ready); tickets[step.index] = ready; changed = true;
@@ -1802,8 +1827,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const task=active.get?.(assignment?.sessionId);
       const requested=selectedDatasetId(input?.datasetId);
       // 同一个动作重复点：approve 之外大多幂等，直接返回当前状态。
-      // 但「重试」必须真的再跑一次——上一次重试失败后用户再点，不能当成没事发生。
-      if(action!=='retry'&&ticket.lastAction===action&&!(action==='approve'&&ticket.status==='awaiting_review'))return publicTicket(ticket);
+      // 但「重试」要分清两种情形：还在跑的时候连点=没事发生；上一次已经失败/被挡住，再点必须真的重跑。
+      const retryable = ['failed', 'blocked', 'cancelled', 'waiting'].includes(ticket.status);
+      if (action !== 'retry' && ticket.lastAction === action && !(action === 'approve' && ticket.status === 'awaiting_review')) return publicTicket(ticket);
+      if (action === 'retry' && ticket.lastAction === 'retry' && !retryable) return publicTicket(ticket);
       assertWorkAction(ticket.status,action);
       if(requested)requireDataset(requested);
       if(action==='approve'&&task) {
