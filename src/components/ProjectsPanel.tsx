@@ -199,6 +199,17 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     finally { if (!quiet) setLoading(false); }
   };
   useEffect(() => { void loadProjects(); }, []);
+  // 服务端说「项目/对话/文件夹不存在」时，界面上的列表大概率已经过期（比如在别处删掉了）。
+  // 直接刷新一次列表，并把提示换成一句人话，免得用户以为是自己点错了。
+  const reportFailure = async (cause: unknown) => {
+    const message = (cause as Error)?.message || '操作失败';
+    if (/不存在|已经不在|已被删|被删掉/.test(message)) {
+      notify('这个工作文件夹或对话已经不在列表里了，已帮你刷新。', true);
+      await loadProjects(true);
+      return;
+    }
+    notify(message, true);
+  };
   const loadTeamworks = async (projectId: string | null = activeProjectId) => {
     if (!projectId) { setTeamworks([]); return; }
     try {
@@ -471,7 +482,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
           return;
         }
         setPromptAsk({ goal: text, source: refined.source, modelError: refined.modelError, options: refined.prompts });
-      } catch (cause) { notify((cause as Error).message, true); }
+      } catch (cause) { await reportFailure(cause); }
       finally { setBusy(''); }
       return;
     }
@@ -510,7 +521,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       setTickets(current => [...current.filter(item => item.id !== result.ticket.id), result.ticket]);
       await loadProjects(true);
       notify(chat.executorId === 'window' ? '已发送到该窗口的 Agent 会话。' : '已交给 Agent 开始执行，过程在右侧「执行详情」里。');
-    } catch (cause) { notify((cause as Error).message, true); }
+    } catch (cause) { await reportFailure(cause); }
     finally { setBusy(''); }
   };
   const toggleOrchestrate = () => {
@@ -537,7 +548,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       const result = await api.workApproveRun(run.id, decision);
       setRuns(current => current.map(item => item.id === result.run.id ? result.run : item));
       notify(decision === 'approve' ? '已批准，编排器开始分发执行。' : '已退回，这次运行不会执行。');
-    } catch (cause) { notify((cause as Error).message, true); }
+    } catch (cause) { await reportFailure(cause); }
     finally { setRunBusy(''); }
   };
   const cancelRun = async (run: WorkRun) => {

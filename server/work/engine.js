@@ -91,6 +91,15 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     }
     return rows.length;
   };
+  // 删掉文件夹或对话时，挂在它上面的编排记录也要一起清掉：
+  // 留着这些记录只会在界面上变成「点一下就报项目不存在」的僵尸卡片。
+  const purgeRuns = ({ projectId = '', chatIds = [] } = {}) => {
+    const owners = new Set(chatIds.filter(Boolean));
+    if (!projectId && !owners.size) return 0;
+    const rows = db.list('run').filter(run => (projectId && run.projectId === projectId) || owners.has(run.chatId));
+    for (const run of rows) db.delete('run', run.id);
+    return rows.length;
+  };
   // 浏览器「允许域名」以前只被存进策略、执行器从不读取，等于摆设；这里真正拦下来。
   const enforceBrowserHost = (id, executorInput, hosts) => {
     if (id !== 'browser') return;
@@ -1207,8 +1216,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     importProject(input){return projects.importProject(input);},
     deleteProject(id){
       const project=projects.getProject(id);
-      const removed=purgeChatTickets(projects.listChats(project.id).map(chat=>chat.id));
-      return {...projects.deleteProject(id),removed};
+      const chatIds=projects.listChats(project.id).map(chat=>chat.id);
+      const removed=purgeChatTickets(chatIds);
+      const runs=purgeRuns({projectId:project.id,chatIds});
+      return {...projects.deleteProject(id),removed,runs};
     },
     renameProject(id,input){return projects.renameProject(id,input);},
     listDirectory(input){return projects.listDirectory(input);},
@@ -1238,7 +1249,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     },
     deleteProjectChat(id){
       const removed=purgeChatTickets([id]);
-      return {...projects.deleteChat(id),removed};
+      const runs=purgeRuns({chatIds:[id]});
+      return {...projects.deleteChat(id),removed,runs};
     },
     // 对话页里删除一条自己发的消息：连同它的执行记录、报告与快照一起清掉。
     // 属于多步计划的一条消息会连整个计划一起删——留下半个计划比删掉更难解释。

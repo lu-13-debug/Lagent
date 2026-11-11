@@ -584,3 +584,40 @@ test('建会话时可以一次挑好协作 Agent，之后改名单也存得住',
   const plain = engine.createProjectChat(imported.project.id, { executorId: 'model' });
   assert.equal(plain.chat.collaborators, undefined, '不传就不写这个字段');
 });
+
+test('删掉文件夹或对话时，挂在它上面的编排记录一起清掉', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'dataagent-run-purge-'));
+  const store = new Store(root);
+  const projectDir = join(root, 'purge-project');
+  mkdirSync(projectDir, { recursive: true });
+  const home = makeHome(root);
+  const engine = createWorkEngine(store, createExecutorRegistry([modelExecutor({
+    store,
+    cwd: root,
+    context: () => ({ settings: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' }, key: 'k', maxTokens: 200, timeoutMs: 2000 }),
+    fetchImpl: async () => ({ ok: true, status: 200, headers: { get: () => null }, async json() { return { choices: [{ message: { content: '{"final":{"summary":"ok","done":true}}' } }] }; }, async text() { return '{}'; } })
+  })]), () => {}, {
+    policy: { allowedExecutors: ['model'], requireApproval: false, permission: 'workspace' },
+    env: { ...process.env, DATAAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    home
+  });
+  t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const imported = engine.importProject({ path: projectDir });
+  const { chat } = engine.createProjectChat(imported.project.id, { executorId: 'model' });
+  const stamp = new Date().toISOString();
+  // 编排记录由编排器写入，这里直接落两条，模拟「项目被删掉但运行还挂着」。
+  store.put('work-run', { id: 'run-keep', projectId: imported.project.id, chatId: 'other-chat', status: 'cancelled', createdAt: stamp, updatedAt: stamp, goal: '保留', steps: [], board: [] });
+  store.put('work-run', { id: 'run-gone', projectId: imported.project.id, chatId: chat.id, status: 'awaiting_approval', createdAt: stamp, updatedAt: stamp, goal: '要清掉', steps: [], board: [] });
+
+  const removedChat = engine.deleteProjectChat(chat.id);
+  assert.equal(removedChat.runs, 1, '删对话要带走挂在这条对话上的运行');
+  assert.equal(store.get('work-run', 'run-gone') ?? null, null);
+  assert.ok(store.get('work-run', 'run-keep'), '别的对话的运行不能误删');
+
+  store.put('work-run', { id: 'run-gone-2', projectId: imported.project.id, chatId: 'whatever', status: 'drafting', createdAt: stamp, updatedAt: stamp, goal: '也要清掉', steps: [], board: [] });
+  const removedProject = engine.deleteProject(imported.project.id);
+  assert.equal(removedProject.runs, 2, '删文件夹要把这个项目的运行一起带走');
+  assert.equal(store.get('work-run', 'run-gone-2') ?? null, null);
+  assert.equal(store.get('work-run', 'run-keep') ?? null, null);
+});

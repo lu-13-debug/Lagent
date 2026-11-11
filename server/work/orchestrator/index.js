@@ -100,8 +100,17 @@ export function createOrchestrator({
   // 这样审批、改动快照、项目记忆都还能按对话追溯。
   // writable 要跟着步骤走：只读步骤别建可写对话，否则工单摘要会说「只读」而实际能写。
   function chatFor(run, executorId, writable = false) {
+    // 没绑定文件夹的编排（首页发起）不需要子对话，工单直接挂在主对话上。
     if (!run.projectId) return null;
-    const project = engine.getProject(run.projectId);
+    // 项目可能在建好计划之后被删掉（清理临时项目时就会这样），这里翻成一句人话，
+    // 而不是把「项目不存在」这种内部错误直接甩给用户。
+    let project = null;
+    try {
+      project = engine.getProject(run.projectId);
+    } catch {
+      throw new Error('这条编排绑定的工作文件夹已经被删掉了，请重新导入文件夹后再开始。');
+    }
+    if (!project) throw new Error('这条编排绑定的工作文件夹已经被删掉了，请重新导入文件夹后再开始。');
     const chats = project.chats || [];
     const host = chats.find(chat => chat.id === run.chatId) || null;
     const sameParent = chat => (chat.parentChatId || null) === (host?.id || null);
