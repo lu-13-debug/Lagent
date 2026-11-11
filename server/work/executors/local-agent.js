@@ -143,14 +143,25 @@ export const LOCAL_AGENT_PROFILES = Object.freeze({
 
 export const LOCAL_AGENT_IDS = Object.freeze(Object.keys(LOCAL_AGENT_PROFILES));
 
+// CLI 自带 provider 配置时常常要某个 API Key 环境变量。我们默认不把密钥透传给
+// 子进程（见 cli.js 的 CLI_ENV_PASSTHROUGH），于是它只会报一句「Missing environment
+// variable: X」。这里补一句人话，否则用户看不懂该去改什么。
+function envHint(text) {
+  const match = /Missing environment variable:?\s*`?([A-Z][A-Z0-9_]*)`?/i.exec(String(text || ''));
+  if (!match) return '';
+  const name = match[1].toUpperCase();
+  return `（${name} 没有被传给 CLI：启动服务前先在环境里设置它，或用 DATAAGENT_CLI_ENV_PASSTHROUGH=${name} 启动一次。）`;
+}
+
 function errorText(stdout, stderr, exitCode) {
   // 只有非零退出才算失败：DeepSeek Harness 这类 CLI 会把推理过程写到 stderr，
   // stdout 里才是最终答复，按 stderr 判失败会把成功当成失败。
   if (exitCode === 0) return '';
   const stderrText = typeof stderr === 'string' ? stderr.trim() : '';
-  if (stderrText) return sanitizeText(stderrText, MAX_ERROR);
+  if (stderrText) return sanitizeText(stderrText + envHint(stderrText), MAX_ERROR);
   const stdoutText = typeof stdout === 'string' ? stdout.trim() : '';
-  return sanitizeText(stdoutText.slice(-MAX_ERROR) || `CLI 退出码 ${exitCode}`, MAX_ERROR);
+  const text = stdoutText.slice(-MAX_ERROR) || `CLI 退出码 ${exitCode}`;
+  return sanitizeText(text + envHint(text), MAX_ERROR);
 }
 
 /**

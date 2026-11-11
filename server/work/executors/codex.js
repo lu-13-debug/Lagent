@@ -80,7 +80,13 @@ export function codexExecutor({
   const resolvedBinary = binary || findCodexBinary(environment);
   const buildArgs = (input, workspace) => {
     const write = input.write === true;
-    const prompt = write ? writablePrompt(input) : readOnlyPrompt(input);
+    // Windows 上 codex 的 apply_patch 是个 .bat 转发的，多行补丁经 cmd/PowerShell 转发时
+    // 换行与引号会被吃掉，于是出现「Failed to write file …」这种假失败。明确让它改用
+    // 直接写文件的方式，能省掉好几轮试错（实测同一任务从 14 分钟失败变成一次写成）。
+    const windowsNote = process.platform === 'win32'
+      ? '\n\n（Windows 环境：写多行文件不要用 apply_patch —— 这里的补丁会被 shell 的引号规则吃掉而写入失败。请直接用 shell 命令写文件，例如 powershell -NoProfile -Command "Set-Content -LiteralPath <路径> -Value <内容> -Encoding utf8"。）'
+      : '';
+    const prompt = (write ? writablePrompt(input) : readOnlyPrompt(input)) + windowsNote;
     // 项目目录不一定是 git 仓库（例如 D:\test），codex 默认会拒绝非受信目录并直接退出；
     // 写入范围已经由本软件的审批闸门与 sandbox 参数限制，这里放开仓库检查。
     const modelArgs = input.model ? ['-m', input.model] : [];

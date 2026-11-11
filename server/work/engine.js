@@ -1784,8 +1784,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       if(ticket.planId){
         const plan=db.get('plan',ticket.planId);
         if(!plan)throw workError('计划不存在',404);
-        if(plan.status!=='active'&&!(action==='retry'&&plan.status==='failed'))throw workError('计划已结束',409);
-        if(ticket.status==='waiting'&&action!=='resume')throw workError('步骤依赖尚未满足',409);
+        if(plan.status!=='active'&&!(['retry','skip'].includes(action)&&plan.status==='failed'))throw workError('计划已结束',409);
+        if(ticket.status==='waiting'&&!['resume','skip'].includes(action))throw workError('步骤依赖尚未满足',409);
         if(ticket.status==='waiting'&&action==='resume'){
           const deps=plan.steps[ticket.planStep]?.dependsOn||[];
           if(!deps.every(index=>db.get('ticket',plan.steps[index]?.ticketId)?.status==='completed'))throw workError('步骤依赖尚未满足',409);
@@ -1801,7 +1801,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       if(['approve','retry'].includes(action))guard(activeId,id,action);
       const task=active.get?.(assignment?.sessionId);
       const requested=selectedDatasetId(input?.datasetId);
-      if(ticket.lastAction===action&&!(action==='approve'&&ticket.status==='awaiting_review'))return publicTicket(ticket);
+      // 同一个动作重复点：approve 之外大多幂等，直接返回当前状态。
+      // 但「重试」必须真的再跑一次——上一次重试失败后用户再点，不能当成没事发生。
+      if(action!=='retry'&&ticket.lastAction===action&&!(action==='approve'&&ticket.status==='awaiting_review'))return publicTicket(ticket);
       assertWorkAction(ticket.status,action);
       if(requested)requireDataset(requested);
       if(action==='approve'&&task) {
@@ -1809,6 +1811,18 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         if(requested&&requested!==frozen)throw workError('数据集已选定，不能切换');
       }
       const next={...ticket,lastAction:action,updatedAt:now()};
+      // 跳过这一步：计划里某一步卡死（外部 CLI 装不上、环境缺变量）时，不能把整条
+      // 计划永远堵在这里。跳过等于人工判定「这步不要了」，计划继续往下走。
+      if(action==='skip'){
+        if(!ticket.planId)throw workError('只有计划里的步骤可以跳过',400);
+        const reason=typeof input?.reason==='string'&&input.reason.trim()?input.reason.trim().slice(0,200):'已跳过这一步';
+        const skipped={...next,status:'completed',attention:undefined,summary:reason};
+        const run=assignment?{...assignment,status:'completed',endedAt:now()}:null;
+        const result=write(skipped,...(run?[['assignment',run],['report',makeReport(skipped,run,'skipped',reason)]]:[]));
+        revivePlan(ticket.planId,ticket.planStep);
+        advancePlan(ticket.planId);
+        return result;
+      }
       if(action==='retry'&&ticket.planId)revivePlan(ticket.planId,ticket.planStep);
       if((action==='approve'&&!task)||action==='retry')return start(next,input);
       if(action==='approve'){

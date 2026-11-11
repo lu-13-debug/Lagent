@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AppWindow, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, ShieldCheck, Sparkles, Trash2, Users, X } from 'lucide-react';
+import { AppWindow, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, ShieldCheck, SkipForward, Sparkles, Trash2, Users, X } from 'lucide-react';
 import { api } from '../api';
 import { Modal } from './ui';
 import { ChatModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
@@ -22,6 +22,8 @@ type Props = {
   onBackToProjects?: () => void;
   // 对话页里直接确认待审批的工单，不用先打开详情弹窗。
   onApprove?: (ticketId: string) => void;
+  // 计划里某一步彻底修不好时跳过它，好让后面的步骤继续跑。
+  onSkip?: (ticketId: string) => void;
   // 消息被删除后通知外层：右侧「执行详情」是主壳自己的一份快照，不刷新会留着已删的卡片。
   onTicketsChanged?: () => void;
 };
@@ -92,7 +94,7 @@ const RUN_STEP_LABELS: Record<string, string> = {
   waiting: '等待'
 };
 
-export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onExitChat, onBackToProjects, onApprove, onTicketsChanged }: Props) {
+export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onExitChat, onBackToProjects, onApprove, onSkip, onTicketsChanged }: Props) {
   const chatMode = mode === 'chat';
   const projectMode = mode === 'project';
   const [projects, setProjects] = useState<WorkProject[]>([]);
@@ -962,6 +964,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
               <div className="pj-bubble-actions">
                 <button type="button" className="pj-link" aria-expanded={open} onClick={() => void toggleTrace(ticket)}>{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{open ? '收起过程' : '展开思考过程'}</button>
                 {ticket.status === 'awaiting_review' && onApprove && <button type="button" className="pj-btn pj-primary pj-small" onClick={() => onApprove(ticket.id)}><Check size={13} />确认执行</button>}
+                {ticket.planId && ['failed', 'blocked'].includes(ticket.status) && onSkip && <button type="button" className="pj-btn pj-small" onClick={() => onSkip(ticket.id)}><SkipForward size={13} />跳过这步</button>}
                 <button type="button" className="pj-link" onClick={() => onOpenTicket(ticket.id)}>完整详情</button>
               </div>
               {open && <div className="pj-trace">

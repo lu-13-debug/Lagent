@@ -1114,6 +1114,24 @@ test('P4 自动计划创建后直接启动，并在完成后自动启动下一�
   await waitFor(() => f.engine.getPlan(plan.id).status === 'completed', '自动计划未完成');
 });
 
+test('计划里某一步失败后可以跳过，后面的步骤接着跑', async t => {
+  const f = fixture(t);
+  const plan = f.engine.plan({ goal: '跳过失败步骤', autoRun: true, steps: [
+    { executorId: 'analysis', text: '会失败的第一步', datasetId: 'dataset-one' },
+    { executorId: 'analysis', text: '后面的第二步', datasetId: 'dataset-one', dependsOn: [0] }
+  ] });
+  const first = f.engine.detail(plan.steps[0].ticketId);
+  const task = f.store.get('task', first.assignments[0].sessionId);
+  f.store.put('task', { ...task, status: 'failed', error: '外部 CLI 起不来' });
+  await waitFor(() => f.engine.detail(plan.steps[0].ticketId).ticket.status === 'failed', '第一步没有失败');
+
+  const skipped = f.engine.action(plan.steps[0].ticketId, 'skip', { reason: '外部 CLI 环境缺变量，先跳过' });
+  assert.equal(skipped.status, 'completed');
+  assert.match(skipped.summary, /跳过/);
+  await waitFor(() => f.engine.detail(plan.steps[1].ticketId).ticket.status === 'working', '跳过之后第二步没启动');
+  assert.equal(f.engine.getPlan(plan.id).status, 'active');
+});
+
 test('默认策略下计划一路执行，不需要逐步点批准', t => {
   const f = fixture(t);
   f.engine.updatePolicy({ requireApproval: false });

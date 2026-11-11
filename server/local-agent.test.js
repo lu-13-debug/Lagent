@@ -88,6 +88,8 @@ test('L2 纯文本输出把 stdout 当结论，非零退出同时给出错误', 
   const failed = parseTextOutput({ stdout: '', stderr: 'Missing environment variable: OPENCODE_API_KEY.', exitCode: 1 });
   assert.equal(failed.summary, '');
   assert.match(failed.error, /OPENCODE_API_KEY/);
+  // 只报一句「缺少环境变量」用户不知道要改什么，必须补上该怎么打开透传。
+  assert.match(failed.error, /DATAAGENT_CLI_ENV_PASSTHROUGH=OPENCODE_API_KEY/);
 
   const inlineError = parseTextOutput({
     stdout: '{"type":"error","error":{"data":{"message":"This API key has expired."}}}',

@@ -1,5 +1,5 @@
 export type WorkTicketStatus = 'queued' | 'working' | 'awaiting_review' | 'blocked' | 'failed' | 'waiting' | 'completed' | 'cancelled';
-export type WorkAction = 'approve' | 'reject' | 'stop' | 'retry' | 'resume' | 'handoff';
+export type WorkAction = 'approve' | 'reject' | 'stop' | 'retry' | 'resume' | 'skip' | 'handoff';
 export interface WorkAttentionOption { id: string; label: string; action: WorkAction }
 export interface WorkAttention { question: string; options: WorkAttentionOption[]; createdAt: string }
 export interface WorkTicket {
