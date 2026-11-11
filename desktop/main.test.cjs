@@ -62,7 +62,7 @@ function mainHarness({ savedState, displays = [{ workArea: { x: 0, y: 0, width: 
     shell: { openExternal: async url => { externals.push(url); if (failExternal) throw new Error('private external error'); } },
   };
   const context = vm.createContext({
-    require: name => name === 'electron' ? electron : name === './runtime.cjs' ? { ...runtime, probeCloudServer: async value => value } : name === 'node:fs' ? { mkdirSync() {}, appendFileSync() {}, readFileSync() { if (failRead || persistedState === undefined) throw new Error('read failed'); return persistedState; }, writeFileSync(file, value) { if (failWrite) throw new Error('write failed'); if (file.endsWith('window-state.json')) persistedState = value; } } : require(name),
+    require: name => name === 'electron' ? electron : name === './runtime.cjs' ? { ...runtime, probeCloudServer: async value => value } : name === 'node:fs' ? { mkdirSync() {}, appendFileSync() {}, existsSync() { return false; }, renameSync() {}, readFileSync() { if (failRead || persistedState === undefined) throw new Error('read failed'); return persistedState; }, writeFileSync(file, value) { if (failWrite) throw new Error('write failed'); if (file.endsWith('window-state.json')) persistedState = value; } } : require(name),
     __dirname, process: { argv: [], env: {}, versions: {} }, console, setTimeout, setImmediate, clearTimeout, testUpdater,
   });
   vm.runInContext(readFileSync(path.join(__dirname, 'main.cjs'), 'utf8'), context, { filename: 'main.cjs' });

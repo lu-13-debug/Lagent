@@ -13,7 +13,7 @@ const { createAppearancePolicy } = require('./appearance.cjs');
 const { downloadFilters } = require('./downloads.cjs');
 const { createUpdater } = require('./updater.cjs');
 const { runUpdate } = require('./update-ui.cjs');
-const { mkdirSync, appendFileSync, readFileSync, writeFileSync } = require('node:fs');
+const { mkdirSync, appendFileSync, readFileSync, writeFileSync, existsSync, renameSync } = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { desktopPaths, allowedNavigation, safeExternalUrl, buildSupportDiagnostic, loadServerUrl, isConnectionSender, probeCloudServer, saveCloudConnection } = require('./runtime.cjs');
 
@@ -22,6 +22,16 @@ app.setAppUserModelId('com.lagent.desktop');
 const smoke = process.argv.includes('--smoke-test');
 const customData = process.argv.find(arg => arg.startsWith('--lagent-user-data='));
 if (customData) app.setPath('userData', path.resolve(customData.slice('--lagent-user-data='.length)));
+// 路径适配：装过旧版本的机器上，数据目录还叫 DataAgent。
+// 新目录不存在、旧目录存在时整体搬一次，免得升级后连不上原来的服务器、丢掉窗口设置。
+if (!customData) {
+  const appData = app.getPath('appData');
+  const legacyData = path.join(appData, 'DataAgent');
+  const currentData = path.join(appData, 'Lagent');
+  if (!existsSync(currentData) && existsSync(legacyData)) {
+    try { renameSync(legacyData, currentData); } catch { /* 搬不动就按新目录继续，用户重连一次即可 */ }
+  }
+}
 const paths = desktopPaths(app.getPath('userData'));
 const connectionFile = path.join(app.getPath('userData'), 'connection.json');
 const traySettingsFile = path.join(app.getPath('userData'), 'desktop-settings.json');
@@ -140,7 +150,7 @@ function trackWindowState(win, restored) {
 function makeWindow(local) {
   const state = local ? null : restoreWindowState();
   const win = new BrowserWindow({
-    title: local ? '连接 Lagent 服务' : 'Lagent · 数据分析工作台',
+    title: local ? '连接 Lagent 服务' : 'Lagent · Agent 工作台',
     width: local ? 760 : 1500, height: local ? 760 : 960, minWidth: local ? 520 : 1000, minHeight: local ? 620 : 700,
     ...(state ? { ...state.bounds, minWidth: Math.min(1000, state.bounds.width), minHeight: Math.min(700, state.bounds.height) } : {}),
     backgroundColor: local ? '#f6f8fb' : '#0d1110', show: false, autoHideMenuBar: true, icon: path.join(__dirname, '..', 'build', 'icon.png'),
