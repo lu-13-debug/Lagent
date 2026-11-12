@@ -61,6 +61,35 @@ async function probeCloudServer(value, fetchImpl = fetch) {
   if (runtime?.mode !== 'cloud' || runtime.authRequired !== true || runtime.serviceName !== 'Lagent') throw new Error('目标不是 Lagent 云端账号服务，请确认服务地址。');
   return origin;
 }
+
+function isLocalServerUrl(value) {
+  try {
+    const origin = normalizeServerUrl(value);
+    const host = new URL(origin).hostname.toLowerCase();
+    return ['localhost', '127.0.0.1', '[::1]'].includes(host);
+  } catch { return false; }
+}
+
+/** 本机服务连接：接受 local 或 cloud 模式，只允许 localhost / 127.0.0.1。 */
+async function probeLocalServer(value, fetchImpl = fetch) {
+  const origin = normalizeServerUrl(value);
+  if (!isLocalServerUrl(origin)) throw new Error('本机连接只支持 localhost / 127.0.0.1。');
+  const response = await fetchImpl(origin + '/api/runtime', { redirect: 'error', credentials: 'omit', signal: AbortSignal.timeout(10000) });
+  if (!response.ok) throw new Error(`本机服务连接失败（HTTP ${response.status}），请确认服务已启动。`);
+  const runtime = await response.json();
+  if (runtime?.serviceName !== 'Lagent') throw new Error('目标不是 Lagent 服务，请确认服务地址。');
+  if (!['local', 'cloud'].includes(runtime.mode)) throw new Error('目标不是可用的 Lagent 服务。');
+  return { origin, mode: runtime.mode };
+}
+
+async function saveLocalConnection(file, value, fetchImpl = fetch) {
+  const info = await probeLocalServer(value, fetchImpl);
+  await mkdir(path.dirname(file), { recursive: true });
+  const temporary = file + '.tmp';
+  await writeFile(temporary, JSON.stringify({ serverUrl: info.origin }, null, 2), { encoding: 'utf8', mode: 0o600 });
+  await rename(temporary, file);
+  return info.origin;
+}
 async function saveCloudConnection(file, value, fetchImpl = fetch) {
   const serverUrl = await probeCloudServer(value, fetchImpl);
   await mkdir(path.dirname(file), { recursive: true });
@@ -69,4 +98,4 @@ async function saveCloudConnection(file, value, fetchImpl = fetch) {
   await rename(temporary, file);
   return serverUrl;
 }
-module.exports = { desktopPaths, allowedNavigation, safeExternalUrl, normalizeServerUrl, buildSupportDiagnostic, resolveServerUrl, loadServerUrl, isConnectionSender, probeCloudServer, saveCloudConnection };
+module.exports = { desktopPaths, allowedNavigation, safeExternalUrl, normalizeServerUrl, buildSupportDiagnostic, resolveServerUrl, loadServerUrl, isConnectionSender, probeCloudServer, saveCloudConnection, isLocalServerUrl, probeLocalServer, saveLocalConnection };

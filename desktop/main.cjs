@@ -15,7 +15,7 @@ const { createUpdater } = require('./updater.cjs');
 const { runUpdate } = require('./update-ui.cjs');
 const { mkdirSync, appendFileSync, readFileSync, writeFileSync, existsSync, renameSync } = require('node:fs');
 const { pathToFileURL } = require('node:url');
-const { desktopPaths, allowedNavigation, safeExternalUrl, buildSupportDiagnostic, loadServerUrl, isConnectionSender, probeCloudServer, saveCloudConnection } = require('./runtime.cjs');
+const { desktopPaths, allowedNavigation, safeExternalUrl, buildSupportDiagnostic, loadServerUrl, isConnectionSender, probeCloudServer, saveCloudConnection, isLocalServerUrl, probeLocalServer, saveLocalConnection } = require('./runtime.cjs');
 
 app.setName('Lagent');
 app.setAppUserModelId('com.lagent.desktop');
@@ -59,7 +59,7 @@ async function start() {
     if (switching) return { ok: false, error: '正在连接，请稍候。' };
     switching = true;
     try {
-      const target = await saveCloudConnection(connectionFile, value);
+      const target = isLocalServerUrl(value) ? await saveLocalConnection(connectionFile, value) : await saveCloudConnection(connectionFile, value);
       setImmediate(() => connectToServer(target).catch(fail).finally(() => { switching = false; }));
       return { ok: true };
     } catch (error) { switching = false; return { ok: false, error: friendlyError(error) }; }
@@ -202,7 +202,11 @@ async function showConnection({ serverUrl = lastServerUrl, error = '' } = {}) {
 async function connectToServer(target) {
   lastServerUrl = target;
   await clearCloudSession();
-  try { await probeCloudServer(target); }
+  let serverMode = 'cloud';
+  try {
+    if (isLocalServerUrl(target)) serverMode = (await probeLocalServer(target)).mode;
+    else await probeCloudServer(target);
+  }
   catch (error) { if (smoke) throw error; await showConnection({ serverUrl: target, error: friendlyError(error) }); return; }
   cloudOrigin = target;
   const remote = makeWindow(false);
@@ -218,8 +222,8 @@ async function connectToServer(target) {
   appearanceWindow = null;
   if (!smoke) remote.show();
   if (previous && previous !== remote && !previous.isDestroyed()) previous.destroy();
-  log('已连接云端账号工作台。');
-  if (smoke) await smokeTest(remote, target);
+  log('已连接 Lagent 服务。');
+  if (smoke) await smokeTest(remote, target, serverMode);
 }
 async function switchServer() {
   if (switching) return;
@@ -279,20 +283,31 @@ async function checkForUpdates() {
     await runUpdate({ updater, show, open: url => shell.openExternal(url), status: label => { const item = Menu.getApplicationMenu()?.getMenuItemById('check-updates'); if (item) { item.label = label; item.enabled = label === '检查更新…'; } } });
   } finally { updating = false; }
 }
-async function smokeTest(remote, origin) {
+async function smokeTest(remote, origin, mode = 'cloud') {
   const deadline = Date.now() + 25000;
-  let loginPage = false;
-  while (Date.now() < deadline) {
-    loginPage = await remote.webContents.executeJavaScript("Boolean(document.querySelector('input[type=password]'))");
-    if (loginPage) break;
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
   const nodeIsolated = await remote.webContents.executeJavaScript("typeof window.require === 'undefined' && typeof window.process === 'undefined' && typeof window.lagentConnection === 'undefined'");
-  const anonymousStatus = await remote.webContents.executeJavaScript("fetch('/api/bootstrap').then(response => response.status)");
-  if (!loginPage || !nodeIsolated || anonymousStatus !== 401) throw new Error('打包验收失败：账号登录页、未登录保护或远程页面隔离异常。');
-  const result = { ok: true, mode: 'cloud', appVersion: app.getVersion(), electron: process.versions.electron, node: process.versions.node, serverUrl: origin, loginPage, nodeIsolated, anonymousStatus, packaged: app.isPackaged };
+  let loginPage = false;
+  let appReady = false;
+  if (mode === 'cloud') {
+    while (Date.now() < deadline) {
+      loginPage = await remote.webContents.executeJavaScript("Boolean(document.querySelector('input[type=password]'))");
+      if (loginPage) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  } else {
+    while (Date.now() < deadline) {
+      appReady = await remote.webContents.executeJavaScript("Boolean(document.querySelector('.sa-shell, .app-shell, #root > *'))");
+      if (appReady) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+  const bootstrapStatus = await remote.webContents.executeJavaScript("fetch('/api/bootstrap').then(response => response.status)");
+  if (!nodeIsolated) throw new Error('打包验收失败：远程页面隔离异常。');
+  if (mode === 'cloud' && (!loginPage || bootstrapStatus !== 401)) throw new Error('打包验收失败：账号登录页或未登录保护异常。');
+  if (mode === 'local' && (!appReady || bootstrapStatus !== 200)) throw new Error('打包验收失败：本机工作台未加载或接口不可用。');
+  const result = { ok: true, mode, appVersion: app.getVersion(), electron: process.versions.electron, node: process.versions.node, serverUrl: origin, loginPage, appReady, bootstrapStatus, nodeIsolated, packaged: app.isPackaged };
   writeFileSync(path.join(app.getPath('userData'), 'desktop-smoke-result.json'), JSON.stringify(result, null, 2));
-  log('云端桌面启动验收通过。'); app.quit();
+  log(mode === 'local' ? '本机桌面启动验收通过。' : '云端桌面启动验收通过。'); app.quit();
 }
 function friendlyError(error) {
   if (error.name === 'TimeoutError' || error.name === 'AbortError') return '服务连接超时，请检查地址和网络后重试。';

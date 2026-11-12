@@ -2,7 +2,7 @@
 
 面向个人与小团队的 **多 Agent 指挥台**：连接 Claude Code、Codex、DeepSeek Harness 等本机 Agent，接收一个项目和任务后拆解成步骤，把任务要点分派给不同 Agent 执行，并把每次修改沉淀为项目档案，让任何 Agent 只读这一处就能了解「项目改了什么、接下来做什么」。
 
-Windows 桌面客户端连接可部署的云端账号服务，用户注册登录后使用自己的项目、对话与审批记录。
+Windows 桌面客户端既可连接可部署的云端账号服务，也可连接本机服务 `http://127.0.0.1:3001`；连接云端时注册登录后使用自己的项目、对话与审批记录，连接本机时直接使用本地工作台。
 
 当前账号版：**1.1.0**。源码：[lu-13-debug/Lagent](https://github.com/lu-13-debug/Lagent)。1.0.0 为原本地单用户版，发布历史保留。
 
@@ -28,7 +28,7 @@ npm.cmd run cloud
 
 ## Windows 桌面版
 
-从 [发布页](https://github.com/lu-13-debug/Lagent/releases) 下载账号版 `Lagent-Setup-1.1.0-x64.exe`，或从源码构建到 `release/`。支持 Windows 10/11 的 x64 系统；双击安装，可选择目录，安装后从桌面或开始菜单打开 **Lagent**。桌面版内置运行时，无需安装 Node.js。
+从 [发布页](https://github.com/lu-13-debug/Lagent/releases) 下载账号版 `Lagent-Setup-1.1.0-x64.exe`，或从源码构建到 `release/`。支持 Windows 10/11 的 x64 系统；双击安装，可选择目录，安装后从桌面或开始菜单打开 **Lagent**。桌面版内置运行时，无需安装 Node.js。它既能连接云端账号服务，也能连接本机 `http://127.0.0.1:3001`（需先启动本机服务，或在连接页填入该地址）。
 
 首次打开连接管理员提供的 HTTPS 服务地址，随后注册或登录。可在打包前通过 `build/cloud-config.json` 预置服务地址。云端工作台需要联网，菜单支持切换服务并清理原服务会话。旧版 `%APPDATA%\Lagent\storage` 中的本地数据保留，不会自动归到任何云端账号。
 
@@ -40,7 +40,7 @@ npm.cmd run desktop:dev
 npm.cmd run desktop:build
 ```
 
-`desktop:build` 生成完整 NSIS 安装包，安装本身不需要另行下载应用资源；账号、数据分析和模型调用需要连接云端服务。当前安装包未配置商业代码签名。
+`desktop:build` 生成完整 NSIS 安装包，安装本身不需要另行下载应用资源；连接云端服务时使用账号，连接本机服务（`http://127.0.0.1:3001`）时直接进入本地工作台。当前安装包未配置商业代码签名。生成安装包后可用 `powershell -ExecutionPolicy Bypass -File scripts/create-desktop-shortcut.ps1` 创建带「自动启动本机服务」的桌面快捷方式。
 
 ## 原单用户本地入口（开发与离线计算）
 
