@@ -1,0 +1,71 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Store } from './store.js';
+import { createWorkEngine } from './work/engine.js';
+import { createExecutorRegistry } from './work/executors/index.js';
+import { recordTicketUsage, summarizeUsage, checkTokenBudget } from './work/usage.js';
+
+test('工单执行后记录用量，可按项目/执行器/天汇总', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-usage-'));
+  const store = new Store(dir);
+  recordTicketUsage(store, { ticket: { id: 't1' }, assignment: { executor: 'claude-code' }, task: { artifacts: { cli: { usage: { input_tokens: 100, output_tokens: 50, total_cost_usd: 0.01 } } } }, executorId: 'claude-code', projectId: 'p1' });
+  recordTicketUsage(store, { ticket: { id: 't2' }, assignment: { executor: 'codex' }, task: { artifacts: { cli: { usage: { input_tokens: 200, output_tokens: 100 } } } }, executorId: 'codex', projectId: 'p1' });
+  recordTicketUsage(store, { ticket: { id: 't3' }, assignment: { executor: 'terminal' }, task: { artifacts: { terminal: { command: 'pwd' } } }, executorId: 'terminal', projectId: 'p2' });
+
+  const all = summarizeUsage(store, { days: 'all' });
+  assert.equal(all.totals.calls, 3);
+  assert.equal(all.totals.totalTokens, 450);
+  assert.equal(all.byExecutor.length, 3);
+  const byProject = summarizeUsage(store, { projectId: 'p1', days: 'all' });
+  assert.equal(byProject.totals.calls, 2);
+  assert.equal(byProject.byExecutor.find(r => r.executorId === 'claude-code')?.costEstimate, 0.01);
+
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('Token 预算硬闸在执行前拦截', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-usage-budget-'));
+  const store = new Store(dir);
+  recordTicketUsage(store, { ticket: { id: 't1' }, assignment: { executor: 'model' }, task: { report: { aiUsage: { inputTokens: 900, outputTokens: 100, totalTokens: 1000 } } }, executorId: 'model', projectId: 'p1' });
+  const ok = checkTokenBudget(store, 't1', 2000);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.used, 1000);
+  const blocked = checkTokenBudget(store, 't1', 1000);
+  assert.equal(blocked.ok, false);
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('引擎在执行时检查 token 预算并记录用量', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-engine-usage-'));
+  const store = new Store(dir);
+  let started = 0;
+  const terminal = {
+    id: 'terminal', name: '受控终端', kind: 'tool', available: true, requiresDataset: false, capabilities: ['commands'],
+    validateInput: input => input,
+    start(ticket, assignment) {
+      started++;
+      if (started === 1) throw new Error('首次启动失败');
+      return { id: assignment.id, status: 'completed', report: { summary: 'done' }, usage: { input_tokens: 10, output_tokens: 5 }, artifacts: { terminal: { command: 'pwd', exitCode: 0 } } };
+    },
+    get() { return null; }
+  };
+  const engine = createWorkEngine(store, createExecutorRegistry([terminal]), () => {}, { workspace: dir, policy: { budgets: { maxConcurrent: 2, maxCallsPerTicket: 12, maxRuntimeMs: 3600000, maxTokensPerTicket: 1000 } } });
+  t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
+
+  const first = engine.command({ text: '第一次', executorId: 'terminal', executorInput: { program: 'pwd', args: [] } });
+  assert.equal(first.status, 'failed');
+
+  // 手动把预算耗尽，验证 retry 时被硬闸拦截。
+  recordTicketUsage(store, { ticket: { id: first.id }, assignment: { executor: 'terminal' }, task: { usage: { input_tokens: 900, output_tokens: 100 } }, executorId: 'terminal', projectId: '' });
+  const retried = engine.action(first.id, 'retry');
+  assert.equal(retried.status, 'failed');
+  assert.match(retried.summary, /Token 预算/);
+
+  const summary = engine.usageSummary({ days: 'all' });
+  assert.equal(summary.totals.calls, 1);
+});

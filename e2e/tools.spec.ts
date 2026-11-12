@@ -13,13 +13,22 @@ test('工具页把内置浏览器加入允许策略', async ({ page }) => {
     { id: 'github', name: 'GitHub', kind: 'tool', status: 'needs_setup', permissions: ['read'] },
     { id: 'window', name: '窗口 Agent', kind: 'window', status: 'connected', permissions: ['send'] }
   ] } }));
-  await page.route('**/api/work/policy', async route => { policy = { ...policy, allowedExecutors: ['analysis', 'browser'] }; return route.fulfill({ json: { policy } }); });
+  let saved = null;
+  await page.route('**/api/work/policy', async route => {
+    saved = route.request().postDataJSON();
+    policy = { ...policy, ...(saved?.policy || saved || {}) };
+    return route.fulfill({ json: { policy } });
+  });
 
   await page.goto('/');
-  await page.locator('.sa-sidebar').getByRole('button', { name: '工具', exact: true }).click();
+  await page.getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByRole('menuitem', { name: '工具', exact: true }).click();
   const browser = page.locator('.sa-card').filter({ hasText: '受控浏览器' });
   await expect(browser).toContainText('可用');
-  await browser.getByRole('button', { name: '启用工具' }).click();
-  await expect(browser.getByRole('button', { name: '已启用' })).toBeVisible();
-  await expect(page.locator('.sa-card').filter({ hasText: 'GitHub' })).toContainText('需要先完成配置');
+  await expect(page.locator('.sa-card').filter({ hasText: 'GitHub' })).toContainText('需要配置');
+  await browser.getByRole('button', { name: '在策略中调整' }).click();
+  const policyCard = page.locator('.sa-policy-card');
+  await policyCard.getByRole('checkbox', { name: '浏览器', exact: true }).check({ force: true });
+  await page.getByRole('button', { name: '保存策略' }).click();
+  await expect.poll(() => saved?.policy?.allowedExecutors || saved?.allowedExecutors || []).toContain('browser');
 });

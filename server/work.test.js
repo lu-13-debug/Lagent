@@ -92,7 +92,7 @@ test('Work契约字段、命令幂等、输入校验及严格投影', t => {
   assert.equal(f.engine.command({ text: ' 检查留存 ', clientRequestId: 'once', datasetId: 'dataset-one' }).id, ticket.id);
   assert.throws(() => f.engine.command({ text: '检查留存', clientRequestId: 'once', datasetId: 'dataset-two' }), { status: 409 });
   assert.throws(() => f.engine.command({ text: '不同指令', clientRequestId: 'once', datasetId: 'dataset-one' }), { status: 409 });
-  assert.deepEqual(Object.keys(ticket).sort(), ['attention', 'chainRootId', 'createdAt', 'datasetId', 'executor', 'handoffChildId', 'handoffDepth', 'handoffSummary', 'id', 'parentTicketId', 'planId', 'planStep', 'planTotal', 'source', 'stage', 'status', 'summary', 'title', 'updatedAt']);
+  assert.deepEqual(Object.keys(ticket).sort(), ['acceptance', 'attention', 'chainRootId', 'createdAt', 'datasetId', 'executor', 'handoffChildId', 'handoffDepth', 'handoffSummary', 'id', 'parentTicketId', 'planId', 'planStep', 'planTotal', 'preview', 'source', 'stage', 'status', 'summary', 'title', 'updatedAt', 'verify']);
   const bootstrap = f.engine.bootstrap();
   assert.deepEqual(Object.keys(bootstrap).sort(), ['agents', 'attention', 'capabilities', 'datasets', 'plans', 'policy', 'projects', 'tickets', 'tools', 'workspace']);
   assert.deepEqual(bootstrap.projects, []);
@@ -270,6 +270,20 @@ test('Work SSE发送三类事件、空闲心跳并关闭连接', async () => {
   const messages = chunks.filter(chunk => chunk.startsWith('data: ')).map(chunk => JSON.parse(chunk.slice(6)));
   assert.deepEqual(messages.map(message => message.type), ['ticket', 'assignment', 'report']);
   assert.deepEqual(Object.keys(messages[0]).sort(), ['payload', 'ticketId', 'type']);
+});
+
+test('Work SSE 支持 Last-Event-ID 断线重放', () => {
+  const store = new Store(tmpdir());
+  store.put('work-event', { id: 'e1', type: 'ticket', ticketId: 't1', payload: { x: 1 }, createdAt: '2026-11-12T00:00:01.000Z' });
+  store.put('work-event', { id: 'e2', type: 'assignment', ticketId: 't1', payload: { x: 2 }, createdAt: '2026-11-12T00:00:02.000Z' });
+  const effects = workEvents({ store, heartbeatMs: 5 });
+  const { response: replay, chunks: replayChunks } = sseResponse();
+  effects.connect({ headers: { 'last-event-id': '2026-11-12T00:00:01.000Z' } }, replay);
+  effects.close();
+  const replayMessages = replayChunks.filter(chunk => chunk.startsWith('data: ')).map(chunk => JSON.parse(chunk.slice(6)));
+  assert.equal(replayMessages.length, 1);
+  assert.equal(replayMessages[0].type, 'assignment');
+  store.close();
 });
 
 test('Work默认关闭，开启后契约路由、SSE 与单数据集自动选择可用', async t => {
@@ -778,7 +792,7 @@ test('E8 交接校验 completed、executor、policy、可用性与只读输入�
   assert.equal(created.ticket.stage, 'approval');
   assert.equal(created.ticket.handoffDepth, 1);
   assert.equal(created.ticket.handoffSummary, f.engine.detail(source.id).ticket.summary);
-  assert.doesNotMatch(JSON.stringify(created.ticket), /executorInput|"command"/);
+  assert.doesNotMatch(JSON.stringify(created.ticket), /executorInput|"command":/);
   assert.deepEqual(f.store.get('work-control', created.ticket.id).executorInput, { program: 'git', args: ['status'] });
 
   const audits = f.store.list('work-audit').filter(row => row.action === 'handoff');

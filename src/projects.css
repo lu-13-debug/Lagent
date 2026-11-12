@@ -114,6 +114,9 @@
 .pj-field { display: grid; gap: 5px; font-size: var(--sa-fs-xs, 12px); color: var(--sa-text-2, #515154); }
 .pj-field textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--sa-line, #e5e5ea); border-radius: var(--sa-r-sm, 7px); background: var(--sa-surface, #fff); color: var(--sa-text, #1d1d1f); font: inherit; font-size: var(--sa-fs-sm, 13px); line-height: 1.55; resize: vertical; }
 .pj-field-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.pj-field-row-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.pj-field-label { display: flex; align-items: center; gap: 6px; }
+.pj-source { padding: 1px 6px; border-radius: 999px; background: var(--sa-accent-soft, #eef0f4); color: var(--sa-text-2, #515154); font-size: 10.5px; font-style: normal; font-weight: 500; letter-spacing: .01em; white-space: nowrap; }
 .pj-change-form { display: grid; gap: 8px; }
 .pj-change-form input, .pj-change-form textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--sa-line, #e5e5ea); border-radius: var(--sa-r-sm, 7px); background: var(--sa-surface, #fff); color: var(--sa-text, #1d1d1f); font: inherit; font-size: var(--sa-fs-sm, 13px); }
 .pj-changes { display: grid; gap: 8px; max-height: 52vh; margin: 0; padding: 0; list-style: none; overflow: auto; }
@@ -135,7 +138,7 @@
   /* 窄屏且没有项目时，主区的导入引导已经足够，隐藏重复的空列表卡片。 */
   .pj-layout:has(.pj-projects .pj-empty-block) .pj-projects { display: none; }
   .pj-newchat { grid-template-columns: 1fr; }
-  .pj-archive-grid, .pj-field-row { grid-template-columns: minmax(0, 1fr); }
+  .pj-archive-grid, .pj-field-row, .pj-field-row-3 { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* 项目工作区并入主壳视觉：对齐 .sa-page / .sa-card / .sa-button 的度量与节奏 */

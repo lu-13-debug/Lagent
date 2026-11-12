@@ -23,12 +23,12 @@ export function projectStateOf(workspace) {
 }
 
 export function registerWork(app,store,executor,{isSessionValid,onConnect,mobileGateway,mobileOwnerId,onMobileEventConnect,planner,windowBridge,providerRegistry,workspace,brain,allowFilesystemBrowser=false}={}) {
-  const events=workEvents();
+  const events=workEvents({ store });
   const publish=event=>{
     events.publish(event);
     if(mobileGateway)mobileGateway.publish(mobileOwnerId,event);
   };
-  const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain});
+  const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain,outboxEnabled:process.env.LAGENT_WORK_OUTBOX==='1'});
   enginesByWorkspace.set(typeof workspace==='string'?workspace:'', engine);
   fallbackEngine = engine;
   app.get('/api/work/bootstrap',(_req,res)=>res.json(engine.bootstrap()));
@@ -93,7 +93,7 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
       orchestratorPromise = import('./orchestrator/index.js')
         .then(module => {
           const created = module.createOrchestrator({ engine, store, emit: publish });
-          created.markInterrupted();
+          created.markPaused();
           return created;
         })
         .catch(error => { orchestratorPromise = null; throw error; });
@@ -142,6 +142,10 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     const started = await orchestrator();
     return { run: await started.cancel(req.params.id) };
   }));
+  app.post('/api/work/runs/:id/resume', runRoute(async req => {
+    const started = await orchestrator();
+    return { run: await started.resume(req.params.id) };
+  }));
   app.post('/api/work/tickets/:id/actions',(req,res)=>{
     if(req.body?.action==='handoff'){
       const result=engine.handoff(req.params.id,req.body?.input);
@@ -149,9 +153,16 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     }
     return res.json({ticket:engine.action(req.params.id,req.body?.action,req.body?.input)});
   });
+  app.post('/api/work/tickets/:id/verify',async(req,res)=>{
+    try{res.json(await engine.verifyTicket(req.params.id));}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'验收失败'});}
+  });
   app.post('/api/work/tickets/:id/team/:nodeId/review',(req,res)=>res.json({team:engine.reviewTeamNode(req.params.id,req.params.nodeId,req.body?.decision)}));
   app.post('/api/work/tickets/:id/team/:nodeId/proposals/:proposalId',(req,res)=>res.json({team:engine.decideTeamProposal(req.params.id,req.params.nodeId,req.params.proposalId,req.body?.decision)}));
   app.get('/api/work/events',(req,res)=>{onConnect?.(req,res);events.connect(req,res,isSessionValid);});
+  app.get('/api/work/usage',(req,res)=>res.json(engine.usageSummary({projectId:req.query?.projectId,executorId:req.query?.executorId,from:req.query?.from,to:req.query?.to,days:req.query?.days==='all'?'all':Number(req.query?.days)||30})));
+  app.get('/api/work/effects',(req,res)=>res.json({effects:engine.listEffects({ticketId:req.query?.ticketId,kind:req.query?.kind,status:req.query?.status,limit:Number(req.query?.limit)||200})}));
+  app.post('/api/work/effects/:id/retry',(req,res)=>{try{res.json({effect:engine.retryEffect(req.params.id)});}catch(error){res.status(error?.status||500).json({error:error?.message||'重试失败'});}});
   if(providerRegistry)app.get('/api/work/providers',async(req,res)=>res.json({providers:await providerRegistry.snapshots({force:req.query?.refresh==='1'})}));
   if(windowBridge){
     const findWindow=async id=>{

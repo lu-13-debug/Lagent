@@ -8,11 +8,14 @@ import { defaultPolicy, externalExecutorAllowed, normalizePolicy, PERMISSIONS, W
 import { workStore } from './store.js';
 import { executorRegistry } from './executors/index.js';
 import { decideTeamProposal, projectTeamTask, reviewTeamNode, teamEventKey } from './team.js';
-import { cancelTicketEffects, claimDue, complete, enqueue, fail as failOutbox, recoverRunningEffects, sanitizeOutboxError, WORK_EFFECT_KIND } from './outbox.js';
+import { cancelTicketEffects, claimDue, complete, effectForLaunch, enqueue, fail as failOutbox, listEffects, recoverRunningEffects, retryEffect, sanitizeOutboxError, WORK_EFFECT_KIND } from './outbox.js';
 import { PROJECT_CHAT_EXECUTORS, projectService } from './projects.js';
 import { createProjectMemory, summarizeExecution } from './project-memory.js';
 import { isKeyChange, normalizePrompts, refineLocal } from './prompt-refiner.js';
+import { buildPreview, previewQuestion } from './risk.js';
+import { normalizeVerify, runVerify } from './verify.js';
 import { analyzeTask } from './task-analyzer.js';
+import { recordTicketUsage, summarizeUsage, checkTokenBudget, ticketTokensUsed } from './usage.js';
 import * as teamwork from './teamwork.js';
 
 const now = () => new Date().toISOString();
@@ -21,7 +24,7 @@ const review = (question, approveLabel = '批准', rejectLabel = '退回') => ({
 const ACCESS_VERBS = { read: '读取', write: '写入', delete: '删除', command: '执行命令' };
 const accessPrompt = request => `Lagent 请求${ACCESS_VERBS[request.mode] || '访问'}：${String(request.path || '').slice(0, 240)}`;
 const accessReview = request => ({...review(accessPrompt(request), `允许这次${ACCESS_VERBS[request.mode] || '访问'}`, '拒绝'),kind:'access',accessMode:request.mode,accessPath:String(request.path || '').slice(0,240)});
-const publicTicket = ({clientRequestId, command, lastAction, datasetId, useAI, approvalSnapshot, executorInput, artifacts, prompt, parentTicketId, chainRootId, handoffDepth, handoffSummary, handoffChildId, planId, planStep, planTotal, ...ticket}) => ({
+const publicTicket = ({clientRequestId, command, lastAction, datasetId, useAI, approvalSnapshot, executorInput, artifacts, prompt, parentTicketId, chainRootId, handoffDepth, handoffSummary, handoffChildId, planId, planStep, planTotal, origin, ...ticket}) => ({
   ...ticket,
   datasetId:datasetId??null,
   parentTicketId:parentTicketId??null,
@@ -31,7 +34,10 @@ const publicTicket = ({clientRequestId, command, lastAction, datasetId, useAI, a
   handoffChildId:handoffChildId??null,
   planId:typeof planId==='string'?planId:null,
   planStep:Number.isSafeInteger(planStep)?planStep:null,
-  planTotal:Number.isSafeInteger(planTotal)?planTotal:null
+  planTotal:Number.isSafeInteger(planTotal)?planTotal:null,
+  preview:ticket.preview&&typeof ticket.preview==='object'?ticket.preview:null,
+  verify:ticket.verify&&typeof ticket.verify==='object'?ticket.verify:null,
+  acceptance:ticket.acceptance&&typeof ticket.acceptance==='object'?ticket.acceptance:null
 });
 const datasetMetadata = dataset => ({
   id: dataset.id,
@@ -252,6 +258,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       pushList('任务要点', brief.keyPoints);
       pushList('关键决定', brief.decisions);
       pushList('约束与边界', brief.constraints);
+      pushList('未解问题', brief.openQuestions);
+      pushList('下一步', brief.nextSteps);
+      pushList('接手先跑', brief.verifyCommands);
       const recent = changes.slice(-3);
       if (recent.length) {
         lines.push('', '最近变更：');
@@ -433,7 +442,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   // Control fields stay in the workspace, outside the event payload and API projection.
   const controlOf = ticket => {
     const {clientRequestId, command, lastAction, datasetId, useAI, approvalSnapshot, executor, executorInput, projectChatId}=ticket;
-    return {id:ticket.id,clientRequestId,command,lastAction,datasetId:datasetId??null,useAI,approvalSnapshot,executor,executorInput,projectChatId:projectChatId??null};
+    return {id:ticket.id,clientRequestId,command,lastAction,datasetId:datasetId??null,useAI,approvalSnapshot,executor,executorInput,projectChatId:projectChatId??null,origin:ticket.origin==='mcp'?'mcp':'ui'};
   };
   const write = (ticket,...entries) => {
     db.write([['ticket',publicTicket(ticket)],...entries],controlOf(ticket));
@@ -766,6 +775,12 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     if (next.planId && Number.isSafeInteger(next.planStep)) {
       advancePlan(next.planId);
     }
+    if (finished) {
+      const projectId = next.projectChatId ? db.get('project-chat', next.projectChatId)?.projectId : '';
+      try {
+        recordTicketUsage(store, { ticket: next, assignment: run, task, executorId: activeId, projectId: projectId || '', now: new Date().toISOString() });
+      } catch { /* 用量记录失败不影响工单状态。 */ }
+    }
   }
   function blockWithoutDataset(ticket,assignment) {
     const summary='当前工作区没有可用数据集，请先上传数据集后再批准';
@@ -783,6 +798,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     if(attempts.length>=policy.budgets.maxCallsPerTicket){audit(ticket.id,'start',activeId,'denied','工单执行次数达到策略上限');throw workError('工单执行次数达到策略上限',429);}
     if(!outboxEnabled&&!existing&&db.list('assignment').filter(row=>row.status==='working').length>=policy.budgets.maxConcurrent){audit(ticket.id,'start',activeId,'denied','并发执行达到策略上限');throw workError('并发执行达到策略上限',429);}
     if(existing?.startedAt&&Date.now()-Date.parse(existing.startedAt)>policy.budgets.maxRuntimeMs){audit(ticket.id,'start',activeId,'denied','执行时长达到策略上限');throw workError('执行时长达到策略上限',429);}
+    const budgetCheck=checkTokenBudget(store,ticket.id,policy.budgets.maxTokensPerTicket);
+    if(!budgetCheck.ok){audit(ticket.id,'start',activeId,'denied',`Token 预算已用 ${budgetCheck.used}/${budgetCheck.budget}`);throw workError(`Token 预算已用尽（已用 ${budgetCheck.used} / 上限 ${budgetCheck.budget}）`,429);}
     const needsDataset=active.requiresDataset!==false;
     const datasetId=needsDataset?resolveStartDataset(ticket,input):selectedDatasetId(ticket.datasetId);
     const assignment=existing||{id:randomUUID(),ticketId:ticket.id,executor:activeId,status:outboxEnabled?'queued':'working',...(outboxEnabled?{queuedAt:now()}:{startedAt:now()})};
@@ -824,7 +841,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     projectId: typeof plan.projectId === 'string' ? plan.projectId : null,
     steps: plan.steps.map(step => {
       const ticket = db.get('ticket', step.ticketId);
-      return { index: step.index, ticketId: step.ticketId, executorId: step.executorId, title: step.title, status: ticket?.status || 'missing', dependsOn: Array.isArray(step.dependsOn) ? [...step.dependsOn] : [], ...(Array.isArray(step.scope) && step.scope.length ? { scope: [...step.scope] } : {}), projectChatId: ticket?.projectChatId || step.projectChatId || null };
+      return { index: step.index, ticketId: step.ticketId, executorId: step.executorId, title: step.title, status: ticket?.status || 'missing', dependsOn: Array.isArray(step.dependsOn) ? [...step.dependsOn] : [], ...(Array.isArray(step.scope) && step.scope.length ? { scope: [...step.scope] } : {}), ...(ticket?.preview ? { preview: ticket.preview } : {}), ...(ticket?.verify ? { verify: ticket.verify } : {}), ...(ticket?.acceptance ? { acceptance: ticket.acceptance } : {}), projectChatId: ticket?.projectChatId || step.projectChatId || null };
     }),
     createdAt: plan.createdAt,
     updatedAt: plan.updatedAt
@@ -836,7 +853,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     if (!Array.isArray(input.steps) || input.steps.length < 2 || input.steps.length > 5) throw workError('计划必须包含 2–5 个步骤');
     const clientRequestId = typeof input.clientRequestId === 'string' ? input.clientRequestId.trim() : '';
     // 显式传 autoRun 时以它为准；否则「先批准再执行」模式下逐步等确认，其余模式一路跑完。
-    const autoRun = typeof input.autoRun === 'boolean' ? input.autoRun : policy.requireApproval !== true;
+    const autoRun = input.origin === 'mcp' ? false : (typeof input.autoRun === 'boolean' ? input.autoRun : policy.requireApproval !== true);
     const projectChat = projectContext(input.projectChatId);
     if (projectChat && !PROJECT_CHAT_EXECUTORS.includes(projectChat.chat.executorId)) throw workError('该执行器暂不支持项目拆解', 400);
     // 计划可以直接绑定「工作文件夹」：每一步都在这个目录里读写，未指定对话时按执行器自动建会话。
@@ -889,7 +906,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       if (!Array.isArray(dependsOn) || dependsOn.length > 3) throw workError(`第 ${index + 1} 步依赖必须是最多 3 项的数组`);
       if (new Set(dependsOn).size !== dependsOn.length || dependsOn.some(item => !Number.isInteger(item) || item < 0 || item >= index)) throw workError(`第 ${index + 1} 步依赖必须引用更早步骤`);
       const scope = Array.isArray(step.scope) ? step.scope.filter(item => typeof item === 'string' && item.trim() && item.length <= 120).slice(0, 6) : [];
-      return { targetId, target, text, rawInput: step.executorInput, datasetId, dependsOn: [...dependsOn], chat, scope };
+      const verify = normalizeVerify(step.verify);
+      return { targetId, target, text, rawInput: step.executorInput, datasetId, dependsOn: [...dependsOn], chat, scope, verify };
     });
     for (const step of prepared) {
       if (projectRecord && !step.chat && PROJECT_CHAT_EXECUTORS.includes(step.targetId)) {
@@ -907,27 +925,31 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       step.executorInput = step.chat
         ? normalizeExecutorInput(step.targetId, step.target, projectExecutorInput(step.chat, projectRecord, step.text, step.rawInput, step.target), step.text)
         : normalizeExecutorInput(step.targetId, step.target, step.rawInput, step.text);
+      step.preview = buildPreview({ executor: step.target, executorInput: step.executorInput, project: projectRecord, fallbackText: step.text });
     }
     const planId = randomUUID();
     const stamp = now();
     const tickets = prepared.map((step, index) => {
       const ready = step.dependsOn.length === 0;
+      const autoStart = autoRun && step.preview?.risk !== 'high';
       // 标题只取第一行：step.text 里可能追加了范围说明，整段塞进标题会在侧栏变成一大坨。
       const headline = step.text.split('\n').map(line => line.trim()).find(Boolean) || step.text;
       return {
         id: randomUUID(),
         title: headline.slice(0, 60),
-        status: ready ? (autoRun ? 'queued' : 'awaiting_review') : 'waiting',
+        status: ready ? (autoStart ? 'queued' : 'awaiting_review') : 'waiting',
         stage: ready && step.target.requiresDataset !== false ? 'dataset' : 'approval',
         source: 'plan',
         executor: step.targetId,
-        summary: ready ? (autoRun ? '自动计划待启动' : step.targetId === 'analysis' ? '请选择数据集并批准计划步骤' : `请确认${step.target.name}计划步骤`) : `计划第 ${index + 1} 步，等待依赖步骤完成`,
-        ...(ready && !autoRun ? { attention: review(reviewQuestion(step.targetId, step.chat ? (step.chat.executorId === 'window' ? 'window' : 'write') : undefined)) } : {}),
+        summary: ready ? (autoStart ? '自动计划待启动' : step.targetId === 'analysis' ? '请选择数据集并批准计划步骤' : `请确认${step.target.name}计划步骤`) : `计划第 ${index + 1} 步，等待依赖步骤完成`,
+        ...(ready && !autoStart ? { attention: review(step.preview?.risk === 'high' ? previewQuestion(step.target.name, step.preview) : reviewQuestion(step.targetId, step.chat ? (step.chat.executorId === 'window' ? 'window' : 'write') : undefined)) } : {}),
         createdAt: stamp,
         updatedAt: stamp,
         command: step.text,
         datasetId: step.datasetId,
         executorInput: step.executorInput,
+        preview: step.preview,
+        ...(step.verify ? { verify: step.verify } : {}),
         ...(step.chat ? { projectChatId: step.chat.id } : {}),
         planId,
         planStep: index,
@@ -1049,18 +1071,23 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         if (context && typeof baseInput?.prompt === 'string' && !baseInput.prompt.includes('【前序步骤材料')) {
           transaction.put('control', { ...control, executorInput: { ...baseInput, prompt: context + baseInput.prompt } });
         }
+        const preview = ticket.preview && typeof ticket.preview === 'object'
+          ? ticket.preview
+          : buildPreview({ executor: target, executorInput: control?.executorInput, project: stored.projectId ? transaction.get('project', stored.projectId) : null, fallbackText: ticket.title });
+        const needsReview = !autoRun || preview?.risk === 'high';
         const ready = {
           ...ticket,
-          status: autoRun ? 'queued' : 'awaiting_review',
+          status: needsReview ? 'awaiting_review' : 'queued',
           stage: target.requiresDataset === false ? 'approval' : 'dataset',
-          summary: autoRun ? '自动计划执行中' : `计划第 ${step.index + 1}/${stored.steps.length} 步，依赖已满足，等待确认`,
-          ...(autoRun ? { attention: undefined } : { attention: review(reviewQuestion(ticket.executor)) }),
+          summary: needsReview ? `计划第 ${step.index + 1}/${stored.steps.length} 步，依赖已满足，等待确认` : '自动计划执行中',
+          ...(preview ? { preview } : {}),
+          ...(needsReview ? { attention: review(preview?.risk === 'high' ? previewQuestion(target.name, preview) : reviewQuestion(ticket.executor)) } : { attention: undefined }),
           ...(blockedRecovery ? { recoveries: recoveries + 1 } : {}),
           updatedAt: now()
         };
         transaction.put('ticket', ready); tickets[step.index] = ready; changed = true;
         transaction.event('ticket', ready);
-        if (autoRun) autoReady.push(ticket.id);
+        if (!needsReview) autoReady.push(ticket.id);
         audit(planId, 'plan/advance', ticket.executor, 'advanced');
       }
       const activeStatuses = ['awaiting_review', 'working', 'queued', 'waiting'];
@@ -1252,9 +1279,28 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     renameProject(id,input){return projects.renameProject(id,input);},
     listDirectory(input){return projects.listDirectory(input);},
     projectBrief(id){return projects.getBrief(id);},
-    saveProjectBrief(id,input){return projects.saveBrief(id,input);},
+    saveProjectBrief(id,input,meta){return projects.saveBrief(id,input,meta);},
+    async verifyTicket(id){
+      const ticket=privateTicket(id);
+      if(!ticket.verify)throw workError('该工单没有配置验收命令',400);
+      if(!['completed','blocked','failed'].includes(ticket.status))throw workError('工单尚未结束，不能验收',409);
+      const project=projectContext(ticket.projectChatId)?.project
+        || (ticket.planId?db.get('project',db.get('plan',ticket.planId)?.projectId):null)
+        || null;
+      const projectPath=project?.path||workspace;
+      const acceptance=await runVerify({verify:ticket.verify,projectPath});
+      const assignment=latest(id);
+      const failed=acceptance.status!=='passed';
+      const summary=(failed?'验收未通过：':'验收通过：')+acceptance.command;
+      const next={...ticket,acceptance,stage:'verify',summary,updatedAt:now(),...(failed?{status:'blocked',attention:review(summary)}:{attention:undefined})};
+      const report=assignment?[['report',makeReport(next,assignment,failed?'failed':'ready',summary,{acceptance})]]:[];
+      const result=write(next,...report);
+      audit(id,'verify',ticket.executor,failed?'failed':'passed',acceptance.command);
+      if(failed&&ticket.planId&&Number.isSafeInteger(ticket.planStep))advancePlan(ticket.planId);
+      return {ticket:result,acceptance};
+    },
     projectChanges(id){return projects.listChanges(id);},
-    recordProjectChange(id,input){return projects.recordChange(id,input);},
+    recordProjectChange(id,input,meta){return projects.recordChange(id,input,meta);},
     deleteProjectChange(projectId,changeId){return projects.deleteChange(projectId,changeId);},
     projectBriefMarkdown(id){return projects.briefMarkdown(id);},
     projectMemory(id,limit){projects.getProject(id);return memory.list(id,limit||20);},
@@ -1474,6 +1520,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       enforceBrowserHost(activeId, executorInput, policy.limits?.browserHosts);
       const datasetId=selectedDatasetId(input?.datasetId);
       if(datasetId)requireDataset(datasetId);
+      const verify=normalizeVerify(input?.verify);
+      const origin=input?.origin==='mcp'?'mcp':'ui';
+      const preview=buildPreview({executor:active,executorInput,project:project?.project,fallbackText:trigger.text});
       const prior=trigger.clientRequestId&&db.list('ticket').find(t=>store.get('work-control',t.id)?.clientRequestId===trigger.clientRequestId);
       if(prior){
         const control=store.get('work-control',prior.id);
@@ -1483,14 +1532,14 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const stamp=now();
       const direct=active.requiresDataset===false;
       const cli=active.kind==='cli';
-      // 不需要数据集、且策略没有要求先批准时，直接开跑：批准只在真正需要额外权限时出现。
-      const auto=direct&&policy.requireApproval!==true;
+      // 不需要数据集、且策略没有要求先批准时直接开跑；高风险动作（窗口键入等）始终先确认。
+      const auto=direct&&policy.requireApproval!==true&&preview.risk!=='high'&&!(origin==='mcp'&&preview.risk!=='low');
       // 内置模型 Agent 的能力取决于权限模式，文案不能说「只读」。
       const modelCopy=executorInput?.write===true?'执行中（会在项目目录内读写文件）':'执行中（只读项目文件）';
-      const confirmCopy=activeId==='browser'?'请确认受控浏览器读取后批准执行':activeId==='github'?'请确认 GitHub 只读查询后批准执行':activeId==='terminal'?'请确认终端命令后批准执行':activeId==='model'?modelCopy:cli?'请确认只读 CLI 任务后批准执行':'请选择数据集并批准开始';
+      const confirmCopy=preview.risk==='high'?previewQuestion(active.name,preview):activeId==='browser'?'请确认受控浏览器读取后批准执行':activeId==='github'?'请确认 GitHub 只读查询后批准执行':activeId==='terminal'?'请确认终端命令后批准执行':activeId==='model'?modelCopy:cli?'请确认只读 CLI 任务后批准执行':'请选择数据集并批准开始';
       // 标题只取第一行：把整段多行需求塞进标题会让侧栏和工单卡片变成一大坨。
       const headline=trigger.text.split('\n').map(line=>line.trim()).find(Boolean)||trigger.text;
-      const record={id:randomUUID(),title:(typeof input?.title==='string'&&input.title.trim()?input.title.trim():headline).slice(0,60),status:auto?'queued':'awaiting_review',stage:direct?(auto?'launch':'approval'):'dataset',source:'manual',executor:activeId,summary:auto?(activeId==='model'?modelCopy:activeId==='terminal'?'终端命令执行中':cli?'CLI 执行中':'执行中'):confirmCopy,attention:auto?undefined:review(reviewQuestion(activeId,project?(project.chat.executorId==='window'?'window':'write'):undefined)),createdAt:stamp,updatedAt:stamp,command:trigger.text,clientRequestId:trigger.clientRequestId,datasetId,executorInput,...(project?{projectChatId:project.chat.id}:{})};
+      const record={id:randomUUID(),title:(typeof input?.title==='string'&&input.title.trim()?input.title.trim():headline).slice(0,60),status:auto?'queued':'awaiting_review',stage:direct?(auto?'launch':'approval'):'dataset',source:'manual',executor:activeId,summary:auto?(activeId==='model'?modelCopy:activeId==='terminal'?'终端命令执行中':cli?'CLI 执行中':'执行中'):confirmCopy,attention:auto?undefined:review(preview.risk==='high'?previewQuestion(active.name,preview):reviewQuestion(activeId,project?(project.chat.executorId==='window'?'window':'write'):undefined)),createdAt:stamp,updatedAt:stamp,command:trigger.text,clientRequestId:trigger.clientRequestId,origin,datasetId,executorInput,preview,...(verify?{verify}:{}),...(project?{projectChatId:project.chat.id}:{})};
       // write() 返回的是 publicTicket（会剥掉 executorInput），直接执行必须用原始记录，否则会写回一份空的执行输入。
       const created=write(record);
       if(project)touchProjectChat(project.chat,{lastTicketId:created.id});
@@ -1559,7 +1608,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         // 每一步声明要改哪些目录：写文件的重叠步骤会被串行调度，只读步骤可以并行。
         const scopeIn=Array.isArray(step?.scope)?step.scope.filter(item=>typeof item==='string'&&item.trim()&&item.length<=120).slice(0,6):[];
         const scope=scopeIn.length?scopeIn:(analysis.steps.find(item=>item.executorId===executor)?.scope||[]);
-        return {executorId:executor,text,...(datasetId?{datasetId}:{}),...(executorInput?{executorInput}:{}),...(scope.length?{scope}:{}),...(dependsOn.length?{dependsOn:[...dependsOn]}:{})};
+        let verify;
+        if(step?.verify!==undefined){try{verify=normalizeVerify(step.verify);}catch(error){throw workError(`规划第 ${index+1} 步的验收命令无效：${error.message}`,502);}}
+        return {executorId:executor,text,...(datasetId?{datasetId}:{}),...(executorInput?{executorInput}:{}),...(scope.length?{scope}:{}),...(dependsOn.length?{dependsOn:[...dependsOn]}:{}),...(verify?{verify}:{})};
       });
       planSuggestionTimes.push(nowMs);
       audit(null,'plan/suggest','planner','suggested',`步骤 ${safeSteps.length}`);
@@ -1775,6 +1826,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         }
         const stamp=now();
         const title=titleFor(current);
+        const preview=buildPreview({executor:target,executorInput:frozenInput,project:projectByPath(frozenInput?.workspace)||null,fallbackText:title});
         const child=publicTicket({
           id:randomUUID(),
           title,
@@ -1790,7 +1842,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           parentTicketId:current.id,
           chainRootId:current.chainRootId||current.id,
           handoffDepth:depth+1,
-          handoffSummary:typeof current.summary==='string'?current.summary.slice(0,400):null
+          handoffSummary:typeof current.summary==='string'?current.summary.slice(0,400):null,
+          preview
         });
         transaction.put('ticket',child);
         transaction.put('ticket',{...storedSource,handoffChildId:child.id,updatedAt:stamp});
@@ -1856,7 +1909,15 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         return result;
       }
       if(action==='retry'&&ticket.planId)revivePlan(ticket.planId,ticket.planStep);
-      if((action==='approve'&&!task)||action==='retry')return start(next,input);
+      if((action==='approve'&&!task)||action==='retry'){
+        try{return start(next,input);}catch(error){
+          // 400 是调用参数/状态错误，继续抛出让调用方知道错了；其它错误（预算、执行器失败）落盘为 failed。
+          if(error?.status===400)throw error;
+          const failed={...next,status:'failed',summary:String(error?.message||'重试失败').slice(0,400),updatedAt:now(),attention:review(String(error?.message||'重试失败').slice(0,200))};
+          const run=assignment?{...assignment,status:'failed',endedAt:now(),error:failed.summary}:null;
+          return write(failed,...(run?[['assignment',run]]:[]),['report',makeReport(failed,assignment||{},'failed',failed.summary)]);
+        }
+      }
       if(action==='approve'){
         if(typeof active.approve!=='function')throw workError('该执行器不支持继续审批',409);
         active.approve(task,input,ticket.approvalSnapshot);
@@ -1879,6 +1940,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       }
       return write({...next,status:'awaiting_review',attention:review(reviewQuestion(activeId))});
     },
+    listEffects(options){return listEffects(store,options);},
+    retryEffect(id){return retryEffect(store,id,{now:Date.now()});},
+    usageSummary(options){return summarizeUsage(store,options);},
+    usageForTicket(id){return ticketTokensUsed(store,id);},
     recover(){
       if(outboxEnabled){
         for(const effect of recoverRunningEffects(store)){

@@ -146,7 +146,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const [memory, setMemory] = useState<WorkProjectMemory | null>(null);
   const [memoryBusy, setMemoryBusy] = useState('');
   const [brief, setBrief] = useState<WorkProjectBrief | null>(null);
-  const [briefDraft, setBriefDraft] = useState({ goal: '', summary: '', keyPoints: '', decisions: '', constraints: '' });
+  const [briefDraft, setBriefDraft] = useState({ goal: '', summary: '', keyPoints: '', decisions: '', constraints: '', openQuestions: '', nextSteps: '', verifyCommands: '' });
   const [changes, setChanges] = useState<WorkProjectChange[]>([]);
   const [archiveBusy, setArchiveBusy] = useState('');
   const [confirm, setConfirm] = useState<{ title: string; body?: string; quote?: string; notes?: string[]; label: string; run: () => Promise<void> } | null>(null);
@@ -672,7 +672,10 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       summary: next.summary,
       keyPoints: next.keyPoints.join('\n'),
       decisions: next.decisions.join('\n'),
-      constraints: next.constraints.join('\n')
+      constraints: next.constraints.join('\n'),
+      openQuestions: next.openQuestions.join('\n'),
+      nextSteps: next.nextSteps.join('\n'),
+      verifyCommands: next.verifyCommands.join('\n')
     });
   };
   const openArchive = () => {
@@ -709,7 +712,10 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
         summary: briefDraft.summary,
         keyPoints: splitLines(briefDraft.keyPoints),
         decisions: splitLines(briefDraft.decisions),
-        constraints: splitLines(briefDraft.constraints)
+        constraints: splitLines(briefDraft.constraints),
+        openQuestions: splitLines(briefDraft.openQuestions),
+        nextSteps: splitLines(briefDraft.nextSteps),
+        verifyCommands: splitLines(briefDraft.verifyCommands)
       });
       applyBrief(result.brief);
       notify('已保存项目简报，其他 Agent 读取时即可看到。');
@@ -1199,6 +1205,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
               <section className="pj-card">
                 <div className="pj-card-head">
                   <strong>项目简报</strong>
+                  {brief && Object.values(brief.sources || {}).includes('mcp') && <span className="pj-source">含外部 Agent 写入</span>}
                   <button type="button" className="pj-link" onClick={() => void copyBriefMarkdown()} disabled={archiveBusy === 'copy'}><ClipboardCopy size={12} />{archiveBusy === 'copy' ? '复制中…' : '复制 Agent 简报'}</button>
                 </div>
                 <p className="pj-note">简报会与变更记录一起导出为 Markdown；其他 Agent 读取本软件即可了解项目目标、关键决定与最新改动。</p>
@@ -1209,6 +1216,11 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
                   <label className="pj-field">关键决定（每行一条）<textarea rows={4} value={briefDraft.decisions} onChange={event => setBriefDraft(current => ({ ...current, decisions: event.target.value }))} placeholder="只隐藏入口，保留后端代码" /></label>
                 </div>
                 <label className="pj-field">约束与边界（每行一条）<textarea rows={3} value={briefDraft.constraints} onChange={event => setBriefDraft(current => ({ ...current, constraints: event.target.value }))} placeholder="不覆盖窗口草稿；不提交、不打包" /></label>
+                <div className="pj-field-row pj-field-row-3">
+                  <label className="pj-field"><span className="pj-field-label">未解问题（每行一条）{brief?.sources?.openQuestions === 'mcp' && <em className="pj-source">外部写入</em>}</span><textarea rows={3} value={briefDraft.openQuestions} onChange={event => setBriefDraft(current => ({ ...current, openQuestions: event.target.value }))} placeholder="等待确认的取舍、已知风险" /></label>
+                  <label className="pj-field"><span className="pj-field-label">下一步（每行一条）{brief?.sources?.nextSteps === 'mcp' && <em className="pj-source">外部写入</em>}</span><textarea rows={3} value={briefDraft.nextSteps} onChange={event => setBriefDraft(current => ({ ...current, nextSteps: event.target.value }))} placeholder="接手的人先做什么" /></label>
+                  <label className="pj-field"><span className="pj-field-label">验收命令（每行一条）{brief?.sources?.verifyCommands === 'mcp' && <em className="pj-source">外部写入</em>}</span><textarea rows={3} value={briefDraft.verifyCommands} onChange={event => setBriefDraft(current => ({ ...current, verifyCommands: event.target.value }))} placeholder="npm test" /></label>
+                </div>
                 <div className="pj-editor-actions">
                   <span className="pj-note">{archiveBusy === 'load' ? '读取中…' : brief?.updatedAt ? `上次更新 ${new Date(brief.updatedAt).toLocaleString('zh-CN')}` : '尚未编辑'}</span>
                   <button type="button" className="pj-btn pj-primary" onClick={() => void saveBrief()} disabled={archiveBusy === 'save'}><Save size={14} />{archiveBusy === 'save' ? '保存中…' : '保存简报'}</button>

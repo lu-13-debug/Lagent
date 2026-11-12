@@ -48,11 +48,21 @@ export function parseWorkPlanReply(reply, executors, datasets = [], windows = []
     const dependsOn = [...new Set(rawDependsOn)].filter(item => Number.isInteger(item) && item >= 0 && item < index);
     if (rawDependsOn.length !== dependsOn.length) throw vaultError(`规划第 ${index + 1} 步依赖无效`, 502);
     if (dependsOn.length > 3) throw vaultError(`规划第 ${index + 1} 步依赖过多`, 502);
-    return { executorId, text, ...(reason ? { reason } : {}), ...(datasetId ? { datasetId } : {}), ...(windowTarget ? { executorInput: { handle: windowTarget.handle, process: windowTarget.process, submit: true } } : {}), ...(dependsOn.length ? { dependsOn } : {}) };
+    let verify;
+    if (step?.verify !== undefined) {
+      if (!step.verify || typeof step.verify !== 'object' || Array.isArray(step.verify)) throw vaultError(`规划第 ${index + 1} 步的 verify 无效`, 502);
+      const command = typeof step.verify.command === 'string' ? step.verify.command.trim() : '';
+      if (!command || command.length > 500) throw vaultError(`规划第 ${index + 1} 步的验收命令无效`, 502);
+      verify = { command };
+      if (typeof step.verify.cwd === 'string' && step.verify.cwd.trim()) verify.cwd = step.verify.cwd.trim().slice(0, 300);
+      if (typeof step.verify.expect === 'string' && step.verify.expect.trim()) verify.expect = step.verify.expect.trim().slice(0, 200);
+      if (step.verify.timeoutMs !== undefined) verify.timeoutMs = step.verify.timeoutMs;
+    }
+    return { executorId, text, ...(reason ? { reason } : {}), ...(datasetId ? { datasetId } : {}), ...(windowTarget ? { executorInput: { handle: windowTarget.handle, process: windowTarget.process, submit: true } } : {}), ...(dependsOn.length ? { dependsOn } : {}), ...(verify ? { verify } : {}) };
   });
 }
 
-const PLAN_SYSTEM_PROMPT = '你是 Lagent 的任务规划器。把用户目标拆成 2–5 个步骤，只输出严格 JSON，不执行工具、不调用命令。步骤可以并行：没有 dependsOn 的步骤会同时进入待审批；dependsOn 只能引用更早步骤的编号（从 0 开始），最多 3 个，禁止环，后续步骤用依赖表达先后。executorId 只能从给定列表选择；每步 text 是给该执行器的一句可执行指令，最多 300 字；reason 可选，最多 100 字。analysis 步骤如指定 datasetId 必须来自 datasets；codex/claude-code 目标是只读的；id 以 -acp 结尾的步骤通过 ACP 协议驱动另一个只读 Agent，适合独立分析或交叉审查。窗口步骤必须使用 executorId=window，并在 executorInput 中给出 windows 列表里的 handle。不得输出密钥、凭据、URL 参数或原始数据。格式：{"steps":[{"executorId":"...","text":"...","reason":"...","dependsOn":[0]}]}';
+const PLAN_SYSTEM_PROMPT = '你是 Lagent 的任务规划器。把用户目标拆成 2–5 个步骤，只输出严格 JSON，不执行工具、不调用命令。步骤可以并行：没有 dependsOn 的步骤会同时进入待审批；dependsOn 只能引用更早步骤的编号（从 0 开始），最多 3 个，禁止环，后续步骤用依赖表达先后。executorId 只能从给定列表选择；每步 text 是给该执行器的一句可执行指令，最多 300 字；reason 可选，最多 100 字。analysis 步骤如指定 datasetId 必须来自 datasets；codex/claude-code 目标是只读的；id 以 -acp 结尾的步骤通过 ACP 协议驱动另一个只读 Agent，适合独立分析或交叉审查。窗口步骤必须使用 executorId=window，并在 executorInput 中给出 windows 列表里的 handle。不得输出密钥、凭据、URL 参数或原始数据。实现/验证类步骤可选带 verify：{"command":"npm test","expect":"exit=0"}；命令只能用 npm test / npm run test|build|lint|typecheck / pytest / go test / cargo test / dotnet test / node --test，不要写 shell 管道、重定向或变量。格式：{"steps":[{"executorId":"...","text":"...","reason":"...","dependsOn":[0],"verify":{"command":"npm test","expect":"exit=0"}}]}';
 
 export function registerModelHub(app, { store, ownerId = 'local', masterKey, assertModelSettings, fetchImpl = fetch }) {
   ownerId = String(ownerId);

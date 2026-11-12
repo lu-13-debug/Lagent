@@ -32,7 +32,8 @@ const SYSTEM = [
   '要查开源项目怎么做的，就把第一步交给 github（它只读、能搜索仓库），不要交给会被沙箱禁网的 CLI。',
   '交给 github 的步骤必须带 executorInput，格式 {"action":"search","query":"英文关键词，2-5 个词","limit":5}，query 不要写整句中文，也不要加 open source / github 这类词。',
   '成本高的执行器（codex / claude-code）尽量只用在真正要改文件的那几步。',
-  '只输出一个 JSON 对象，格式：{"steps":[{"executorId":"...","text":"...","dependsOn":[0]}]}',
+  '实现/验证类步骤可选带 verify：{"command":"npm test","expect":"exit=0"}；命令只能用 npm test / npm run test|build|lint|typecheck / pytest / go test / cargo test / dotnet test / node --test，不要写 shell 管道、重定向或变量。',
+  '只输出一个 JSON 对象，格式：{"steps":[{"executorId":"...","text":"...","dependsOn":[0],"verify":{"command":"npm test","expect":"exit=0"}}]}',
   '除了这个 JSON，不要输出任何解释或其它内容。'
 ].join('\n');
 

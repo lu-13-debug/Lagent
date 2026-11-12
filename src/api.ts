@@ -1,5 +1,5 @@
 import type { ModelUsageReport, Bootstrap, PublicReport, ShareItem, Dataset, ExploreInput, Exploration, Mode, ModelCatalog, ReportMetadata, Runtime, Settings, Task, TaskSnapshot, TaskResponse, Transaction, User, Wallet } from './types';
-import type { WorkAction, WorkBootstrap, WorkPlan, WorkPlanStep, WorkPolicy, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkRun, WorkTaskAnalysis, WorkTeam, WorkTeamwork, WorkTicket, WorkTicketDetail } from './superagent';
+import type { WorkAction, WorkAcceptance, WorkBootstrap, WorkPlan, WorkPlanStep, WorkPolicy, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkRun, WorkTaskAnalysis, WorkTeam, WorkTeamwork, WorkTicket, WorkTicketDetail } from './superagent';
 import { uploadFiles } from './upload.ts';
 import type { UploadOptions } from './upload';
 
@@ -33,6 +33,7 @@ export const api = {
   workBootstrap: (signal?: AbortSignal) => request<WorkBootstrap>('/work/bootstrap', { signal }),
   workCommand: (text: string, clientRequestId?: string, datasetId?: string, executorId?: string, executorInput?: unknown) => request<{ ticket: WorkTicket }>('/work/command', { method: 'POST', body: JSON.stringify({ text, ...(clientRequestId ? { clientRequestId } : {}), ...(datasetId ? { datasetId } : {}), ...(executorId ? { executorId } : {}), ...(executorInput !== undefined ? { executorInput } : {}) }) }),
   workTicket: (id: string) => request<WorkTicketDetail>(`/work/tickets/${encodeURIComponent(id)}`),
+  workVerifyTicket: (id: string) => request<{ ticket: WorkTicket; acceptance: WorkAcceptance }>(`/work/tickets/${encodeURIComponent(id)}/verify`, { method: 'POST', body: '{}' }),
   workProjects: () => request<{ projects: WorkProject[] }>('/work/projects'),
   workImportProject: (path: string, name?: string) => request<{ project: WorkProject; created: boolean }>('/work/projects', { method: 'POST', body: JSON.stringify({ path, ...(name ? { name } : {}) }) }),
   workProject: (id: string) => request<{ project: WorkProject }>(`/work/projects/${encodeURIComponent(id)}`),

@@ -71,7 +71,13 @@ test('计划自动执行可把步骤分派给窗口执行器', async t => {
     { executorId: 'window', text: '继续执行', executorInput: { handle: 42, process: 'Codex', text: '继续执行', submit: true } },
     { executorId: 'window', text: '读取结果', executorInput: { handle: 42, process: 'Codex', text: '读取结果', submit: true }, dependsOn: [0] }
   ] });
-  for (let i = 0; i < 80 && engine.getPlan(plan.id).status !== 'completed'; i++) await sleep(50);
+  // 窗口键入属于高风险动作，即使计划是 autoRun 也会停在待确认；这里模拟人逐条批准。
+  for (let i = 0; i < 200 && engine.getPlan(plan.id).status !== 'completed'; i++) {
+    for (const step of engine.getPlan(plan.id).steps) {
+      if (step.status === 'awaiting_review' && step.ticketId) engine.action(step.ticketId, 'approve');
+    }
+    await sleep(50);
+  }
   assert.equal(engine.getPlan(plan.id).status, 'completed');
   assert.deepEqual(engine.getPlan(plan.id).steps.map(step => step.status), ['completed', 'completed']);
 });

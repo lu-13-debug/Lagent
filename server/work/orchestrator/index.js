@@ -173,6 +173,14 @@ export function createOrchestrator({
       publish({ type: 'run-step', runId: run.id, payload: { index: step.index, status: 'skipped' } });
       return { status: 'skipped', summary: '没有可用 Agent' };
     }
+    // 续跑时复用已经完成的工单，不重复派发。
+    if (step.ticketId && step.status === 'done') {
+      const ticket = store.get('work-ticket', step.ticketId);
+      if (ticket && ticket.status === 'completed') {
+        const report = store.list('work-report').find(row => row.ticketId === step.ticketId);
+        return { status: 'completed', summary: report?.summary || ticket.summary || '' };
+      }
+    }
     const chatId = chatFor(run, executorId, step.need?.writes === true);
     const brief = boardBrief(run);
     // 上下文放后面：工单标题取的是开头，前面塞一段摘要会让列表里看不出这一步在干什么。
@@ -295,6 +303,7 @@ export function createOrchestrator({
       runs.setStatus(run, RUN_STATUS.running);
       for (const step of run.steps.filter(item => item.kind !== 'verify')) {
         if (run.cancelledAt) break;
+        if (step.status === 'done' || step.status === 'skipped') continue;
         await dispatch(run, step);
       }
       return { runId: run.id };
@@ -318,6 +327,7 @@ export function createOrchestrator({
       }
 
       for (const step of verifySteps) {
+        if (step.status === 'done' || step.status === 'skipped') continue;
         if (!step.executorId) {
           step.executorId = pickExecutor(agentsUsable(), step.need, ['claude-code', 'codex', 'model']);
         }
@@ -471,13 +481,35 @@ export function createOrchestrator({
     return run;
   }
 
+  async function resume(id) {
+    const run = runs.markResumable(id);
+    if (!run) {
+      const error = new Error('这次运行不存在');
+      error.status = 404;
+      throw error;
+    }
+    if (isTerminal(run.status)) return run;
+    // 已经有步骤时，从 execute 开始续跑；否则从 analyze 重新开始。
+    const hasSteps = run.steps && run.steps.length > 0;
+    const context = await bound.createRun({ runId: run.id });
+    const startStep = hasSteps ? 'execute' : 'analyze';
+    context.resume({ step: startStep, resumeData: { resumed: true } }).catch(error => {
+      const failed = runs.find(run.id);
+      if (!failed || isTerminal(failed.status)) return;
+      runs.setStatus(failed, RUN_STATUS.failed, error?.message || String(error));
+      publish({ type: 'run', runId: failed.id, payload: { status: failed.status, error: failed.error } });
+    });
+    return run;
+  }
+
   return {
     start,
     approve,
     cancel,
+    resume,
     get: id => runs.get(id),
     list: limit => runs.list(limit),
-    markInterrupted: () => runs.markInterrupted(),
+    markPaused: () => runs.markPaused(),
     runs,
     // 测试用：把编排能力直接暴露出来，避免每个用例都要起一遍工作流。
     _internal: { planStepsFor, dispatch, waitTicket, capabilitiesOf, templateById }

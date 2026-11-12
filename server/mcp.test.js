@@ -39,7 +39,10 @@ test('MCP 初始化、工具列表与调用受 Bearer 令牌保护', async t => 
   assert.ok(list.result.tools.some(item => item.name === 'work_send_command'));
   const call = await (await f.request('/api/mcp', { method: 'POST', token: f.token, body: { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'work_send_command', arguments: { text: '检查 CI' } } } })).json();
   assert.equal(JSON.parse(call.result.content[0].text).ticket.id, 't2');
-  assert.deepEqual(f.calls[0], ['command', { text: '检查 CI' }]);
+  assert.deepEqual(f.calls[0], ['command', { text: '检查 CI', origin: 'mcp' }]);
+  const blocked = await (await f.request('/api/mcp', { method: 'POST', token: f.token, body: { jsonrpc: '2.0', id: 31, method: 'tools/call', params: { name: 'work_ticket_action', arguments: { id: 't2', action: 'approve' } } } })).json();
+  assert.equal(blocked.error.code, 403);
+  assert.match(blocked.error.message, /不能批准/);
   const unknown = await (await f.request('/api/mcp', { method: 'POST', token: f.token, body: { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'missing' } } })).json();
   assert.equal(unknown.error.code, 404);
   const notification = await f.request('/api/mcp', { method: 'POST', token: f.token, body: { jsonrpc: '2.0', method: 'notifications/initialized' } });

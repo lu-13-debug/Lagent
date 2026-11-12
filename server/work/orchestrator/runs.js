@@ -15,10 +15,12 @@ export const RUN_STATUS = Object.freeze({
   completed: 'completed',
   failed: 'failed',
   cancelled: 'cancelled',
+  paused: 'paused',
   interrupted: 'interrupted'
 });
 
 const TERMINAL = new Set([RUN_STATUS.completed, RUN_STATUS.failed, RUN_STATUS.cancelled]);
+const PAUSABLE = new Set([RUN_STATUS.running, RUN_STATUS.verifying, RUN_STATUS.repairing, RUN_STATUS.awaitingApproval]);
 
 export function isTerminal(status) {
   return TERMINAL.has(status);
@@ -93,18 +95,29 @@ export function createRunStore({ store, clock = () => new Date().toISOString() }
     return step;
   }
 
-  // 进程重启后，跑到一半的运行不会再有人推进——标成 interrupted，等用户决定重跑。
-  function markInterrupted() {
+  // 进程重启后，跑到一半的运行不会再有人推进——标成 paused，等用户决定续跑。
+  function markPaused() {
     const stale = [];
     for (const run of list(500)) {
-      if (![RUN_STATUS.running, RUN_STATUS.verifying, RUN_STATUS.repairing, RUN_STATUS.awaitingApproval].includes(run.status)) continue;
-      run.status = RUN_STATUS.interrupted;
-      run.error = '服务重启，这次运行中断了';
+      if (!PAUSABLE.has(run.status)) continue;
+      run.status = RUN_STATUS.paused;
+      run.error = '服务重启，这次运行已暂停，可续跑';
       save(run);
       stale.push(run.id);
     }
     return stale;
   }
 
-  return { kind: KIND, create, get, find, list, save, note, setStatus, updateStep, markInterrupted };
+  // 把 paused 的运行恢复到可继续状态；不自动启动，由调用方决定何时开始。
+  function markResumable(id) {
+    const run = find(id);
+    if (!run) return null;
+    if (run.status !== RUN_STATUS.paused && run.status !== RUN_STATUS.interrupted) return run;
+    run.status = RUN_STATUS.running;
+    run.error = null;
+    save(run);
+    return run;
+  }
+
+  return { kind: KIND, create, get, find, list, save, note, setStatus, updateStep, markPaused, markResumable };
 }

@@ -11,12 +11,12 @@
 /* 1. Tokens ---------------------------------------------------------------- */
 .sa-shell {
   /* type */
-  --sa-font: "Inter", "Inter var", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
+  --sa-font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
     "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
-  --sa-font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", monospace;
+  --sa-font-mono: "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", monospace;
 
-  --sa-fs-2xs: 10.5px;
-  --sa-fs-xs: 11px;
+  --sa-fs-2xs: 11.5px;
+  --sa-fs-xs: 12px;
   --sa-fs-sm: 12px;
   --sa-fs-base: 13px;
   --sa-fs-md: 14px;
@@ -59,7 +59,7 @@
   --sa-line-strong: #cdd3dc;
   --sa-text: #10131a;
   --sa-text-2: #5a6270;
-  --sa-text-3: #858d9b;
+  --sa-text-3: #667085;
   --sa-accent: #3b46d6;
   --sa-accent-hover: #2f39b8;
   /* 强调色的「面」一律走中性灰，只有实心主操作与选中态保留靛蓝。 */
@@ -97,7 +97,7 @@ html[data-theme="dark"] .sa-shell {
   --sa-line-strong: #3b414b;
   --sa-text: #e9ecf1;
   --sa-text-2: #a7aeba;
-  --sa-text-3: #7f8695;
+  --sa-text-3: #98a2b3;
   --sa-accent: #8b95ff;
   --sa-accent-hover: #a4acff;
   --sa-accent-ink: #d6dae2;
@@ -4721,7 +4721,7 @@ html[data-theme="dark"] .sa-newchat kbd {
   outline-offset: 1px;
 }
 
-.sa-composer-modes {
+.sa-compose-modes {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -4866,7 +4866,7 @@ html[data-theme="dark"] .sa-newchat kbd {
     justify-content: center;
   }
 
-  .sa-composer-modes .sa-inline-note {
+  .sa-compose-modes .sa-inline-note {
     display: none;
   }
 }
@@ -5929,75 +5929,6 @@ html[data-theme="dark"] .sa-brand-mono {
   background: var(--sa-surface-3);
 }
 
-.sa-user-caret {
-  flex: none;
-  color: var(--sa-text-3);
-  transform: rotate(-90deg);
-  transition: transform var(--sa-fast) var(--sa-ease);
-}
-
-.sa-user-caret.open {
-  transform: rotate(90deg);
-}
-
-/* 底部「个人工作区」菜单 */
-.sa-usermenu {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(100% + 6px);
-  z-index: 40;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 5px;
-  border: 1px solid var(--sa-line);
-  border-radius: var(--sa-r-md);
-  background: var(--sa-surface);
-  box-shadow: var(--sa-shadow-lg);
-}
-
-.sa-usermenu button {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-height: 32px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: var(--sa-r-sm);
-  background: none;
-  color: var(--sa-text-2);
-  font-size: var(--sa-fs-sm);
-  text-align: left;
-  cursor: pointer;
-}
-
-.sa-usermenu button:hover {
-  background: var(--sa-surface-2);
-  color: var(--sa-text);
-}
-
-.sa-usermenu button.active {
-  background: var(--sa-surface-2);
-  color: var(--sa-text);
-  font-weight: 560;
-}
-
-.sa-usermenu button em {
-  margin-left: auto;
-  min-width: 18px;
-  height: 17px;
-  padding: 0 5px;
-  border-radius: var(--sa-r-full);
-  background: var(--sa-text);
-  color: var(--sa-canvas);
-  font-size: var(--sa-fs-2xs);
-  font-style: normal;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
 /* 首页只保留精简入口 */
 .sa-hero-compact {
   padding: 6px 0 2px;
@@ -6031,11 +5962,6 @@ html[data-theme="dark"] .sa-brand-mono {
 @media (max-width: 760px) {
   .sa-inspector-tab {
     display: none;
-  }
-
-  .sa-usermenu {
-    left: 6px;
-    right: 6px;
   }
 }
 
@@ -6358,3 +6284,362 @@ html[data-theme="dark"] .sa-brand-mono {
 }
 .sa-newchat-pick .sa-inline-note { margin: 0; }
 .sa-newchat-pick .sa-confirm-actions { margin-top: 2px; }
+
+/* 主导航：常驻侧栏；工具/记忆/设置收进「更多」 */
+.sa-nav {
+  gap: 1px;
+  margin: 2px 10px 6px;
+}
+
+.sa-more {
+  position: relative;
+}
+
+.sa-more-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  z-index: 24;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface);
+  box-shadow: var(--sa-shadow-md);
+}
+
+.sa-more-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--sa-r-sm);
+  background: none;
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-sm);
+  text-align: left;
+}
+
+.sa-more-menu button:hover,
+.sa-more-menu button.active {
+  background: var(--sa-surface-2);
+  color: var(--sa-text);
+}
+
+.sa-nav-count {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-accent);
+  color: #fff;
+  font-size: var(--sa-fs-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  text-align: center;
+}
+
+.sa-search-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 8px 0 9px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface);
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-search-trigger:hover {
+  border-color: var(--sa-line-strong);
+  color: var(--sa-text-2);
+}
+
+.sa-search-trigger kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--sa-line);
+  border-radius: 4px;
+  background: var(--sa-surface-2);
+  color: var(--sa-text-3);
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
+@media (max-width: 980px) {
+  .sa-search-trigger span,
+  .sa-search-trigger kbd {
+    display: none;
+  }
+
+  .sa-search-trigger {
+    width: 30px;
+    justify-content: center;
+    padding: 0;
+  }
+}
+
+/* 窄屏没有右栏时，落地页直接给出「需要你」入口，避免审批只能靠角标发现。 */
+.sa-landing-attention {
+  display: none;
+}
+
+@media (max-width: 980px) {
+  .sa-landing-attention {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--sa-line);
+    border-radius: var(--sa-r-md);
+    background: var(--sa-surface);
+  }
+
+  .sa-landing-attention-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sa-landing-attention-head h2 {
+    margin: 0;
+    font-size: var(--sa-fs-sm);
+    font-weight: 600;
+  }
+
+  .sa-landing-attention-head span {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--sa-accent-soft);
+    color: var(--sa-text-2);
+    font-size: var(--sa-fs-xs);
+    line-height: 18px;
+    text-align: center;
+  }
+}
+
+/* 派活方式：自动 / 计划 / 复核 */
+.sa-compose-modes button {
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-xs);
+  font-weight: 500;
+}
+
+.sa-compose-modes button:hover {
+  border-color: var(--sa-line-strong);
+  color: var(--sa-text);
+}
+
+.sa-compose-modes button.active {
+  border-color: var(--sa-accent-line);
+  background: var(--sa-accent-soft);
+  color: var(--sa-accent-ink);
+}
+
+.sa-compose-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 右栏：需要你 / 当前运行 / 产物 */
+.sa-inspector-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--sa-line);
+}
+
+.sa-inspector-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-sm);
+  font-weight: 500;
+}
+
+.sa-inspector-tabs button:hover {
+  color: var(--sa-text);
+}
+
+.sa-inspector-tabs button.active {
+  border-bottom-color: var(--sa-accent);
+  color: var(--sa-text);
+}
+
+.sa-tab-count {
+  min-width: 17px;
+  padding: 0 5px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-3);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-2xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.sa-inspector-artifacts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sa-attention-path {
+  margin: 2px 0 0;
+  color: var(--sa-text-3);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-xs);
+  overflow-wrap: anywhere;
+}
+
+/* 审批前的动作投影：命令/路径/风险，一眼看清「将要做什么」。 */
+.sa-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface-2);
+}
+
+.sa-preview code {
+  flex: 1 1 220px;
+  min-width: 0;
+  color: var(--sa-text);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.sa-preview-path {
+  flex-basis: 100%;
+  color: var(--sa-text-3);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-2xs);
+  overflow-wrap: anywhere;
+}
+
+.sa-risk {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--sa-r-full);
+  font-size: var(--sa-fs-2xs);
+  font-weight: 600;
+}
+
+.sa-risk-low {
+  background: var(--sa-success-soft);
+  color: var(--sa-success);
+}
+
+.sa-risk-medium {
+  background: var(--sa-warning-soft);
+  color: var(--sa-warning);
+}
+
+.sa-risk-high {
+  background: var(--sa-danger-soft);
+  color: var(--sa-danger);
+}
+
+.sa-verify-chip {
+  padding: 1px 6px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-neutral-soft);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-2xs);
+  font-weight: 500;
+}
+
+.sa-verify-passed {
+  background: var(--sa-success-soft);
+  color: var(--sa-success);
+}
+
+.sa-verify-failed {
+  background: var(--sa-danger-soft);
+  color: var(--sa-danger);
+}
+
+.sa-verify {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+}
+
+.sa-verify-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.sa-verify-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sa-verify-head h3 {
+  margin: 0;
+}
+
+.sa-verify-cmd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  margin: 8px 0 0;
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-verify-cmd code {
+  color: var(--sa-text);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.sa-verify-output {
+  max-height: 220px;
+  margin: 8px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-2);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -2,11 +2,35 @@ export type WorkTicketStatus = 'queued' | 'working' | 'awaiting_review' | 'block
 export type WorkAction = 'approve' | 'reject' | 'stop' | 'retry' | 'resume' | 'skip' | 'handoff';
 export interface WorkAttentionOption { id: string; label: string; action: WorkAction }
 export interface WorkAttention { question: string; options: WorkAttentionOption[]; createdAt: string }
+/** 审批前给用户看的动作投影：只描述「将要做什么」，不暴露原始 argv 与完整提示词。 */
+export interface WorkPreview {
+  kind?: string;
+  action?: string;
+  risk?: 'low' | 'medium' | 'high' | string;
+  reversible?: boolean;
+  tier?: string;
+  cwd?: string;
+  paths?: string[];
+  hosts?: string[];
+}
+export interface WorkVerifySpec { command: string; cwd?: string; expect?: string; timeoutMs?: number }
+export interface WorkAcceptance {
+  status?: 'passed' | 'failed' | string;
+  command?: string;
+  cwd?: string;
+  expect?: string;
+  exitCode?: number;
+  signal?: string | null;
+  output?: string;
+  durationMs?: number;
+  at?: string;
+}
 export interface WorkTicket {
   id: string; title: string; status: WorkTicketStatus; stage: string; source: string;
   executor: string; summary: string; datasetId?: string | null; attention?: WorkAttention; createdAt: string; updatedAt: string;
   parentTicketId?: string | null; chainRootId?: string | null; handoffDepth?: number; handoffSummary?: string; handoffChildId?: string | null;
   planId?: string | null; planStep?: number | null; planTotal?: number | null; projectChatId?: string | null;
+  preview?: WorkPreview | null; verify?: WorkVerifySpec | null; acceptance?: WorkAcceptance | null;
 }
 export interface WorkDataset { id: string; name: string; rowCount: number; source: string }
 export interface WorkAgent { id: string; name: string; kind: 'analysis' | 'claude-code' | 'codex' | 'browser' | 'terminal' | string; status: string; capabilities: string[] }
@@ -88,7 +112,9 @@ export interface WorkProjectSession {
 }
 export interface WorkProjectBrief {
   projectId: string; goal: string; summary: string;
-  keyPoints: string[]; decisions: string[]; constraints: string[]; updatedAt: string;
+  keyPoints: string[]; decisions: string[]; constraints: string[];
+  openQuestions: string[]; nextSteps: string[]; verifyCommands: string[];
+  sources: Record<string, string>; updatedAt: string;
 }
 export interface WorkProjectChange {
   id: string; projectId: string; projectChatId: string; ticketId: string; executorId: string;

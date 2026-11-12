@@ -15,11 +15,11 @@ test('Agent 页面可以读取并发送到本机窗口', async ({ page }) => {
   });
 
   await page.goto('/');
-  await page.locator('.sa-sidebar').getByRole('button', { name: 'Agent', exact: true }).click();
+  await page.getByRole('button', { name: '团队', exact: true }).click();
   await expect(page.getByText('Codex 任务窗口')).toBeVisible();
   await page.getByRole('button', { name: '读取' }).click();
   await expect(page.getByText('Codex 窗口最近输出')).toBeVisible();
-  const input = page.getByLabel('向 WindowsTerminal 发送指令');
+  const input = page.getByLabel('向WindowsTerminal 发送指令');
   await input.fill('继续下一步');
   await expect(input).toHaveValue('继续下一步');
   await page.getByRole('button', { name: '发送', exact: true }).click();

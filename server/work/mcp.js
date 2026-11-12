@@ -13,21 +13,26 @@ function requiredString(input, key) {
   return input[key].trim();
 }
 
-export function createMcpHandler({ engine, windowBridge } = {}) {
+export function createMcpHandler({ engine, windowBridge, actor = 'mcp' } = {}) {
   if (!engine) throw new TypeError('MCP handler 需要 Work engine');
   const tools = [
     tool('work_list_tickets', '列出当前工作区的 Work 工单', { type: 'object', properties: {}, additionalProperties: false }, async () => textResult({ tickets: engine.bootstrap().tickets })),
     tool('work_get_ticket', '读取单个工单详情', { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false }, async input => textResult(engine.detail(requiredString(input, 'id')))),
     tool('work_send_command', '向指挥台发送一条指令', {
       type: 'object',
-      properties: { text: { type: 'string' }, executorId: { type: 'string' }, datasetId: { type: 'string' }, executorInput: { type: 'object' }, clientRequestId: { type: 'string' } },
+      properties: { text: { type: 'string' }, executorId: { type: 'string' }, datasetId: { type: 'string' }, executorInput: { type: 'object' }, clientRequestId: { type: 'string' }, verify: { type: 'object' } },
       required: ['text'], additionalProperties: false
-    }, async input => textResult({ ticket: engine.command(input) })),
+    }, async input => textResult({ ticket: engine.command({ ...input, origin: actor }) })),
     tool('work_ticket_action', '对工单执行 approve/reject/stop/retry/resume', {
       type: 'object',
       properties: { id: { type: 'string' }, action: { type: 'string' }, input: { type: 'object' } },
       required: ['id', 'action'], additionalProperties: false
-    }, async input => textResult({ ticket: engine.action(requiredString(input, 'id'), requiredString(input, 'action'), input.input) })),
+    }, async input => {
+      const action = requiredString(input, 'action');
+      // MCP 是外部 Agent 的入口，不能让发起者批准/重试自己的动作；这些动作只接受界面会话。
+      if (['approve', 'resume', 'retry'].includes(action)) throw workError('MCP 不能批准或重试工单，请回到界面操作', 403);
+      return textResult({ ticket: engine.action(requiredString(input, 'id'), action, input.input) });
+    }),
     tool('work_list_agents', '列出当前可调度的执行器及其状态', { type: 'object', properties: {}, additionalProperties: false }, async () => textResult({ agents: engine.bootstrap().agents || [] })),
     tool('work_list_plans', '列出最近的 Work 计划', { type: 'object', properties: {}, additionalProperties: false }, async () => textResult({ plans: engine.bootstrap().plans || [] })),
     tool('work_list_projects', '列出已接入的项目工作区', { type: 'object', properties: {}, additionalProperties: false }, async () => textResult({ projects: engine.listProjects() })),
@@ -45,13 +50,16 @@ export function createMcpHandler({ engine, windowBridge } = {}) {
         summary: { type: 'string' },
         keyPoints: { type: 'array', items: { type: 'string' } },
         decisions: { type: 'array', items: { type: 'string' } },
-        constraints: { type: 'array', items: { type: 'string' } }
+        constraints: { type: 'array', items: { type: 'string' } },
+        openQuestions: { type: 'array', items: { type: 'string' } },
+        nextSteps: { type: 'array', items: { type: 'string' } },
+        verifyCommands: { type: 'array', items: { type: 'string' } }
       },
       required: ['projectId'], additionalProperties: false
     }, async input => {
       const projectId = requiredString(input, 'projectId');
       const { projectId: _ignored, ...patch } = input;
-      return textResult({ brief: engine.saveProjectBrief(projectId, patch) });
+      return textResult({ brief: engine.saveProjectBrief(projectId, patch, { source: actor }) });
     }),
     tool('work_record_change', '记录一条项目变更（标题、摘要、改动文件），供后续 Agent 读取', {
       type: 'object',
@@ -67,7 +75,7 @@ export function createMcpHandler({ engine, windowBridge } = {}) {
     }, async input => {
       const projectId = requiredString(input, 'projectId');
       const { projectId: _ignored, ...change } = input;
-      return textResult({ change: engine.recordProjectChange(projectId, change) });
+      return textResult({ change: engine.recordProjectChange(projectId, change, { source: actor }) });
     }),
     tool('work_get_report', '读取工单的最新报告摘要与产物结构', {
       type: 'object',
@@ -86,6 +94,11 @@ export function createMcpHandler({ engine, windowBridge } = {}) {
         artifactKeys: latest?.artifacts && typeof latest.artifacts === 'object' ? Object.keys(latest.artifacts) : []
       });
     }),
+    tool('work_verify_ticket', '对已完成的工单执行白名单内的验收命令，并记录通过/失败与输出', {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'], additionalProperties: false
+    }, async input => textResult(await engine.verifyTicket(requiredString(input, 'id')))),
     tool('work_create_plan', '创建一个多步 Work 计划（可并行依赖）', {
       type: 'object',
       properties: {
@@ -99,7 +112,8 @@ export function createMcpHandler({ engine, windowBridge } = {}) {
               text: { type: 'string' },
               executorInput: { type: 'object' },
               datasetId: { type: 'string' },
-              dependsOn: { type: 'array', items: { type: 'number' } }
+              dependsOn: { type: 'array', items: { type: 'number' } },
+              verify: { type: 'object' }
             },
             required: ['executorId', 'text'],
             additionalProperties: false
@@ -112,7 +126,7 @@ export function createMcpHandler({ engine, windowBridge } = {}) {
     }, async input => {
       if (!Array.isArray(input.steps)) throw workError('steps 必须是数组');
       if (typeof input.goal !== 'string' || !input.goal.trim()) throw workError('goal 必须是非空字符串');
-      return textResult({ plan: engine.plan(input) });
+      return textResult({ plan: engine.plan({ ...input, origin: actor }) });
     }),
     ...(windowBridge ? [
       tool('work_list_windows', '列出本机可操作的 Agent 窗口', { type: 'object', properties: {}, additionalProperties: false }, async () => textResult({ windows: await windowBridge.listWindows() })),
@@ -158,9 +172,9 @@ export function createMcpHandler({ engine, windowBridge } = {}) {
   return { handle, tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) };
 }
 
-export function registerMcpRoutes(app, { engine, gateway, ownerId, windowBridge } = {}) {
+export function registerMcpRoutes(app, { engine, gateway, ownerId, windowBridge, actor = 'mcp' } = {}) {
   if (!engine || !gateway) throw new TypeError('MCP 路由需要 engine 与 gateway');
-  const handler = createMcpHandler({ engine, windowBridge });
+  const handler = createMcpHandler({ engine, windowBridge, actor });
   const authenticate = req => gateway.authenticateRequest(req, { ownerId });
 
   app.post('/api/mcp/token', (req, res) => {

@@ -17,11 +17,13 @@ test('AI 规划可以把窗口 Agent 作为步骤目标', async ({ page }) => {
   ] } }));
 
   await page.goto('/');
-  await page.getByRole('button', { name: '多步计划', exact: true }).click();
+  await page.getByRole('button', { name: '计划', exact: true }).click();
+  await page.locator('.sa-composer textarea').fill('让 Codex 继续');
+  await page.getByRole('button', { name: '编辑计划', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('计划目标').fill('让 Codex 继续');
   await dialog.getByRole('button', { name: 'AI 帮我规划' }).click();
-  await expect(dialog.getByLabel('第 1 步窗口')).toHaveValue('42');
-  await expect(dialog.getByLabel('第 2 步窗口')).toHaveValue('42');
-  await expect(dialog.getByLabel('第 1 步说明')).toHaveValue('继续执行');
+  await expect(dialog.getByLabel('第1 步窗口')).toHaveValue('42');
+  await expect(dialog.getByLabel('第2 步窗口')).toHaveValue('42');
+  await expect(dialog.getByLabel('第1 步说明')).toHaveValue('继续执行');
 });

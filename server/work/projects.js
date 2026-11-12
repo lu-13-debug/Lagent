@@ -516,7 +516,20 @@ export function projectService(db, { environment = process.env, home = os.homedi
   const clipList = (value, maxItems) => Array.isArray(value)
     ? value.map(item => clip(item, CHANGE_LIMITS.itemChars)).filter(Boolean).slice(0, maxItems)
     : [];
-  const emptyBrief = projectId => ({ projectId, goal: '', summary: '', keyPoints: [], decisions: [], constraints: [], updatedAt: '' });
+  const emptyBrief = projectId => ({
+    projectId,
+    goal: '',
+    summary: '',
+    keyPoints: [],
+    decisions: [],
+    constraints: [],
+    openQuestions: [],
+    nextSteps: [],
+    verifyCommands: [],
+    sources: {},
+    updatedAt: ''
+  });
+  const briefSources = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   function getBrief(projectId) {
     const project = getProject(projectId);
     const stored = db.get('project-brief', project.id);
@@ -528,13 +541,21 @@ export function projectService(db, { environment = process.env, home = os.homedi
       keyPoints: Array.isArray(stored.keyPoints) ? stored.keyPoints : [],
       decisions: Array.isArray(stored.decisions) ? stored.decisions : [],
       constraints: Array.isArray(stored.constraints) ? stored.constraints : [],
+      openQuestions: Array.isArray(stored.openQuestions) ? stored.openQuestions : [],
+      nextSteps: Array.isArray(stored.nextSteps) ? stored.nextSteps : [],
+      verifyCommands: Array.isArray(stored.verifyCommands) ? stored.verifyCommands : [],
+      sources: briefSources(stored.sources),
       updatedAt: typeof stored.updatedAt === 'string' ? stored.updatedAt : ''
     };
   }
-  function saveBrief(projectId, input = {}) {
+  function saveBrief(projectId, input = {}, { source = 'ui' } = {}) {
     const project = getProject(projectId);
     const current = getBrief(project.id);
     const body = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+    const writable = ['goal', 'summary', 'keyPoints', 'decisions', 'constraints', 'openQuestions', 'nextSteps', 'verifyCommands'];
+    const sources = { ...briefSources(current.sources) };
+    const origin = ['ui', 'mcp', 'system', 'auto'].includes(source) ? source : 'ui';
+    for (const key of writable) if (body[key] !== undefined) sources[key] = origin;
     const next = {
       id: project.id,
       projectId: project.id,
@@ -543,6 +564,10 @@ export function projectService(db, { environment = process.env, home = os.homedi
       keyPoints: body.keyPoints === undefined ? current.keyPoints : clipList(body.keyPoints, 20),
       decisions: body.decisions === undefined ? current.decisions : clipList(body.decisions, 20),
       constraints: body.constraints === undefined ? current.constraints : clipList(body.constraints, 20),
+      openQuestions: body.openQuestions === undefined ? current.openQuestions : clipList(body.openQuestions, 20),
+      nextSteps: body.nextSteps === undefined ? current.nextSteps : clipList(body.nextSteps, 20),
+      verifyCommands: body.verifyCommands === undefined ? current.verifyCommands : clipList(body.verifyCommands, 10),
+      sources,
       updatedAt: now()
     };
     db.put('project-brief', next);
@@ -604,7 +629,7 @@ export function projectService(db, { environment = process.env, home = os.homedi
       files: clipList(body.files, CHANGE_LIMITS.maxFiles),
       sessionId: clip(body.sessionId, 200),
       status: clip(body.status, 40) || 'recorded',
-      source: source === 'auto' ? 'auto' : 'manual',
+      source: source === 'auto' ? 'auto' : source === 'mcp' ? 'mcp' : 'manual',
       createdAt: prior?.createdAt || clip(body.createdAt, 40) || now(),
       updatedAt: now()
     };
@@ -635,15 +660,20 @@ export function projectService(db, { environment = process.env, home = os.homedi
     const lines = [`# 项目简报：${project.name}`, '', `- 路径：${project.path}`, `- Git 分支：${project.gitBranch || '（未检测到）'}`, `- 更新时间：${brief.updatedAt || '尚未编辑'}`, ''];
     lines.push('## 项目目标', '', brief.goal || '（未填写）', '');
     lines.push('## 当前进展', '', brief.summary || '（未填写）', '');
-    const section = (title, items) => {
+    const section = (title, items, key) => {
       lines.push(`## ${title}`, '');
       if (!items.length) lines.push('（暂无）');
       else for (const item of items) lines.push(`- ${item}`);
+      const source = key ? briefSources(brief.sources)[key] : '';
+      if (source && source !== 'ui') lines.push('', `> 来源：${source === 'mcp' ? '外部 Agent（MCP）' : source}`);
       lines.push('');
     };
-    section('任务要点', brief.keyPoints);
-    section('关键决定', brief.decisions);
-    section('约束与边界', brief.constraints);
+    section('任务要点', brief.keyPoints, 'keyPoints');
+    section('关键决定', brief.decisions, 'decisions');
+    section('约束与边界', brief.constraints, 'constraints');
+    section('未解问题', brief.openQuestions || [], 'openQuestions');
+    section('下一步', brief.nextSteps || [], 'nextSteps');
+    section('接手先跑', brief.verifyCommands || [], 'verifyCommands');
     lines.push('## 变更记录', '');
     if (!changes.length) lines.push('（暂无）');
     for (const change of changes) {
