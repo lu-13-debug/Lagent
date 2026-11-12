@@ -93,10 +93,14 @@ export function codexExecutor({
     // 项目目录不一定是 git 仓库（例如 D:\test），codex 默认会拒绝非受信目录并直接退出；
     // 写入范围已经由本软件的审批闸门与 sandbox 参数限制，这里放开仓库检查。
     const modelArgs = input.model ? ['-m', input.model] : [];
+    // Codex 用 config 指定推理强度；最高档映射到它支持的 xhigh。
+    const effortArgs = input.effort && input.effort !== 'default'
+      ? ['-c', `model_reasoning_effort="${input.effort === 'max' ? 'xhigh' : input.effort}"`]
+      : [];
     if (input.resume) {
-      return ['exec', 'resume', '--json', '--skip-git-repo-check', ...modelArgs, ...(write ? ['-c', 'sandbox_mode="workspace-write"'] : []), input.resume, prompt];
+      return ['exec', 'resume', '--json', '--skip-git-repo-check', ...modelArgs, ...effortArgs, ...(write ? ['-c', 'sandbox_mode="workspace-write"'] : []), input.resume, prompt];
     }
-    return ['exec', '--json', '--sandbox', write ? 'workspace-write' : 'read-only', '--skip-git-repo-check', ...modelArgs, '-C', workspace, prompt];
+    return ['exec', '--json', '--sandbox', write ? 'workspace-write' : 'read-only', '--skip-git-repo-check', ...modelArgs, ...effortArgs, '-C', workspace, prompt];
   };
   const executor = createCliExecutor({
     id: 'codex',

@@ -57,12 +57,16 @@ export function normalizeCliInput(input, { defaultMaxTurns = 5, maxTurns = 20, m
   // 个别 CLI 支持用 --model 指定模型；不传就沿用该 CLI 自己的配置。
   const model = typeof input.model === 'string' ? input.model.trim() : '';
   if (model && !/^[A-Za-z0-9._:/-]{1,120}$/.test(model)) throw statusError('model 名称无效');
+  // 思考强度：不同 CLI 的原生档位不同，由各执行器自己决定是否拼进参数。
+  const effort = typeof input.effort === 'string' ? input.effort.trim() : '';
+  if (effort && !/^[a-z]{2,10}$/.test(effort)) throw statusError('effort 无效');
   return {
     prompt,
     maxTurns: turns,
     ...(workspace ? { workspace: path.resolve(workspace) } : {}),
     ...(resume ? { resume } : {}),
     ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
     ...(input.write === true ? { write: true } : {})
   };
 }

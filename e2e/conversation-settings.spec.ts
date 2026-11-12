@@ -69,7 +69,7 @@ test('内置 Agent 对话可以选择模型、思考强度和工作权限', asyn
   expect(body.settings).toEqual({ profileId: 'p1', effort: 'high', permission: 'read' });
 });
 
-test('CLI 对话只显示权限，并随指令发送', async ({ page }) => {
+test('CLI 对话也可以选择模型、思考强度和工作权限', async ({ page }) => {
   const commands: any[] = [];
   await page.route('**/api/work/command', async route => {
     commands.push(route.request().postDataJSON());
@@ -80,8 +80,11 @@ test('CLI 对话只显示权限，并随指令发送', async ({ page }) => {
   await expect(page.locator('.sa-shell')).toBeVisible();
   await page.locator('.sa-pick', { hasText: 'Claude Code' }).first().click();
 
-  await expect(page.getByLabel('这个对话使用的模型')).toHaveCount(0);
+  await expect(page.getByLabel('Claude Code 使用的模型')).toBeVisible();
+  await expect(page.getByLabel('Claude Code 的思考强度')).toBeVisible();
   await expect(page.getByLabel('这次对话的工作权限')).toBeVisible();
+  await page.getByLabel('Claude Code 使用的模型').fill('claude-opus-5');
+  await page.getByLabel('Claude Code 的思考强度').selectOption('high');
   await page.getByLabel('这次对话的工作权限').selectOption('workspace');
 
   await page.locator('.sa-composer textarea').fill('修一个 bug');
@@ -91,5 +94,5 @@ test('CLI 对话只显示权限，并随指令发送', async ({ page }) => {
   const body = commands[0];
   expect(body.executorId).toBe('claude-code');
   expect(body.executorInput).toEqual({ prompt: '修一个 bug' });
-  expect(body.settings).toEqual({ permission: 'workspace' });
+  expect(body.settings).toEqual({ model: 'claude-opus-5', effort: 'high', permission: 'workspace' });
 });

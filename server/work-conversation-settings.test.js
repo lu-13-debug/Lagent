@@ -47,16 +47,31 @@ test('内置 Agent 透传模型、思考强度与工作权限', t => {
   assert.deepEqual(seen[0], { prompt: '检查项目', profileId: 'profile-1', effort: 'high', permission: 'read' });
 });
 
-test('外部 CLI 用权限选择映射只读/可写', t => {
+test('外部 CLI 支持模型、思考强度与只读/可写权限', t => {
   const env = { LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' };
   const policy = { allowedExecutors: ['codex'] };
   const read = fixture(t, { id: 'codex', policy, env });
-  read.engine.command({ text: '只读检查', executorId: 'codex', executorInput: { prompt: '只读检查' }, settings: { permission: 'read' } });
-  assert.equal(read.seen[0].write, false);
+  read.engine.command({
+    text: '只读检查',
+    executorId: 'codex',
+    executorInput: { prompt: '只读检查' },
+    settings: { model: 'gpt-5.2-codex', effort: 'high', permission: 'read' }
+  });
+  assert.deepEqual(read.seen[0], { prompt: '只读检查', model: 'gpt-5.2-codex', effort: 'high', write: false });
 
   const write = fixture(t, { id: 'codex', policy, env });
   write.engine.command({ text: '开始修改', executorId: 'codex', executorInput: { prompt: '开始修改' }, settings: { permission: 'workspace' } });
   assert.equal(write.seen[0].write, true);
+});
+
+test('项目对话把 CLI 的模型与思考强度传进执行器输入', t => {
+  const env = { LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' };
+  const { engine, seen } = fixture(t, { id: 'codex', policy: { allowedExecutors: ['codex'] }, env });
+  const { project } = engine.importProject({ path: process.cwd() });
+  const chat = engine.createProjectChat(project.id, { executorId: 'codex', title: '测试' }).chat;
+  engine.projectChatMessage(chat.id, { text: '继续修', model: 'gpt-5.2-codex', effort: 'xhigh' });
+  assert.equal(seen[0].model, 'gpt-5.2-codex');
+  assert.equal(seen[0].effort, 'xhigh');
 });
 
 test('对话设置校验未知字段、执行器能力与项目对话权限', t => {

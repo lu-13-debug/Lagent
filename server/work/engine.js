@@ -57,15 +57,18 @@ const sameValue = (left, right) => JSON.stringify(left ?? null) === JSON.stringi
 const normalizeCommandSettings = value => {
   if (value === undefined || value === null) return null;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw workError('settings 必须是对象', 400);
-  const unknown = Object.keys(value).filter(key => !['profileId', 'effort', 'permission'].includes(key));
+  const unknown = Object.keys(value).filter(key => !['profileId', 'model', 'effort', 'permission'].includes(key));
   if (unknown.length) throw workError(`settings 包含未知字段：${unknown.join('、')}`, 400);
   const profileId = typeof value.profileId === 'string' ? value.profileId.trim() : '';
   if (profileId && !/^[A-Za-z0-9._:-]{1,100}$/.test(profileId)) throw workError('settings.profileId 无效', 400);
+  const model = typeof value.model === 'string' ? value.model.trim() : '';
+  if (model && !/^[A-Za-z0-9._:/-]{1,120}$/.test(model)) throw workError('settings.model 无效', 400);
   const effort = typeof value.effort === 'string' ? value.effort.trim() : '';
   if (effort && !/^[a-z]{2,10}$/.test(effort)) throw workError('settings.effort 无效', 400);
   if (value.permission !== undefined && !PERMISSIONS.includes(value.permission)) throw workError('settings.permission 仅支持 read/workspace/full', 400);
   const settings = {
     ...(profileId ? { profileId } : {}),
+    ...(model ? { model } : {}),
     ...(effort && effort !== 'default' ? { effort } : {}),
     ...(value.permission ? { permission: value.permission } : {})
   };
@@ -355,6 +358,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       // 模型 Agent 的会话级模型与思考强度：只在模型执行器上透传，其它 CLI 不认识这些键。
       ...(isModel && typeof options?.profileId === 'string' && options.profileId.trim() ? { profileId: options.profileId.trim().slice(0, 100) } : {}),
       ...(isModel && typeof options?.effort === 'string' && options.effort.trim() ? { effort: options.effort.trim().slice(0, 10) } : {}),
+      // 外部 CLI：model/effort 由各 CLI 自己决定是否拼进参数（Codex/Claude Code 已支持）。
+      ...(!isModel && typeof options?.model === 'string' && options.model.trim() ? { model: options.model.trim().slice(0, 120) } : {}),
+      ...(!isModel && typeof options?.effort === 'string' && options.effort.trim() && options.effort !== 'default' ? { effort: options.effort.trim().slice(0, 10) } : {}),
       // 跨目录读写：策略里登记的额外目录直接放行，其余路径按权限模式处理（工作区模式下逐次弹窗）。
       ...(isModel && Array.isArray(policy.limits?.extraRoots) && policy.limits.extraRoots.length ? { roots: [...policy.limits.extraRoots] } : {}),
       ...(isModel ? { permission, confirmDanger: permission === 'workspace' && policy.limits?.confirmDanger !== false } : {}),
@@ -1457,9 +1463,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const chat=projects.getChat(chatId);
       const text=typeof input?.text==='string'?input.text.trim():'';
       if(!text||text.length>3000)throw workError('消息须为 1–3000 字',400);
-      // 会话级模型与思考强度：缺省时沿用工作流默认模型。
+      // 会话级模型与思考强度：内置 Agent 用 profileId，外部 CLI 用 model。
       const executorInput={};
       if(typeof input?.profileId==='string'&&input.profileId.trim())executorInput.profileId=input.profileId.trim();
+      if(typeof input?.model==='string'&&input.model.trim())executorInput.model=input.model.trim();
       if(typeof input?.effort==='string'&&input.effort.trim())executorInput.effort=input.effort.trim();
       const ticket=api.command({text,executorId:chat.executorId,projectChatId:chat.id,clientRequestId:input?.clientRequestId,...(Object.keys(executorInput).length?{executorInput}:{})});
       try{projects.adoptTitle(chat.id,text);}catch{/* 改名失败不影响已提交的工单。 */}
@@ -1596,7 +1603,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       if(project&&project.chat.executorId!==activeId)throw workError('项目对话绑定的执行器不匹配',409);
       const settings=normalizeCommandSettings(input?.settings);
       if(settings&&project&&settings.permission)throw workError('项目对话的权限请在对话设置里修改',400);
-      if(settings&&!project&&(settings.profileId||settings.effort)&&activeId!=='model')throw workError('只有内置 Agent 支持选择模型与思考强度',400);
+      if(settings&&!project&&settings.profileId&&activeId!=='model')throw workError('只有内置 Agent 支持模型配置档案',400);
+      if(settings&&!project&&settings.model&&active.kind!=='cli')throw workError('只有外部 CLI 支持 model 参数',400);
+      if(settings&&!project&&settings.effort&&activeId!=='model'&&active.kind!=='cli')throw workError('该执行器不支持思考强度',400);
       if(settings&&!project&&settings.permission&&activeId!=='model'&&active.kind!=='cli')throw workError('该执行器不支持设置工作权限',400);
       if(!project&&input?.executorInput&&typeof input.executorInput==='object'){
         for(const key of ['workspace','resume','write'])if(key in input.executorInput)throw workError('只有项目对话可以指定工作目录、续接会话或写入模式',400);
@@ -1604,7 +1613,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       let projectInput=null;
       let rawInput=input?.executorInput;
       if(project){
-        const options=settings?{...(input?.executorInput&&typeof input.executorInput==='object'?input.executorInput:{}),...(settings.profileId?{profileId:settings.profileId}:{}),...(settings.effort?{effort:settings.effort}:{})}:input?.executorInput;
+        const options=settings?{...(input?.executorInput&&typeof input.executorInput==='object'?input.executorInput:{}),...(settings.profileId?{profileId:settings.profileId}:{}),...(settings.model?{model:settings.model}:{}),...(settings.effort?{effort:settings.effort}:{})}:input?.executorInput;
         projectInput=projectExecutorInput(project.chat,project.project,trigger.text,options,active);
       }else if(settings){
         // 非项目对话：把选择合并成执行器输入，后续重试复用同一份冻结输入。
@@ -1612,7 +1621,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         const prompt=typeof base.prompt==='string'&&base.prompt.trim()?base.prompt:trigger.text;
         rawInput=activeId==='model'
           ?{...base,prompt,...(settings.profileId?{profileId:settings.profileId}:{}),...(settings.effort?{effort:settings.effort}:{}),...(settings.permission?{permission:settings.permission}:{})}
-          :{...base,prompt,...(settings.permission?{write:settings.permission!=='read'}:{})};
+          :{...base,prompt,...(settings.model?{model:settings.model}:{}),...(settings.effort?{effort:settings.effort}:{}),...(settings.permission?{write:settings.permission!=='read'}:{})};
       }
       const executorInput=project
         ?normalizeExecutorInput(activeId,active,projectInput,trigger.text)

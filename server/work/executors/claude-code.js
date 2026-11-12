@@ -72,6 +72,8 @@ export function claudeCodeExecutor({
     ];
     if (input.resume) args.push('--resume', input.resume);
     if (input.model) args.push('--model', input.model);
+    // Claude Code 原生支持 --effort（low/medium/high/xhigh/max）。
+    if (input.effort && input.effort !== 'default') args.push('--effort', input.effort);
     args.push('--permission-mode', input.write === true ? 'acceptEdits' : 'plan');
     args.push(input.write === true ? writablePrompt(input) : readOnlyPrompt(input));
     return args;

@@ -266,11 +266,11 @@ outbox 默认关闭；`LAGENT_WORK_OUTBOX=1` 时启用，工单启动先入队�
 ### 任务契约与自动验收
 
 - `POST /api/work/command` 与计划步骤都接受可选的 `contract`：`{objective?,inputs?,constraints?,acceptance?,tools?,budget?:{tokens?,wallMs?,calls?},deadlineMs?,report?:{summary?,evidence?,next?}}`。字段有长度与数量上限，未知字段返回 400；空契约（`{}`）返回 400。契约随工单投影返回，计划步骤详情也带 `contract`。
-- `POST /api/work/command` 支持可选的对话级 `settings`：`{profileId?,effort?,permission?:'read'|'workspace'|'full'}`。
+- `POST /api/work/command` 支持可选的对话级 `settings`：`{profileId?,model?,effort?,permission?:'read'|'workspace'|'full'}`。
   - 内置 Agent（`model`）：`profileId`/`effort` 透传到模型执行器，`permission` 直接决定只读/工作区/完全权限；最终输入冻结在工单里，重试沿用。
-  - 外部 CLI：只支持 `permission`，映射为只读（`write:false`）或可写（`workspace/full` 均为 `write:true`；完全权限不绕过 CLI 自身的危险确认）；带 `profileId/effort` 返回 400。
-  - 项目对话：权限通过 `PATCH /api/work/chats/:id {permission}` 设置，模型/思考强度通过 `POST /api/work/chats/:id/messages {profileId,effort}` 传入；在 command 上带 `settings.permission` 返回 400，避免绕过会话级配置。
-  - 未知字段、非法 `profileId/effort/permission` 或把设置发给不支持的工具执行器，均返回 400。
+  - 外部 CLI：`model`/`effort` 透传（Codex 用 `-m` + `model_reasoning_effort`，Claude Code 用 `--model` + `--effort`，其它 CLI 不支持时会忽略）；`permission` 映射为只读（`write:false`）或可写（`workspace/full` 均为 `write:true`；完全权限不绕过 CLI 自身的危险确认）。带 `profileId` 返回 400。
+  - 项目对话：权限通过 `PATCH /api/work/chats/:id {permission}` 设置，模型/思考强度通过 `POST /api/work/chats/:id/messages {profileId,model,effort}` 传入（`model` 用于 CLI，`profileId` 用于内置 Agent）；在 command 上带 `settings.permission` 返回 400，避免绕过会话级配置。
+  - 未知字段、非法 `profileId/model/effort/permission` 或把设置发给不支持的工具执行器，均返回 400。
 - 工单带回 `verify` 时，完成（`completed`）后自动在 Lagent 侧执行验收：通过则写入 `acceptance` 与「验收通过」摘要；失败则工单进入 `blocked`、附 `attention` 与退出码/输出摘要。`LAGENT_AUTO_VERIFY=0` 或引擎 `autoVerify:false` 可关闭；手动 `POST /api/work/tickets/:id/verify` 仍可用。
 
 ### 观测：工单时间线

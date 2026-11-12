@@ -7159,48 +7159,60 @@ html[data-theme="dark"] .sa-brand-mono {
   overflow-wrap: anywhere;
 }
 
-/* 对话设置：模型、思考强度与工作权限，贴近输入框但不抢主任务。 */
-.sa-conv-settings {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  align-items: center;
-  padding: 2px 0 0;
+/* 对话工具条：模型 / 思考强度 / 权限，做成输入框底部的紧凑胶囊。 */
+.sa-composer-tools {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.sa-conv-settings .sa-modelbar {
-  flex: 1 1 380px;
+.sa-composer-tools .sa-modelbar {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 5px;
   padding: 0;
   border: 0;
   background: transparent;
 }
 
-.sa-perm-pill {
+.sa-composer-tools .sa-modelbar-hint {
+  display: none;
+}
+
+.sa-chip {
   display: inline-flex;
-  gap: 6px;
+  gap: 5px;
   align-items: center;
   height: 26px;
-  padding: 0 8px;
+  padding: 0 9px;
   border: 1px solid var(--sa-line);
   border-radius: var(--sa-r-full);
   background: var(--sa-surface);
   color: var(--sa-text-2);
   font-size: var(--sa-fs-xs);
+  white-space: nowrap;
+  transition: background var(--sa-fast), border-color var(--sa-fast), color var(--sa-fast);
 }
 
-.sa-perm-pill:hover,
-.sa-perm-pill:focus-within {
+.sa-chip:hover,
+.sa-chip:focus-within {
   border-color: var(--sa-line-strong);
+  background: var(--sa-surface-2);
   color: var(--sa-text);
 }
 
-.sa-perm-pill span {
+.sa-chip > svg {
+  flex: none;
+  color: var(--sa-text-3);
+}
+
+.sa-chip > span {
   color: var(--sa-text-3);
   font-size: var(--sa-fs-2xs);
 }
 
-.sa-perm-pill select {
-  max-width: 150px;
+.sa-chip select,
+.sa-chip input {
+  max-width: 230px;
   height: 20px;
   padding: 0;
   border: 0;
@@ -7211,22 +7223,34 @@ html[data-theme="dark"] .sa-brand-mono {
   cursor: pointer;
 }
 
-.sa-perm-pill select:focus-visible {
+.sa-chip-input input {
+  width: 130px;
+  cursor: text;
+}
+
+.sa-chip-input input::placeholder {
+  color: var(--sa-text-3);
+}
+
+.sa-chip select:focus-visible,
+.sa-chip input:focus-visible {
   outline: none;
 }
 
-.sa-perm-pill select:disabled {
+.sa-chip select:disabled,
+.sa-chip input:disabled {
   cursor: progress;
   color: var(--sa-text-3);
 }
 
-.sa-perm-pill.is-local {
+.sa-chip.is-local {
   border-color: var(--sa-accent-line, var(--sa-line-strong));
   background: var(--sa-accent-soft, var(--sa-surface-2));
   color: var(--sa-accent-ink, var(--sa-text));
 }
 
-.sa-conv-hint {
-  color: var(--sa-text-3);
-  font-size: var(--sa-fs-2xs);
+.sa-chip.is-local > span,
+.sa-chip.is-local > svg {
+  color: var(--sa-accent-ink, var(--sa-text));
+  opacity: .8;
 }
