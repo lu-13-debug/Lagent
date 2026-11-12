@@ -38,7 +38,7 @@ sh.Run """__INSTALL_DIR__\Lagent.exe""", 1, False
 
 $vbsPath = Join-Path $InstallDir 'Lagent Launcher.vbs'
 $script = $template.Replace('__SERVER_URL__', $ServerUrl).Replace('__REPO__', $repo).Replace('__INSTALL_DIR__', $InstallDir)
-[System.IO.File]::WriteAllText($vbsPath, $script, [System.Text.Encoding]::ASCII)
+[System.IO.File]::WriteAllText($vbsPath, $script, [System.Text.Encoding]::Unicode)
 
 $appData = Join-Path $env:APPDATA 'Lagent'
 New-Item -ItemType Directory -Force -Path $appData | Out-Null

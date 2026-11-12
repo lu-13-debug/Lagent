@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Lagent">
+  <defs>
+    <linearGradient id="lagent-bg" x1="80" y1="40" x2="440" y2="488" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5B5CF6"/>
+      <stop offset="0.52" stop-color="#6D4AF4"/>
+      <stop offset="1" stop-color="#8B3DFF"/>
+    </linearGradient>
+    <radialGradient id="lagent-sheen" cx="0.28" cy="0.18" r="0.8">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="lagent-clip">
+      <rect width="512" height="512" rx="116"/>
+    </clipPath>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#lagent-bg)"/>
+  <rect width="512" height="512" fill="url(#lagent-sheen)" clip-path="url(#lagent-clip)"/>
+  <rect x="7" y="7" width="498" height="498" rx="110" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="7"/>
+
+  <g fill="none" stroke="#ffffff" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M196 258h38c52 0 64-92 132-114"/>
+    <path d="M234 258h128"/>
+    <path d="M234 258c52 0 64 92 132 114"/>
+  </g>
+
+  <rect x="96" y="206" width="104" height="104" rx="30" fill="#ffffff"/>
+  <circle cx="400" cy="144" r="38" fill="#ffffff"/>
+  <circle cx="400" cy="258" r="38" fill="#67E8F9"/>
+  <circle cx="400" cy="372" r="38" fill="#ffffff"/>
+  <circle cx="400" cy="258" r="13" fill="#6D4AF4"/>
+</svg>
