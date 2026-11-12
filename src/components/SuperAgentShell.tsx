@@ -1675,7 +1675,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     {selectedRunId && runDetail ? <div className="sa-run-detail">
       <button type="button" className="sa-link" onClick={() => { setSelectedRunId(null); setRunDetail(null); }}><ChevronRight size={12} className="sa-rotated" />返回运行列表</button>
       <header className="sa-run-head"><h2>{runDetail.goal}</h2><Status status={runDetail.status} /><span className="sa-run-meta">{runDetail.steps.filter(s => s.status === 'done').length}/{runDetail.steps.length} 步 · {time(runDetail.createdAt)}</span></header>
-      <div className="sa-run-board">{runDetail.board.slice(-20).map((entry, idx) => <p key={idx} className={`sa-run-board-entry sa-board-${entry.kind}`}><time>{shortTime(entry.at)}</time><span>{entry.text}</span></p>)}</div>
+      {runDetail.board.length > 0 && <div className="sa-run-board">{runDetail.board.slice(-20).map((entry, idx) => <p key={idx} className={`sa-run-board-entry sa-board-${entry.kind}`}><time>{shortTime(entry.at)}</time><span>{entry.text}</span></p>)}</div>}
       <div className="sa-run-steps">{runDetail.steps.map(step => <article key={step.index} className={`sa-run-step sa-run-step-${step.status}`}>
         <span className="sa-run-step-index">{step.index + 1}</span>
         <div><strong>{step.role}</strong><span>{step.executorId ? executorNames[step.executorId] || step.executorId : '未分配'}{step.summary ? ` · ${step.summary}` : ''}</span></div>

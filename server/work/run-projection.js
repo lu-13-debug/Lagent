@@ -13,8 +13,8 @@ const STEP_STATUS_BY_TICKET = Object.freeze({
   blocked: 'failed',
   cancelled: 'skipped',
   working: 'running',
-  queued: 'running',
-  awaiting_review: 'running',
+  queued: 'pending',
+  awaiting_review: 'pending',
   waiting: 'pending',
   missing: 'pending',
   pending: 'pending'

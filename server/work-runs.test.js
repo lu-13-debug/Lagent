@@ -63,7 +63,7 @@ test('计划投影成统一 Run：状态、步骤与依赖映射', () => {
   assert.equal(run.status, 'running');
   assert.equal(run.templateLabel, '多步计划');
   assert.equal(run.endedAt, null);
-  assert.deepEqual(run.steps.map(step => step.status), ['done', 'running']);
+  assert.deepEqual(run.steps.map(step => step.status), ['done', 'pending']);
   assert.equal(run.steps[1].role, '实现');
   assert.deepEqual(run.steps[1].dependsOn, [0]);
   assert.deepEqual(run.steps[1].scope, ['src']);
