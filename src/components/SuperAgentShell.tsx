@@ -7,6 +7,7 @@ import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
 import type { WorkAction, WorkBootstrap, WorkEffect, WorkInboxItem, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTaskAnalysis, WorkTeamTemplate, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
 import { MemoryPanel } from './MemoryPanel';
+import { ChatModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
 import { ProjectsPanel } from './ProjectsPanel';
 import { AppearanceSettings } from './AppearanceSettings';
 import { SettingsModal } from './ModelSettings';
@@ -108,6 +109,22 @@ const CHAT_SEEN_KEY = 'lagent.chatseen.v1';
 const SIDEBAR_WIDTH_KEY = 'lagent.sidebarw.v1';
 const PINNED_KEY = 'lagent.pinnedfolders.v1';
 const RAIL_COLLAPSED_KEY = 'lagent.railcollapsed.v1';
+// 新对话的模型/权限选择；项目对话沿用 ChatModelPicker 的按会话存储。
+const COMPOSER_KEY = 'composer';
+const COMPOSER_PERMISSION_KEY = 'lagent.composer-permission.v1';
+type ConversationPermission = 'read' | 'workspace' | 'full';
+const PERMISSION_LABELS: Record<ConversationPermission, string> = {
+  read: '仅查看',
+  workspace: '仅工作区内修改',
+  full: '完全权限'
+};
+const readComposerPermission = (): ConversationPermission => {
+  try {
+    const saved = localStorage.getItem(COMPOSER_PERMISSION_KEY);
+    if (saved === 'read' || saved === 'workspace' || saved === 'full') return saved;
+  } catch { /* 隐私模式下读不了，用默认值。 */ }
+  return 'workspace';
+};
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -205,6 +222,11 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [crossChecks, setCrossChecks] = useState<CrossCheck[]>(() => loadCrossChecks());
   const [groupDetails, setGroupDetails] = useState<Record<string, WorkTicketDetail>>({});
   const [selectedAgents, setSelectedAgents] = useState<string[]>(['claude-acp']);
+  // 新对话的模型/思考强度/权限；项目对话分别读取 chat 自己的设置。
+  const [composerModel, setComposerModel] = useState<ChatModelChoice>(() => readChatModel(COMPOSER_KEY));
+  const [composerPermission, setComposerPermission] = useState<ConversationPermission>(readComposerPermission);
+  const [chatModels, setChatModels] = useState<Record<string, ChatModelChoice>>({});
+  const [chatPermissionBusy, setChatPermissionBusy] = useState(false);
   // 派活方式：自动=一个 Agent 直接做；计划=先拆步骤再逐条派；复核=多个 Agent 并行、再汇总。
   const [composeMode, setComposeMode] = useState<'auto' | 'plan' | 'review'>('auto');
   // 多 Agent 的两种用法：拆分分发（先拆成子任务再分派）与并行对比（同一问题各自作答）。
@@ -380,6 +402,14 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   }, [projectChatId]);
   const datasets = work?.datasets || [];
   const agents = work?.agents || [];
+  // 用户还没手动改过权限时，跟随设置里的全局档位；改过就记住自己的选择。
+  useEffect(() => {
+    let saved = null;
+    try { saved = localStorage.getItem(COMPOSER_PERMISSION_KEY); } catch { return; }
+    if (saved) return;
+    const fallback = work?.policy?.permission;
+    if (fallback === 'read' || fallback === 'workspace' || fallback === 'full') setComposerPermission(fallback);
+  }, [work?.policy?.permission]);
   const plans = work?.plans || [];
   const tools = work?.tools || [];
   const loadWindows = async (quiet = false) => {
@@ -908,6 +938,14 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     if (['analysis'].includes(id)) return undefined;
     return { prompt: text.slice(0, 12000) };
   };
+  const saveComposerModel = (next: ChatModelChoice) => {
+    setComposerModel(next);
+    writeChatModel(COMPOSER_KEY, next);
+  };
+  const saveComposerPermission = (next: ConversationPermission) => {
+    setComposerPermission(next);
+    try { localStorage.setItem(COMPOSER_PERMISSION_KEY, next); } catch { /* 隐私模式下仅本次生效。 */ }
+  };
   const validateSingleInput = (id: string): string | null => {
     if (id === 'analysis') {
       if (datasets.length === 0) return '请先在工作区上传或加载数据集。';
@@ -923,7 +961,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     if (projectChatId) {
       setSending(true);
       try {
-        const result = await api.workProjectChatMessage(projectChatId, value);
+        const choice = activeProjectChat?.executorId === 'model'
+          ? (chatModels[activeProjectChat.id] || readChatModel(activeProjectChat.id))
+          : null;
+        const result = await api.workProjectChatMessage(projectChatId, value, undefined, choice ? { profileId: choice.profileId, effort: choice.effort } : undefined);
         setCommand('');
         setProjectChatTickets(previous => [result.ticket, ...previous]);
         void refresh();
@@ -934,6 +975,17 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     const chosen = selectedAgents.filter(id => id.startsWith('win:') ? windows.some(window => windowKey(window.handle) === id) : crossCapable.some(agent => agent.id === id));
     if (!chosen.length) { notify('请至少选择一个可用 Agent。', true); return; }
     const execIdFor = (id: string) => id.startsWith('win:') ? 'window' : id;
+    // 只有内置 Agent 和外部 CLI 支持对话级模型/权限；工具类执行器忽略这些设置。
+    const settingsFor = (ids: string[]) => {
+      const execIds = ids.map(execIdFor);
+      const hasModel = execIds.includes('model');
+      const hasCli = execIds.some(id => id !== 'model' && agents.find(agent => agent.id === id)?.kind === 'cli');
+      if (!hasModel && !hasCli) return undefined;
+      return {
+        ...(hasModel ? { profileId: composerModel.profileId, effort: composerModel.effort } : {}),
+        permission: composerPermission
+      };
+    };
     const inputFor = (id: string, prompt: string) => {
       if (!id.startsWith('win:')) return executorInputFor(id, prompt);
       const window = windows.find(item => windowKey(item.handle) === id);
@@ -997,7 +1049,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       if (chosen.length === 1) {
         const id = chosen[0];
         const execId = execIdFor(id);
-        const { ticket } = await api.workCommand(value, `command-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, execId === 'analysis' ? datasetId || undefined : undefined, execId, inputFor(id, value));
+        const { ticket } = await api.workCommand(value, `command-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, execId === 'analysis' ? datasetId || undefined : undefined, execId, inputFor(id, value), { settings: settingsFor([id]) });
         setCommand('');
         setActiveGroupId(null);
         setActiveTicketId(ticket.id);
@@ -1009,7 +1061,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         const stamp = Date.now();
         const results = await Promise.all(chosen.map(id => {
           const execId = execIdFor(id);
-          return api.workCommand(value, `cross-${stamp}-${id.replace(/[^a-z0-9-]/gi, '')}`, execId === 'analysis' ? datasetId || undefined : undefined, execId, inputFor(id, value));
+          return api.workCommand(value, `cross-${stamp}-${id.replace(/[^a-z0-9-]/gi, '')}`, execId === 'analysis' ? datasetId || undefined : undefined, execId, inputFor(id, value), { settings: settingsFor([id]) });
         }));
         const group: CrossCheck = { id: `xc-${stamp}`, prompt: value, agentIds: chosen, ticketIds: results.map(result => result.ticket.id), createdAt: new Date().toISOString() };
         setCrossChecks(previous => [group, ...previous].slice(0, 30));
@@ -1235,8 +1287,25 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   };
 
   const singleExecutor = selectedAgents.length === 1 ? selectedAgents[0] : null;
+  const singleAvailableAgent = singleExecutor ? crossCapable.find(agent => agent.id === singleExecutor) || null : null;
   const activeProjectChat = projectChatId ? projects?.flatMap(project => project.chats).find(chat => chat.id === projectChatId) || null : null;
   const activeProjectChatProject = activeProjectChat ? projects?.find(project => project.id === activeProjectChat.projectId) || null : null;
+  const activeChatModel = activeProjectChat ? (chatModels[activeProjectChat.id] || readChatModel(activeProjectChat.id)) : { profileId: '', effort: 'default' };
+  const updateActiveChatModel = (next: ChatModelChoice) => {
+    if (!activeProjectChat) return;
+    setChatModels(previous => ({ ...previous, [activeProjectChat.id]: next }));
+    writeChatModel(activeProjectChat.id, next);
+  };
+  const changeChatPermission = async (next: '' | ConversationPermission) => {
+    if (!activeProjectChat) return;
+    setChatPermissionBusy(true);
+    try {
+      await api.workChatPermission(activeProjectChat.id, next);
+      await reloadProjects();
+      notify('这条对话的权限已更新。');
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setChatPermissionBusy(false); }
+  };
   const isLanding = !activeTicket && !activeGroup && !projectChatId;
   const conversationGroups = useMemo(() => {
     const keyword = convQuery.trim().toLowerCase();
@@ -1497,6 +1566,29 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
               </label>)}
             </div>
           </details>}
+        </div>}
+        {!projectChatId && composeMode === 'auto' && singleAvailableAgent && (singleExecutor === 'model' || singleAvailableAgent.kind === 'cli') && <div className="sa-conv-settings">
+          {singleExecutor === 'model' && <ChatModelPicker chatId={COMPOSER_KEY} value={composerModel} onChange={saveComposerModel} disabled={sending} />}
+          <label className="sa-perm-pill" title="这次对话的工作权限">
+            <ShieldCheck size={13} />
+            <span>权限</span>
+            <select value={composerPermission} disabled={sending} aria-label="这次对话的工作权限" onChange={event => saveComposerPermission(event.target.value as ConversationPermission)}>
+              {(Object.keys(PERMISSION_LABELS) as ConversationPermission[]).map(value => <option key={value} value={value}>{PERMISSION_LABELS[value]}</option>)}
+            </select>
+          </label>
+          <span className="sa-conv-hint">{singleExecutor === 'model' ? '权限对内置 Agent 生效；思考强度按模型能力自动降级。' : 'CLI 仅区分只读/可写；完全权限等同可写，危险操作仍由 CLI 确认。'}</span>
+        </div>}
+        {projectChatId && activeProjectChat && (activeProjectChat.executorId === 'model' || agents.find(agent => agent.id === activeProjectChat.executorId)?.kind === 'cli') && <div className="sa-conv-settings">
+          {activeProjectChat.executorId === 'model' && <ChatModelPicker chatId={activeProjectChat.id} value={activeChatModel} onChange={updateActiveChatModel} disabled={sending} />}
+          <label className={`sa-perm-pill${activeProjectChat.permission ? ' is-local' : ''}`} title="只影响这条对话；跟随设置表示使用全局权限档位">
+            <ShieldCheck size={13} />
+            <span>权限</span>
+            <select value={activeProjectChat.permission || ''} disabled={chatPermissionBusy || sending} aria-label="这条对话的工作权限" onChange={event => void changeChatPermission(event.target.value as '' | ConversationPermission)}>
+              <option value="">跟随设置</option>
+              {(Object.keys(PERMISSION_LABELS) as ConversationPermission[]).map(value => <option key={value} value={value}>{PERMISSION_LABELS[value]}</option>)}
+            </select>
+          </label>
+          <span className="sa-conv-hint">{activeProjectChat.permission ? '只影响这条对话。' : '当前跟随设置里的全局权限。'}</span>
         </div>}
         <textarea id="sa-command" value={command} maxLength={3000} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); if (!projectChatId && composeMode === 'plan') { setPlanOpen(true); return; } void send(); }} rows={2} placeholder={projectChatId ? '回复这个项目对话，例如：先跑一遍测试，再修失败项' : composeMode === 'review' ? '描述要对比的问题，例如：审查这段鉴权逻辑是否有漏洞？' : composeMode === 'plan' ? '描述目标，Lagent 会先拆成 2–5 步再逐条派活' : '描述目标，例如：检查 Lagent 仓库的 CI，修复失败项并开 PR'} />
         {!projectChatId && singleExecutor === 'analysis' && (datasets.length > 1 ? <div className="sa-executor-fields"><label className="sa-field"><span>数据集</span><select value={datasetId} onChange={event => setDatasetId(event.target.value)}><option value="">请选择数据集</option>{datasets.map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.name} · {dataset.rowCount.toLocaleString()} 行</option>)}</select></label></div> : datasets.length === 1 ? <div className="sa-executor-fields"><span className="sa-inline-note"><Check size={13} />数据集：{datasets[0].name}</span></div> : <div className="sa-executor-fields"><span className="sa-inline-note">还没有数据集，请先在工作区上传或加载示例数据。</span></div>)}

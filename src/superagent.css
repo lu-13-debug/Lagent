@@ -7158,3 +7158,75 @@ html[data-theme="dark"] .sa-brand-mono {
   color: var(--sa-text-2);
   overflow-wrap: anywhere;
 }
+
+/* 对话设置：模型、思考强度与工作权限，贴近输入框但不抢主任务。 */
+.sa-conv-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 2px 0 0;
+}
+
+.sa-conv-settings .sa-modelbar {
+  flex: 1 1 380px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.sa-perm-pill {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-perm-pill:hover,
+.sa-perm-pill:focus-within {
+  border-color: var(--sa-line-strong);
+  color: var(--sa-text);
+}
+
+.sa-perm-pill span {
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+}
+
+.sa-perm-pill select {
+  max-width: 150px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--sa-fs-xs);
+  cursor: pointer;
+}
+
+.sa-perm-pill select:focus-visible {
+  outline: none;
+}
+
+.sa-perm-pill select:disabled {
+  cursor: progress;
+  color: var(--sa-text-3);
+}
+
+.sa-perm-pill.is-local {
+  border-color: var(--sa-accent-line, var(--sa-line-strong));
+  background: var(--sa-accent-soft, var(--sa-surface-2));
+  color: var(--sa-accent-ink, var(--sa-text));
+}
+
+.sa-conv-hint {
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+}

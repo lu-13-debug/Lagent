@@ -53,6 +53,24 @@ const datasetMetadata = dataset => ({
   source: typeof dataset.source === 'string' ? dataset.source : ''
 });
 const sameValue = (left, right) => JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+// 对话级设置：模型、思考强度、工作权限。只允许这三个键，避免把任意输入塞进执行器。
+const normalizeCommandSettings = value => {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw workError('settings 必须是对象', 400);
+  const unknown = Object.keys(value).filter(key => !['profileId', 'effort', 'permission'].includes(key));
+  if (unknown.length) throw workError(`settings 包含未知字段：${unknown.join('、')}`, 400);
+  const profileId = typeof value.profileId === 'string' ? value.profileId.trim() : '';
+  if (profileId && !/^[A-Za-z0-9._:-]{1,100}$/.test(profileId)) throw workError('settings.profileId 无效', 400);
+  const effort = typeof value.effort === 'string' ? value.effort.trim() : '';
+  if (effort && !/^[a-z]{2,10}$/.test(effort)) throw workError('settings.effort 无效', 400);
+  if (value.permission !== undefined && !PERMISSIONS.includes(value.permission)) throw workError('settings.permission 仅支持 read/workspace/full', 400);
+  const settings = {
+    ...(profileId ? { profileId } : {}),
+    ...(effort && effort !== 'default' ? { effort } : {}),
+    ...(value.permission ? { permission: value.permission } : {})
+  };
+  return Object.keys(settings).length ? settings : null;
+};
 
 export function createWorkEngine(store, executor, publish = () => {}, options = {}) {
   const db = workStore(store, publish);
@@ -1576,12 +1594,29 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       guard(activeId,null,'command');
       const project=projectContext(input?.projectChatId);
       if(project&&project.chat.executorId!==activeId)throw workError('项目对话绑定的执行器不匹配',409);
+      const settings=normalizeCommandSettings(input?.settings);
+      if(settings&&project&&settings.permission)throw workError('项目对话的权限请在对话设置里修改',400);
+      if(settings&&!project&&(settings.profileId||settings.effort)&&activeId!=='model')throw workError('只有内置 Agent 支持选择模型与思考强度',400);
+      if(settings&&!project&&settings.permission&&activeId!=='model'&&active.kind!=='cli')throw workError('该执行器不支持设置工作权限',400);
       if(!project&&input?.executorInput&&typeof input.executorInput==='object'){
         for(const key of ['workspace','resume','write'])if(key in input.executorInput)throw workError('只有项目对话可以指定工作目录、续接会话或写入模式',400);
       }
+      let projectInput=null;
+      let rawInput=input?.executorInput;
+      if(project){
+        const options=settings?{...(input?.executorInput&&typeof input.executorInput==='object'?input.executorInput:{}),...(settings.profileId?{profileId:settings.profileId}:{}),...(settings.effort?{effort:settings.effort}:{})}:input?.executorInput;
+        projectInput=projectExecutorInput(project.chat,project.project,trigger.text,options,active);
+      }else if(settings){
+        // 非项目对话：把选择合并成执行器输入，后续重试复用同一份冻结输入。
+        const base=input?.executorInput&&typeof input.executorInput==='object'?input.executorInput:{};
+        const prompt=typeof base.prompt==='string'&&base.prompt.trim()?base.prompt:trigger.text;
+        rawInput=activeId==='model'
+          ?{...base,prompt,...(settings.profileId?{profileId:settings.profileId}:{}),...(settings.effort?{effort:settings.effort}:{}),...(settings.permission?{permission:settings.permission}:{})}
+          :{...base,prompt,...(settings.permission?{write:settings.permission!=='read'}:{})};
+      }
       const executorInput=project
-        ?normalizeExecutorInput(activeId,active,projectExecutorInput(project.chat,project.project,trigger.text,input?.executorInput,active),trigger.text)
-        :normalizeExecutorInput(activeId,active,input?.executorInput,trigger.text);
+        ?normalizeExecutorInput(activeId,active,projectInput,trigger.text)
+        :normalizeExecutorInput(activeId,active,rawInput,trigger.text);
       enforceBrowserHost(activeId, executorInput, policy.limits?.browserHosts);
       const datasetId=selectedDatasetId(input?.datasetId);
       if(datasetId)requireDataset(datasetId);
