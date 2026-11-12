@@ -40,6 +40,12 @@ $vbsPath = Join-Path $InstallDir 'Lagent Launcher.vbs'
 $script = $template.Replace('__SERVER_URL__', $ServerUrl).Replace('__REPO__', $repo).Replace('__INSTALL_DIR__', $InstallDir)
 [System.IO.File]::WriteAllText($vbsPath, $script, [System.Text.Encoding]::Unicode)
 
+# 独立 .ico：避免 Windows 按 exe 路径缓存旧图标，也方便以后单独换图标。
+$icoSource = Join-Path $repo 'build\icon.ico'
+$icoPath = Join-Path $InstallDir 'Lagent.ico'
+if (Test-Path $icoSource) { Copy-Item $icoSource $icoPath -Force }
+else { $icoPath = $exe }
+
 $appData = Join-Path $env:APPDATA 'Lagent'
 New-Item -ItemType Directory -Force -Path $appData | Out-Null
 $connection = Join-Path $appData 'connection.json'
@@ -51,7 +57,7 @@ foreach ($folder in @([Environment]::GetFolderPath('Desktop'), (Join-Path $env:A
   $lnk.TargetPath = Join-Path $env:WINDIR 'System32\wscript.exe'
   $lnk.Arguments = '"' + $vbsPath + '"'
   $lnk.WorkingDirectory = $InstallDir
-  $lnk.IconLocation = $exe + ',0'
+  $lnk.IconLocation = $icoPath + ',0'
   $lnk.Description = 'Lagent · Agent 工作台（自动启动本机服务）'
   $lnk.Save()
 }
