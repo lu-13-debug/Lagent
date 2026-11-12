@@ -22,6 +22,8 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+rem 默认打开 Agent 指挥台；需要接入本机 CLI Agent 时，再额外设置 LAGENT_ALLOW_EXTERNAL_EXECUTORS=1。
+set LAGENT_WORK_ENABLED=1
 echo.
 echo 启动后请打开 http://127.0.0.1:3001
 echo 按 Ctrl+C 停止服务。
