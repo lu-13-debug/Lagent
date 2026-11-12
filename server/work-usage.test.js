@@ -69,3 +69,25 @@ test('引擎在执行时检查 token 预算并记录用量', async t => {
   const summary = engine.usageSummary({ days: 'all' });
   assert.equal(summary.totals.calls, 1);
 });
+
+test('用量汇总带预算与 80% 告警', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-usage-alert-'));
+  const store = new Store(dir);
+  recordTicketUsage(store, { ticket: { id: 't1' }, assignment: { executor: 'model' }, task: { usage: { input_tokens: 850, output_tokens: 50 } }, executorId: 'model', projectId: 'p1' });
+  recordTicketUsage(store, { ticket: { id: 't2' }, assignment: { executor: 'model' }, task: { usage: { input_tokens: 100, output_tokens: 20 } }, executorId: 'model', projectId: 'p1' });
+  const report = summarizeUsage(store, { days: 'all', budgetTokens: 1000 });
+  assert.equal(report.budget.maxTokensPerTicket, 1000);
+  assert.equal(report.budget.warningRatio, 0.8);
+  assert.deepEqual(report.budget.warnings.map(row => row.ticketId), ['t1']);
+  const t1 = report.byTicket.find(row => row.ticketId === 't1');
+  assert.equal(t1.warning, true);
+  assert.equal(t1.ratio, 0.9);
+  const t2 = report.byTicket.find(row => row.ticketId === 't2');
+  assert.equal(t2.warning, false);
+
+  const withoutBudget = summarizeUsage(store, { days: 'all' });
+  assert.equal(withoutBudget.budget, null);
+  assert.equal(withoutBudget.byTicket.find(row => row.ticketId === 't1').warning, undefined);
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});

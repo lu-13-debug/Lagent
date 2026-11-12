@@ -31,9 +31,12 @@ const safePath = value => {
 function terminalPreview(executorInput) {
   const program = text(executorInput?.program, 40) || 'command';
   const args = Array.isArray(executorInput?.args) ? executorInput.args.map(item => text(item, 120)).filter(Boolean) : [];
+  // 审批卡只露程序与子命令；终端参数里可能带用户粘贴的凭据/提示词，不能回显。
+  const sub = args[0] ? ` ${redactPreview(args[0], 80)}` : '';
+  const rest = args.length > 1 ? `（另有 ${args.length - 1} 个参数）` : '';
   return {
     kind: 'command',
-    action: redactPreview([program, ...args].join(' '), 500),
+    action: `${program}${sub}${rest}`,
     risk: 'low',
     reversible: true
   };

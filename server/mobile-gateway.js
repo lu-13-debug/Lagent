@@ -89,6 +89,52 @@ function mobileAttention(value) {
   return result;
 }
 
+function mobilePreview(value) {
+  const source = object(value);
+  if (!source) return undefined;
+  // 手机端只给风险与类型，不下发 action：action 里可能带命令行参数或用户输入。
+  const preview = pick(source, ['kind', 'risk', 'tier', 'reversible']);
+  if (!preview) return undefined;
+  const cwd = text(source.cwd, 300);
+  if (cwd !== undefined) preview.cwd = cwd;
+  if (Array.isArray(source.paths)) preview.paths = source.paths.filter(item => typeof item === 'string').slice(0, 10).map(item => item.slice(0, 300));
+  if (Array.isArray(source.hosts)) preview.hosts = source.hosts.filter(item => typeof item === 'string').slice(0, 10).map(item => item.slice(0, 200));
+  return preview;
+}
+
+function mobileVerify(value) {
+  const source = object(value);
+  if (!source) return undefined;
+  const verify = pick(source, ['command', 'expect']);
+  if (!verify) return undefined;
+  const command = text(source.command, 500);
+  if (command !== undefined) verify.command = command;
+  const timeoutMs = integer(source.timeoutMs);
+  if (timeoutMs !== undefined && timeoutMs >= 1000 && timeoutMs <= 600000) verify.timeoutMs = timeoutMs;
+  return verify;
+}
+
+function mobileAcceptance(value) {
+  const source = object(value);
+  if (!source) return undefined;
+  const acceptance = pick(source, ['status', 'exitCode']);
+  if (!acceptance) return undefined;
+  const command = text(source.command, 500);
+  if (command !== undefined) acceptance.command = command;
+  return acceptance;
+}
+
+function mobileContract(value) {
+  const source = object(value);
+  if (!source) return undefined;
+  const contract = {};
+  const objective = text(source.objective, 500);
+  if (objective !== undefined) contract.objective = objective;
+  if (Array.isArray(source.acceptance)) contract.acceptance = source.acceptance.filter(item => typeof item === 'string').slice(0, 10).map(item => item.slice(0, 300));
+  if (Array.isArray(source.constraints)) contract.constraints = source.constraints.filter(item => typeof item === 'string').slice(0, 10).map(item => item.slice(0, 300));
+  return Object.keys(contract).length ? contract : undefined;
+}
+
 export function sanitizeMobileTicket(value) {
   const source = object(value);
   const ticket = pick(source, ['id', 'status', 'stage', 'source', 'executor', 'datasetId', 'createdAt', 'updatedAt']);
@@ -111,6 +157,14 @@ export function sanitizeMobileTicket(value) {
   if (planTotal !== undefined && planTotal >= 2 && planTotal <= 5) ticket.planTotal = planTotal;
   const attention = mobileAttention(source?.attention);
   if (attention) ticket.attention = attention;
+  const preview = mobilePreview(source?.preview);
+  if (preview) ticket.preview = preview;
+  const verify = mobileVerify(source?.verify);
+  if (verify) ticket.verify = verify;
+  const acceptance = mobileAcceptance(source?.acceptance);
+  if (acceptance) ticket.acceptance = acceptance;
+  const contract = mobileContract(source?.contract);
+  if (contract) ticket.contract = contract;
   return ticket;
 }
 

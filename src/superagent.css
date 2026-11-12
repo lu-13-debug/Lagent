@@ -15,7 +15,7 @@
     "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
   --sa-font-mono: "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", monospace;
 
-  --sa-fs-2xs: 11.5px;
+  --sa-fs-2xs: 12px;
   --sa-fs-xs: 12px;
   --sa-fs-sm: 12px;
   --sa-fs-base: 13px;
@@ -945,6 +945,106 @@ html[data-theme="dark"] .sa-newchat kbd {
 .sa-starter:hover .sa-starter-icon {
   background: var(--sa-accent-soft);
   color: var(--sa-accent);
+}
+
+.sa-recent {
+  display: grid;
+  gap: 6px;
+}
+
+.sa-recent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sa-recent-head h2 {
+  color: var(--sa-text-3);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.sa-recent-list {
+  display: grid;
+  gap: 1px;
+}
+
+.sa-projectchat-title {
+  margin: 6px 0 2px;
+  font-size: 20px;
+  letter-spacing: -.02em;
+}
+
+.sa-projectchat-list {
+  margin-top: 14px;
+}
+
+.sa-projectchat-list .sa-recent-item {
+  width: 100%;
+  text-align: left;
+}
+
+.sa-projectchat-list .sa-empty {
+  padding: 18px 0;
+}
+
+.sa-recent-item {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: var(--sa-r-sm);
+  text-align: left;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 40px;
+}
+
+.sa-recent-item:hover {
+  background: var(--sa-surface-2);
+}
+
+.sa-recent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sa-text-3);
+}
+
+.sa-recent-dot[data-status="running"],
+.sa-recent-dot[data-status="working"],
+.sa-recent-dot[data-status="verifying"],
+.sa-recent-dot[data-status="repairing"] {
+  background: var(--sa-accent);
+}
+
+.sa-recent-dot[data-status="awaiting_review"],
+.sa-recent-dot[data-status="blocked"] {
+  background: var(--sa-warn, #b7791f);
+}
+
+.sa-recent-dot[data-status="failed"] {
+  background: var(--sa-danger, #c0392b);
+}
+
+.sa-recent-dot[data-status="completed"] {
+  background: var(--sa-ok, #2f9e6b);
+}
+
+.sa-recent-title {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-recent-time {
+  color: var(--sa-text-3);
+  font-size: 12px;
 }
 
 .sa-starter-text {
@@ -2305,6 +2405,12 @@ html[data-theme="dark"] .sa-newchat kbd {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sa-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .sa-policy-card {
@@ -4284,7 +4390,7 @@ html[data-theme="dark"] .sa-newchat kbd {
   border-radius: var(--sa-r-xs);
   color: var(--sa-text-3);
   font-family: var(--sa-font-mono);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .sa-palette-list {
@@ -5016,6 +5122,22 @@ html[data-theme="dark"] .sa-brand-mono {
   color: var(--sa-text-3);
   font-size: var(--sa-fs-xs);
   line-height: 1.55;
+}
+
+.sa-agent-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.sa-agent-caps span {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--sa-surface-2);
+  color: var(--sa-text-3);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .sa-agent-side {
@@ -6154,7 +6276,7 @@ html[data-theme="dark"] .sa-brand-mono {
   border-radius: 999px;
   background: var(--sa-surface-2, #f1f1f3);
   color: var(--sa-text-3, #86868b);
-  font-size: 10px;
+  font-size: 12px;
   font-style: normal;
   font-weight: 500;
   white-space: nowrap;
@@ -6370,7 +6492,7 @@ html[data-theme="dark"] .sa-brand-mono {
   background: var(--sa-surface-2);
   color: var(--sa-text-3);
   font: inherit;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 16px;
 }
 
@@ -6641,5 +6763,398 @@ html[data-theme="dark"] .sa-brand-mono {
   font-family: var(--sa-font-mono);
   font-size: var(--sa-fs-xs);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ==========================================================================
+   11. 运行页与决策收件箱增强 ------------------------------------------------
+   ========================================================================== */
+
+/* 审批卡里的验收命令与最近一次验收结果：批准前就能看到「完成」的判据。 */
+.sa-verify-spec,
+.sa-acceptance {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin-top: 6px;
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-verify-spec svg,
+.sa-acceptance svg {
+  flex: none;
+  align-self: center;
+}
+
+.sa-verify-spec span,
+.sa-acceptance span {
+  overflow-wrap: anywhere;
+}
+
+.sa-acceptance-passed {
+  color: var(--sa-success);
+}
+
+.sa-acceptance-failed {
+  color: var(--sa-danger);
+}
+
+/* 运行页：列表 → 单次运行详情（步骤、过程、续跑）。 */
+.sa-run-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-4);
+  width: 100%;
+  max-width: var(--sa-content, 980px);
+  margin: 0 auto;
+}
+
+.sa-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sa-2) var(--sa-3);
+  align-items: center;
+}
+
+.sa-run-head h2 {
+  flex: 1 1 240px;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--sa-fs-xl);
+  overflow-wrap: anywhere;
+}
+
+.sa-run-meta {
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-run-board {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--sa-3);
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface-2);
+}
+
+.sa-run-board-entry {
+  display: flex;
+  gap: var(--sa-2);
+  align-items: baseline;
+  margin: 0;
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.sa-run-board-entry time {
+  flex: none;
+  color: var(--sa-text-3);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-2xs);
+}
+
+.sa-board-check {
+  color: var(--sa-warning);
+}
+
+.sa-board-decision {
+  color: var(--sa-text-3);
+}
+
+.sa-run-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sa-run-step {
+  display: flex;
+  gap: var(--sa-3);
+  align-items: center;
+  padding: var(--sa-3);
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface);
+}
+
+.sa-run-step-index {
+  display: grid;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-3);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-2xs);
+  font-weight: 600;
+}
+
+.sa-run-step > div {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sa-run-step strong {
+  font-size: var(--sa-fs-base);
+}
+
+.sa-run-step span {
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.sa-run-step-done .sa-run-step-index {
+  background: var(--sa-success-soft);
+  color: var(--sa-success);
+}
+
+.sa-run-step-failed .sa-run-step-index {
+  background: var(--sa-danger-soft);
+  color: var(--sa-danger);
+}
+
+.sa-run-step-running .sa-run-step-index {
+  background: var(--sa-accent-soft, var(--sa-surface-3));
+  color: var(--sa-accent, var(--sa-text));
+}
+
+.sa-run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: var(--sa-content, 980px);
+  margin: 0 auto;
+}
+
+.sa-run-usage {
+  width: 100%;
+  max-width: var(--sa-content, 980px);
+  margin: var(--sa-6) auto 0;
+  padding: var(--sa-4);
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface);
+}
+
+.sa-run-usage h3 {
+  margin: 0 0 var(--sa-3);
+  font-size: var(--sa-fs-md);
+}
+
+.sa-usage-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sa-4);
+  margin-bottom: var(--sa-3);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-sm);
+}
+
+.sa-usage-totals strong {
+  margin-right: 4px;
+  color: var(--sa-text);
+  font-size: var(--sa-fs-lg);
+}
+
+.sa-usage-by {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sa-usage-by span {
+  padding: 2px 8px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-2xs);
+}
+
+.sa-rotated {
+  transform: rotate(180deg);
+}
+
+@media (max-width: 760px) {
+  .sa-shell .sa-button,
+  .sa-shell .sa-icon,
+  .sa-shell .sa-nav-item,
+  .sa-shell .sa-tab,
+  .sa-shell .sa-composer button {
+    min-height: 44px;
+  }
+}
+
+.sa-run-step,
+.pj-artifact-row,
+.pj-change-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+}
+
+
+.sa-stalled-note {
+  color: var(--sa-warning);
+}
+
+.sa-usage-days {
+  margin-top: var(--sa-3);
+}
+
+.sa-usage-days h4 {
+  margin: 0 0 6px;
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.sa-usage-days p {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 0 0 4px;
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-usage-days code,
+.sa-usage-days time {
+  color: var(--sa-text-3);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-2xs);
+}
+
+.sa-contract {
+  margin-top: var(--sa-3);
+  padding: var(--sa-3);
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface-2);
+}
+
+.sa-contract h3 {
+  margin: 0 0 var(--sa-2);
+  font-size: var(--sa-fs-sm);
+}
+
+.sa-contract p {
+  display: flex;
+  gap: var(--sa-2);
+  align-items: baseline;
+  margin: 0 0 4px;
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-contract strong {
+  flex: none;
+  color: var(--sa-text-3);
+  font-weight: 600;
+}
+
+.sa-contract span {
+  color: var(--sa-text-2);
+  overflow-wrap: anywhere;
+}
+
+.sa-roster {
+  width: 100%;
+  max-width: var(--sa-content, 980px);
+  margin: 0 auto var(--sa-5);
+}
+
+.sa-roster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.sa-roster-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--sa-3);
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface);
+}
+
+.sa-roster-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sa-roster-card p {
+  margin: 0;
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-roster-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-2xs);
+}
+
+.sa-trace {
+  margin-top: var(--sa-3);
+  padding: var(--sa-3);
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-md);
+  background: var(--sa-surface);
+}
+
+.sa-trace-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sa-trace-head h3 {
+  margin: 0;
+  font-size: var(--sa-fs-sm);
+}
+
+.sa-trace-spans {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 240px;
+  margin-top: var(--sa-2);
+  overflow: auto;
+}
+
+.sa-trace-spans p {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 0;
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-trace-spans time {
+  flex: none;
+  color: var(--sa-text-3);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-fs-2xs);
+}
+
+.sa-trace-spans span {
+  color: var(--sa-text-2);
   overflow-wrap: anywhere;
 }

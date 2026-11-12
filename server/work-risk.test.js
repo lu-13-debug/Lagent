@@ -71,7 +71,7 @@ test('引擎在工单完成后可执行验收，失败会进入阻塞并留证�
     start(ticket, assignment) { return { id: assignment.id, status: 'completed', report: { summary: 'done' }, artifacts: { terminal: { command: 'pwd', exitCode: 0 } } }; },
     get() { return null; }
   };
-  const engine = createWorkEngine(store, createExecutorRegistry([terminal]), () => {}, { workspace: dir });
+  const engine = createWorkEngine(store, createExecutorRegistry([terminal]), () => {}, { workspace: dir, autoVerify: false });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
 
   const pass = engine.command({ text: '验收通过', executorId: 'terminal', executorInput: { program: 'pwd', args: [] }, verify: { command: 'npm --version' } });

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { workError } from '../domain.js';
+import { classifyCommand } from '../command-risk.js';
 import { modelRequest, readModelResponse, providerUsage, toolCallsOf, visibleReply } from '../../model-protocol.js';
 
 // Lagent：用已经接入的模型自己推理 + 调工具，把一个任务在项目目录里做完。
@@ -367,6 +368,10 @@ function echoOnly(command, output) {
 function runCommand(guard, command, { approved = false, shell = '' } = {}) {
   const value = text(command, 4000);
   if (!value) throw new Error('command 不能为空');
+  // 先过风险分类：阻断级永不执行；危险级即使已有读取白名单也要人工确认。
+  const risk = classifyCommand(value);
+  if (risk.level === 'blocked') throw new Error(`命令被安全策略拒绝：${risk.reasons.join('；') || '高风险操作'}`);
+  if (risk.level === 'danger' && !approved) throw new Error(`这条命令被判定为高风险（${risk.reasons.join('；') || '不可逆操作'}），需要用户确认后才能执行`);
   const explicitShell = shell === 'powershell' ? 'powershell' : '';
   const readOnly = !explicitShell && READ_COMMAND.test(value);
   // 查看类命令走 PowerShell：Get-ChildItem 这类是 cmdlet，交给 cmd 会报"不是内部或外部命令"。

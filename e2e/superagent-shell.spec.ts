@@ -64,7 +64,7 @@ test('Super-agent 指挥台：导航、派活模式、审批与移动端', async
 
   // 更多菜单承载低频页面。
   await page.getByRole('button', { name: '团队', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '本机 Agent' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '团队', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '更多', exact: true }).click();
   await page.getByRole('menuitem', { name: '工具', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'GitHub', exact: true })).toBeVisible();
@@ -79,4 +79,58 @@ test('Super-agent 指挥台：导航、派活模式、审批与移动端', async
   await page.getByRole('button', { name: '打开导航' }).click();
   await expect(page.locator('.sa-sidebar')).toBeVisible();
   await expect(page.locator('.sa-sidebar')).toHaveCSS('width', '340px');
+  const navBox = await page.getByRole('button', { name: '指挥台' }).boundingBox();
+  expect(navBox?.height || 0).toBeGreaterThanOrEqual(44);
+});
+
+test('运行页：列表、步骤详情与暂停续跑', async ({ page }) => {
+  await page.request.post('/api/auth/register', { data: { username: `runs${Date.now()}`, displayName: '运行测试', password: 'test-password-123' } });
+  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: '1.1.0', capabilities: { superagent: true, memory: true } } }));
+  await page.route('**/api/work/events', route => route.abort());
+  await page.route('**/api/work/bootstrap', route => route.fulfill({ json: { ...bootstrap, tickets: [], attention: [] } }));
+  await page.route('**/api/work/runs?limit=50&include=plans', route => route.fulfill({ json: { runs: [{
+    id: 'run-1', goal: '修复登录页样式', projectId: null, chatId: null, templateId: 'fix', templateLabel: '修复', confidence: 1,
+    status: 'paused', createdAt: '2026-11-12T01:00:00.000Z', updatedAt: '2026-11-12T01:05:00.000Z', endedAt: null,
+    rounds: 0, maxRounds: 2,
+    steps: [
+      { index: 0, role: '调研', need: {}, executorId: 'claude-code', ticketId: 't-1', status: 'done', summary: '找到样式问题' },
+      { index: 1, role: '实现', need: {}, executorId: 'codex', ticketId: null, status: 'pending' },
+    ],
+    board: [{ at: '2026-11-12T01:04:00.000Z', kind: 'check', text: '服务重启，这次运行已暂停' }],
+    digest: '', error: '服务重启，这次运行已暂停，可续跑',
+  }] } }));
+  await page.route('**/api/work/runs/run-1/resume', route => route.fulfill({ json: { run: { id: 'run-1', goal: '修复登录页样式', status: 'running', createdAt: '2026-11-12T01:00:00.000Z', updatedAt: '2026-11-12T01:06:00.000Z', endedAt: null, rounds: 0, maxRounds: 2, steps: [], board: [], digest: '', error: null, projectId: null, chatId: null, templateId: 'fix', templateLabel: '修复', confidence: 1 } } }));
+  await page.route('**/api/work/runs/run-1', route => route.fulfill({ json: { run: {
+    id: 'run-1', goal: '修复登录页样式', projectId: null, chatId: null, templateId: 'fix', templateLabel: '修复', confidence: 1,
+    status: 'paused', createdAt: '2026-11-12T01:00:00.000Z', updatedAt: '2026-11-12T01:05:00.000Z', endedAt: null,
+    rounds: 0, maxRounds: 2,
+    steps: [
+      { index: 0, role: '调研', need: {}, executorId: 'claude-code', ticketId: 't-1', status: 'done', summary: '找到样式问题' },
+      { index: 1, role: '实现', need: {}, executorId: 'codex', ticketId: null, status: 'pending' },
+    ],
+    board: [{ at: '2026-11-12T01:04:00.000Z', kind: 'check', text: '服务重启，这次运行已暂停' }],
+    digest: '', error: '服务重启，这次运行已暂停，可续跑',
+  } } }));
+  await page.route('**/api/work/usage**', route => route.fulfill({ json: {
+    range: { days: 30, from: '2026-10-14', to: '2026-11-12', timeZone: 'Asia/Shanghai' },
+    totals: { calls: 6, tokensIn: 1200, tokensOut: 800, totalTokens: 2000, durationMs: 9000, costEstimate: 0.02 },
+    byExecutor: [{ executorId: 'claude-code', calls: 4, tokensIn: 900, tokensOut: 600, totalTokens: 1500, durationMs: 6000, costEstimate: 0.015 }],
+    byDay: [], byTicket: [],
+  } }));
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByRole('menuitem', { name: '运行', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '运行' })).toBeVisible();
+  await expect(page.getByText('修复登录页样式')).toBeVisible();
+  await expect(page.getByText('1/2 步')).toBeVisible();
+
+  await page.getByRole('button', { name: '加载用量' }).click();
+  await expect(page.getByText('2,000')).toBeVisible();
+
+  await page.getByText('修复登录页样式').click();
+  await expect(page.getByText('找到样式问题')).toBeVisible();
+  await expect(page.getByText('服务重启，这次运行已暂停')).toBeVisible();
+  await page.getByRole('button', { name: '续跑' }).click();
+  await expect(page.getByText('已尝试续跑。')).toBeVisible();
 });

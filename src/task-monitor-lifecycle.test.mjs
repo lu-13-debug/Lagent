@@ -13,6 +13,7 @@ await test('StrictMode initial bootstrap late response preserves newer wallet an
   let cursor = 0; const state = []; const effects = []; const pending = []; let monitorOptions;
   const react = {
     useCallback: fn => fn, useEffect: fn => effects.push(fn),
+    lazy: fn => fn, Suspense: ({ children }) => children,
     useRef(value) { const id = cursor++; if (!(id in state)) state[id] = { current: value }; return state[id]; },
     useState(initial) { const id = cursor++; if (!(id in state)) state[id] = typeof initial === 'function' ? initial() : initial; return [state[id], next => { state[id] = typeof next === 'function' ? next(state[id]) : next; }]; },
   };

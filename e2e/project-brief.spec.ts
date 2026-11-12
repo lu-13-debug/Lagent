@@ -26,7 +26,15 @@ test('项目简报能展示并保存未解问题、下一步与验收命令', as
     }
     return route.fulfill({ json: { brief } });
   });
-  await page.route('**/api/work/projects/p1/changes', route => route.fulfill({ json: { changes: [] } }));
+  await page.route('**/api/work/projects/p1/changes', route => route.fulfill({
+    json: {
+      changes: [{
+        id: 'ch1', projectId: 'p1', projectChatId: 'c1', ticketId: 't1', executorId: 'claude-code',
+        title: '统一导航与审批', summary: '去掉重复入口。', files: ['src/App.tsx'], sessionId: 's1',
+        status: 'completed', source: 'auto', createdAt: '2026-11-11T09:30:00.000Z'
+      }]
+    }
+  }));
   await page.route('**/api/work/projects/p1/memory', route => route.fulfill({ json: { projectId: 'p1', entries: [], updatedAt: '2026-11-11T09:00:00.000Z' } }));
   await page.route('**/api/work/windows**', route => route.fulfill({ json: { windows: [] } }));
   await page.route('**/api/work/providers**', route => route.fulfill({ json: { providers: [] } }));
@@ -49,4 +57,11 @@ test('项目简报能展示并保存未解问题、下一步与验收命令', as
   expect(saved?.openQuestions).toEqual(['是否删掉旧分析工作台', '是否需要成本页']);
   expect(saved?.nextSteps).toEqual(['统一两套状态词', '补 eval 集']);
   expect(saved?.verifyCommands).toEqual(['npm test', 'npm run build']);
+
+  await page.getByRole('button', { name: /概览/ }).click();
+  await expect(page.getByText('现在做到哪')).toBeVisible();
+  await expect(page.getByText('产物文件')).toBeVisible();
+
+  await page.getByRole('button', { name: /产物/ }).click();
+  await expect(page.getByText('src/App.tsx')).toBeVisible();
 });

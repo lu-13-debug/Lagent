@@ -14,6 +14,17 @@ export interface WorkPreview {
   hosts?: string[];
 }
 export interface WorkVerifySpec { command: string; cwd?: string; expect?: string; timeoutMs?: number }
+/** 结构化任务契约：规划器、执行器、验收器共用。 */
+export interface WorkTaskContract {
+  objective?: string;
+  inputs?: string[];
+  constraints?: string[];
+  acceptance?: string[];
+  tools?: string[];
+  budget?: { tokens?: number; wallMs?: number; calls?: number };
+  deadlineMs?: number;
+  report?: { summary?: string; evidence?: string[]; next?: string[] };
+}
 export interface WorkAcceptance {
   status?: 'passed' | 'failed' | string;
   command?: string;
@@ -25,15 +36,47 @@ export interface WorkAcceptance {
   durationMs?: number;
   at?: string;
 }
+/** 结构化交接简报：换 Agent 接手时只读这一块。 */
+export interface WorkHandoff {
+  summary?: string;
+  artifacts?: string[];
+  evidence?: string[];
+  decisions?: string[];
+  openQuestions?: string[];
+  nextSteps?: string[];
+  budgetUsed?: { tokens?: number; calls?: number; wallMs?: number };
+}
 export interface WorkTicket {
   id: string; title: string; status: WorkTicketStatus; stage: string; source: string;
   executor: string; summary: string; datasetId?: string | null; attention?: WorkAttention; createdAt: string; updatedAt: string;
   parentTicketId?: string | null; chainRootId?: string | null; handoffDepth?: number; handoffSummary?: string; handoffChildId?: string | null;
   planId?: string | null; planStep?: number | null; planTotal?: number | null; projectChatId?: string | null;
-  preview?: WorkPreview | null; verify?: WorkVerifySpec | null; acceptance?: WorkAcceptance | null;
+  preview?: WorkPreview | null; verify?: WorkVerifySpec | null; acceptance?: WorkAcceptance | null; contract?: WorkTaskContract | null;
+  handoff?: WorkHandoff | null;
+  /** 详情接口在长时间无心跳时返回；列表投影不带。 */
+  stalled?: boolean;
 }
 export interface WorkDataset { id: string; name: string; rowCount: number; source: string }
 export interface WorkAgent { id: string; name: string; kind: 'analysis' | 'claude-code' | 'codex' | 'browser' | 'terminal' | string; status: string; capabilities: string[] }
+/** Agent 档案：能力、权限、成本、可靠性与最近使用，用于路由解释。 */
+export interface WorkRosterEntry {
+  id: string; name: string; kind: string;
+  health: 'available' | 'needs_setup' | 'unavailable' | string;
+  capabilities: string[];
+  permissions: { allowed: boolean; mode: string };
+  costProfile: { calls: number; avgTokens: number; totalTokens: number; avgDurationMs: number; costEstimate: number };
+  reliability: { finished: number; succeeded: number; failed: number; successRate: number | null; lastStatus: string | null };
+  bestFor: string;
+  lastUsedAt: string | null;
+}
+/** 项目/全局团队模板：角色、执行器、权限与默认协作模式。 */
+export interface WorkTeamTemplateRole { role: string; executorId: string; permissions: 'read' | 'workspace' | 'full' }
+export interface WorkTeamTemplate {
+  id: string; name: string; roles: WorkTeamTemplateRole[];
+  defaultMode: 'auto' | 'plan' | 'review';
+  projectId?: string;
+  createdAt: string; updatedAt: string;
+}
 export interface WorkTool { id: string; name: string; kind: string; status: string; permissions: string[] }
 export interface WorkPolicy {
   mode: 'personal'; acceptMode: 'explicit' | 'observe' | 'auto';
@@ -43,7 +86,7 @@ export interface WorkPolicy {
   limits?: { browserHosts: string[]; githubRepos: string[]; acpWrites?: boolean; modelWrites?: boolean; extraRoots?: string[]; confirmDanger?: boolean };
 }
 export interface WorkInboxItem { ticketId: string; title: string; question: string; options: WorkAttentionOption[]; createdAt: string; kind?: string; accessMode?: string; accessPath?: string }
-export interface WorkPlanStep { index: number; ticketId: string; executorId: string; title: string; status?: string; dependsOn?: number[]; scope?: string[]; projectChatId?: string | null }
+export interface WorkPlanStep { index: number; ticketId: string; executorId: string; title: string; status?: string; dependsOn?: number[]; scope?: string[]; projectChatId?: string | null; preview?: WorkPreview | null; verify?: WorkVerifySpec | null; acceptance?: WorkAcceptance | null; contract?: WorkTaskContract | null }
 export interface WorkPlan {
   id: string; goal: string; status: 'active' | 'completed' | 'failed' | 'cancelled'; autoRun?: boolean;
   currentStep: number; totalSteps: number; steps: WorkPlanStep[]; createdAt: string; updatedAt: string;
@@ -82,7 +125,8 @@ export interface WorkProjectMemoryEntry {
   id: string; projectId: string; ticketId: string | null; projectChatId: string | null;
   executorId: string | null; title: string; status: string | null; summary: string;
   files: string[]; improvements: string[]; openQuestions: string[];
-  source: 'local' | 'model' | string;
+  scope?: string; tags?: string[]; confidence?: number;
+  source: 'local' | 'model' | 'external' | string;
   model: { provider?: string; model?: string } | null;
   createdAt: string; updatedAt: string;
 }
@@ -131,7 +175,7 @@ export interface WorkTeamwork {
   problems: { part?: string; message: string }[]; allSettled?: boolean; projectName?: string; projectPath?: string;
   createdAt: string; updatedAt: string;
 }
-export type WorkRunStatus = 'drafting' | 'awaiting_approval' | 'running' | 'verifying' | 'repairing' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+export type WorkRunStatus = 'drafting' | 'awaiting_approval' | 'running' | 'verifying' | 'repairing' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'paused';
 export interface WorkRunStep {
   index: number;
   role: string;
@@ -146,6 +190,7 @@ export interface WorkRunBoardEntry { at: string; kind: string; text: string }
 /** 一次「深度编排」：分析目标 → 拆解步骤 → 等批准 → 逐部分发 → 验证（可返工）→ 汇总。 */
 export interface WorkRun {
   id: string;
+  kind?: 'orchestrator' | 'plan';
   goal: string;
   projectId: string | null;
   chatId: string | null;
@@ -178,7 +223,7 @@ export interface WorkBootstrap {
   /** 未绑定工作文件夹时，Agent 读写文件所在的目录。 */
   workspace?: string | null;
 }
-export interface WorkAssignment { id: string; ticketId: string; executor: string; status: string; startedAt?: string; endedAt?: string; sessionId?: string; error?: string }
+export interface WorkAssignment { id: string; ticketId: string; executor: string; status: string; startedAt?: string; endedAt?: string; sessionId?: string; error?: string; heartbeatAt?: string; stalled?: boolean }
 export type WorkReportKind = 'progress' | 'waiting' | 'ready' | 'blocked' | 'failed' | 'dropped';
 export interface WorkReport { id: string; ticketId: string; assignmentId: string; kind: WorkReportKind; summary: string; artifacts?: Record<string, unknown>; createdAt: string }
 export interface WorkTeamProposal { id: string; kind: 'chart' | 'clean'; status: 'proposed' | 'needsApproval' | 'accepted' | 'rejected'; summary: string }
@@ -192,4 +237,55 @@ export interface WorkTeam {
   usage: { calls: number; totalTokens: number; reservedTokens: number };
   cancelled: boolean; revision: number; updatedAt: string | null; events: WorkTeamEvent[]; nodes: WorkTeamNode[];
 }
+export interface WorkEffect {
+  id: string;
+  kind: string;
+  key: string;
+  ticketId: string;
+  stepId?: string | null;
+  payload: Record<string, unknown>;
+  status: 'pending' | 'running' | 'done' | 'failed';
+  attempts: number;
+  nextAt?: number;
+  lastError?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface WorkUsageRow {
+  calls: number;
+  tokensIn: number;
+  tokensOut: number;
+  totalTokens: number;
+  durationMs: number;
+  costEstimate: number;
+}
+export interface WorkUsageReport {
+  range: { days: number | 'all'; from: string | null; to: string; timeZone: string };
+  totals: WorkUsageRow;
+  budget?: { maxTokensPerTicket: number; warningRatio: number; warnings: Array<{ ticketId: string; used: number; ratio: number }> } | null;
+  byExecutor: Array<WorkUsageRow & { executorId: string }>;
+  byDay: Array<WorkUsageRow & { date: string }>;
+  byTicket: Array<WorkUsageRow & { ticketId: string; executorId: string; ratio?: number; warning?: boolean }>;
+}
 export interface WorkTicketDetail { ticket: WorkTicket; assignments: WorkAssignment[]; reports: WorkReport[]; team: WorkTeam | null; project?: { id: string; name: string; path: string; gitBranch: string } | null; projectChat?: { id: string; title: string; executorId: string } | null; activity?: { kind: string; text: string; detail?: string; at?: string }[] }
+export interface WorkTraceSpan {
+  kind: 'assignment' | 'report' | 'usage' | 'event' | string;
+  id: string;
+  at: string;
+  endedAt?: string | null;
+  durationMs?: number | null;
+  executor?: string;
+  status?: string;
+  reportKind?: string;
+  summary?: string;
+  executorId?: string;
+  calls?: number;
+  tokens?: number;
+  cost?: number;
+  eventType?: string;
+}
+export interface WorkTrace {
+  ticket: WorkTicket;
+  spans: WorkTraceSpan[];
+  summary: { startedAt: string | null; endedAt: string | null; durationMs: number | null; assignments: number; reports: number; events: number; calls: number; tokens: number; cost: number };
+}

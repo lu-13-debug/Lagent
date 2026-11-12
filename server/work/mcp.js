@@ -18,6 +18,36 @@ export function createMcpHandler({ engine, windowBridge, actor = 'mcp' } = {}) {
   const tools = [
     tool('work_list_tickets', '列出当前工作区的 Work 工单', { type: 'object', properties: {}, additionalProperties: false }, async () => textResult({ tickets: engine.bootstrap().tickets })),
     tool('work_get_ticket', '读取单个工单详情', { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false }, async input => textResult(engine.detail(requiredString(input, 'id')))),
+    tool('work_task_contract_read', '读取工单的任务契约与验收命令；接手任务前先看它', {
+      type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false
+    }, async input => {
+      const detail = engine.detail(requiredString(input, 'id'));
+      return textResult({ contract: detail.ticket.contract || null, verify: detail.ticket.verify || null });
+    }),
+    tool('work_acceptance_read', '读取工单最近一次验收结果（通过/失败、命令、退出码与输出摘要）', {
+      type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false
+    }, async input => {
+      const detail = engine.detail(requiredString(input, 'id'));
+      return textResult({ acceptance: detail.ticket.acceptance || null, verify: detail.ticket.verify || null, status: detail.ticket.status });
+    }),
+    tool('work_artifact_read', '读取工单最新报告里的产物；传 name 只取指定产物', {
+      type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' } }, required: ['id'], additionalProperties: false
+    }, async input => {
+      const detail = engine.detail(requiredString(input, 'id'));
+      // 报告是新的在前：从旧到新合并，保证最新一次的产物覆盖旧的，但不会丢掉终端/github 等较早的产物。
+      const artifacts = {};
+      for (const report of [...(detail.reports || [])].reverse()) {
+        for (const [key, value] of Object.entries(report.artifacts || {})) artifacts[key] = value;
+      }
+      if (input.name !== undefined) {
+        const name = requiredString(input, 'name');
+        const value = artifacts[name];
+        return textResult({ name, found: value !== undefined, value: typeof value === 'string' ? value.slice(0, 20000) : value ?? null });
+      }
+      const preview = {};
+      for (const [key, value] of Object.entries(artifacts)) preview[key] = typeof value === 'string' ? value.slice(0, 20000) : value;
+      return textResult({ artifacts: preview });
+    }),
     tool('work_send_command', '向指挥台发送一条指令', {
       type: 'object',
       properties: { text: { type: 'string' }, executorId: { type: 'string' }, datasetId: { type: 'string' }, executorInput: { type: 'object' }, clientRequestId: { type: 'string' }, verify: { type: 'object' } },
@@ -33,6 +63,33 @@ export function createMcpHandler({ engine, windowBridge, actor = 'mcp' } = {}) {
       if (['approve', 'resume', 'retry'].includes(action)) throw workError('MCP 不能批准或重试工单，请回到界面操作', 403);
       return textResult({ ticket: engine.action(requiredString(input, 'id'), action, input.input) });
     }),
+    tool('work_ticket_handoff', '把已完成工单交接给另一个 Agent；可带结构化交接简报（已完成/产物/证据/决定/未解问题/下一步）', {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        executorId: { type: 'string' },
+        text: { type: 'string' },
+        executorInput: { type: 'object' },
+        datasetId: { type: 'string' },
+        handoff: {
+          type: 'object',
+          properties: {
+            summary: { type: 'string' },
+            artifacts: { type: 'array', items: { type: 'string' } },
+            evidence: { type: 'array', items: { type: 'string' } },
+            decisions: { type: 'array', items: { type: 'string' } },
+            openQuestions: { type: 'array', items: { type: 'string' } },
+            nextSteps: { type: 'array', items: { type: 'string' } },
+            budgetUsed: { type: 'object' }
+          }
+        }
+      },
+      required: ['id', 'executorId'], additionalProperties: false
+    }, async input => {
+      const { id, ...rest } = input;
+      const result = engine.handoff(requiredString(input, 'id'), rest);
+      return textResult({ created: result.created, ticket: result.ticket });
+    }),
     tool('work_list_agents', '列出当前可调度的执行器及其状态', { type: 'object', properties: {}, additionalProperties: false }, async () => textResult({ agents: engine.bootstrap().agents || [] })),
     tool('work_list_plans', '列出最近的 Work 计划', { type: 'object', properties: {}, additionalProperties: false }, async () => textResult({ plans: engine.bootstrap().plans || [] })),
     tool('work_list_projects', '列出已接入的项目工作区', { type: 'object', properties: {}, additionalProperties: false }, async () => textResult({ projects: engine.listProjects() })),
@@ -40,8 +97,11 @@ export function createMcpHandler({ engine, windowBridge, actor = 'mcp' } = {}) {
       type: 'object', properties: { projectId: { type: 'string' } }, required: ['projectId'], additionalProperties: false
     }, async input => textResult(engine.projectBriefMarkdown(requiredString(input, 'projectId')))),
     tool('work_project_memory', '读取项目记忆：之前每次执行谁做了什么、对项目的改进、还没解决的问题（新会话开工前先读它，避免从头开始）', {
-      type: 'object', properties: { projectId: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 50 } }, required: ['projectId'], additionalProperties: false
-    }, async input => textResult(engine.projectMemoryDigest(requiredString(input, 'projectId')))),
+      type: 'object', properties: { projectId: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 50 }, query: { type: 'string' }, scope: { type: 'string' } }, required: ['projectId'], additionalProperties: false
+    }, async input => textResult(engine.projectMemoryDigest(requiredString(input, 'projectId'), { query: input.query, scope: input.scope, limit: input.limit }))),
+    tool('work_memory_search', '按关键词或目录范围检索项目记忆，返回最相关的条目（带 scope/tags/confidence）', {
+      type: 'object', properties: { projectId: { type: 'string' }, query: { type: 'string' }, scope: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 50 } }, required: ['projectId'], additionalProperties: false
+    }, async input => textResult({ entries: engine.projectMemorySearch(requiredString(input, 'projectId'), { query: input.query, scope: input.scope, limit: input.limit }) })),
     tool('work_update_project_brief', '更新项目简报的目标、进展、任务要点、关键决定与约束', {
       type: 'object',
       properties: {

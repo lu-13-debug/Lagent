@@ -90,3 +90,39 @@ test('引擎暴露 listEffects 与 retryEffect，outbox 启用后执行先入队
   const afterRetry = engine.listEffects({ ticketId: ticket.id, kind: EFFECT_KINDS.verify });
   assert.equal(afterRetry[0].status, 'pending');
 });
+
+test('队列按优先级领取：用户交互先于系统回报和 routine', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-effects-priority-'));
+  const store = new Store(dir);
+  enqueue(store, { kind: EFFECT_KINDS.launch, key: 'routine', ticketId: 't-routine', priority: 2, payload: {} });
+  enqueue(store, { kind: EFFECT_KINDS.launch, key: 'system', ticketId: 't-system', priority: 1, payload: {} });
+  enqueue(store, { kind: EFFECT_KINDS.launch, key: 'user', ticketId: 't-user', priority: 0, payload: {} });
+
+  const claimed = claimDue(store, { limit: 10, kind: EFFECT_KINDS.launch });
+  assert.deepEqual(claimed.map(effect => effect.ticketId), ['t-user', 't-system', 't-routine']);
+  assert.deepEqual(claimed.map(effect => effect.priority), [0, 1, 2]);
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('同一工单默认同时只领取一个 effect，完成后再领下一个', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-effects-fair-'));
+  const store = new Store(dir);
+  const first = enqueue(store, { kind: EFFECT_KINDS.launch, key: 'a1', ticketId: 't1', payload: {} });
+  enqueue(store, { kind: EFFECT_KINDS.launch, key: 'a2', ticketId: 't1', payload: {} });
+  enqueue(store, { kind: EFFECT_KINDS.launch, key: 'b1', ticketId: 't2', payload: {} });
+
+  const claimed = claimDue(store, { limit: 10, kind: EFFECT_KINDS.launch });
+  assert.equal(claimed.length, 2);
+  assert.deepEqual(claimed.map(effect => effect.ticketId).sort(), ['t1', 't2']);
+  const t1Claimed = claimed.find(effect => effect.ticketId === 't1');
+  assert.equal(t1Claimed.key, 'a1');
+
+  complete(store, first.id);
+  const next = claimDue(store, { limit: 10, kind: EFFECT_KINDS.launch });
+  assert.equal(next.length, 1);
+  assert.equal(next[0].ticketId, 't1');
+  assert.equal(next[0].key, 'a2');
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});

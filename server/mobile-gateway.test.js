@@ -304,7 +304,7 @@ test('本地应用完成配对、移动 Work API、只读 policy、脱敏与设�
   assert.equal(commandResponse.status, 201);
   const commandText = await commandResponse.text();
   assert.doesNotMatch(commandText, new RegExp(secret));
-  assert.doesNotMatch(commandText, /executorInput|approvalSnapshot|"command"/);
+  assert.doesNotMatch(commandText, /executorInput|approvalSnapshot|"command"\s*:/);
   const ticket = JSON.parse(commandText).ticket;
   assert.equal(ticket.status, 'awaiting_review');
   assert.equal(ticket.title, '整理销售数据');
@@ -445,4 +445,32 @@ test('移动端交接路由返回脱敏子工单且重复交接幂等', async t 
   assert.equal(duplicate.status, 200);
   assert.equal((await duplicate.json()).ticket.id, child.id);
   assert.equal((await request(base, `/api/mobile/tickets/${child.id}`, { token })).status, 200);
+});
+
+test('移动端投影包含审批预览、验收与契约，不泄露原始输入', () => {
+  const secret = 'super-secret-token';
+  const ticket = {
+    id: 't-mobile-1', status: 'awaiting_review', stage: 'approval', source: 'manual', executor: 'terminal',
+    createdAt: '2026-11-12T00:00:00.000Z', updatedAt: '2026-11-12T00:01:00.000Z', title: '检查仓库', summary: '等待确认',
+    command: secret,
+    executorInput: { program: 'git', args: ['status'], prompt: secret },
+    preview: { kind: 'command', action: 'git status', risk: 'low', tier: 'investigate', cwd: 'D:/project', paths: ['D:/project'], hosts: ['api.github.com'], command: secret },
+    verify: { command: 'npm test', expect: 'exit=0', timeoutMs: 120000, cwd: 'D:/project', commandRaw: secret },
+    acceptance: { status: 'passed', command: 'npm test', exitCode: 0, output: secret },
+    contract: { objective: '检查仓库状态', acceptance: ['npm test'], constraints: ['不得修改文件'], inputs: [secret] }
+  };
+  const projected = sanitizeMobileTicket(ticket);
+  assert.equal(projected.preview.kind, 'command');
+  assert.equal(projected.preview.risk, 'low');
+  assert.equal(projected.preview.action, undefined);
+  assert.deepEqual(projected.preview.paths, ['D:/project']);
+  assert.equal(projected.verify.command, 'npm test');
+  assert.equal(projected.verify.timeoutMs, 120000);
+  assert.equal(projected.acceptance.status, 'passed');
+  assert.equal(projected.acceptance.exitCode, 0);
+  assert.equal(projected.contract.objective, '检查仓库状态');
+  assert.deepEqual(projected.contract.acceptance, ['npm test']);
+  const serialized = JSON.stringify(projected);
+  assert.doesNotMatch(serialized, new RegExp(secret));
+  assert.doesNotMatch(serialized, /executorInput|commandRaw/);
 });

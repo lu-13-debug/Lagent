@@ -1,5 +1,6 @@
 import { createWorkEngine } from './engine.js';
 import { workEvents } from './effects.js';
+import { mergeRuns, planToRun, taggedRun } from './run-projection.js';
 import { registerMobileWorkRoutes } from '../mobile-gateway.js';
 import { registerMcpRoutes } from './mcp.js';
 
@@ -62,9 +63,13 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.get('/api/work/projects/:id/changes',(req,res)=>res.json({changes:engine.projectChanges(req.params.id)}));
   app.post('/api/work/projects/:id/changes',(req,res)=>res.status(201).json({change:engine.recordProjectChange(req.params.id,req.body)}));
   app.delete('/api/work/projects/:id/changes/:changeId',(req,res)=>res.json(engine.deleteProjectChange(req.params.id,req.params.changeId)));
-  app.get('/api/work/projects/:id/memory',(req,res)=>res.json(engine.projectMemoryDigest(req.params.id)));
+  app.get('/api/work/projects/:id/memory',(req,res)=>res.json(engine.projectMemoryDigest(req.params.id,{query:req.query?.query,scope:req.query?.scope,limit:Number(req.query?.limit)||undefined})));
   app.delete('/api/work/projects/:id/memory/:memoryId',(req,res)=>res.json(engine.deleteProjectMemory(req.params.id,req.params.memoryId)));
   app.get('/api/work/policy',(_req,res)=>res.json({policy:engine.policy()}));
+  app.get('/api/work/agents/roster',(_req,res)=>res.json({agents:engine.agentRoster()}));
+  app.get('/api/work/team-templates',(req,res)=>res.json({templates:engine.listTeamTemplates(req.query?.projectId)}));
+  app.post('/api/work/team-templates',(req,res)=>res.status(201).json({template:engine.saveTeamTemplate(req.body)}));
+  app.delete('/api/work/team-templates/:id',(req,res)=>res.json(engine.deleteTeamTemplate(req.params.id)));
   app.put('/api/work/policy',(req,res)=>res.json({policy:engine.updatePolicy(req.body)}));
   app.post('/api/work/plans',(req,res)=>res.status(201).json({plan:engine.plan(req.body)}));
   app.post('/api/work/plans/suggest',async(req,res)=>res.json(await engine.suggestPlan(req.body)));
@@ -78,6 +83,7 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/plans/:id/cancel',(req,res)=>res.json({plan:engine.cancelPlan(req.params.id)}));
   app.post('/api/work/command',(req,res)=>res.status(201).json({ticket:engine.command(req.body)}));
   app.get('/api/work/tickets/:id',(req,res)=>res.json(engine.detail(req.params.id)));
+  app.get('/api/work/tickets/:id/trace',(req,res)=>res.json(engine.ticketTrace(req.params.id)));
   app.delete('/api/work/tickets/:id',(req,res)=>res.json(engine.deleteTicket(req.params.id)));
   // 编排器：默认开启；LAGENT_ORCHESTRATOR=legacy 退回单工单流程。
   // 关闭时这些路由返回 503，前端据此隐藏入口，而不是报错。
@@ -109,8 +115,19 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   };
   app.get('/api/work/orchestrator', (_req, res) => res.json({ enabled: orchestratorOn() }));
   app.get('/api/work/runs', runRoute(async req => {
-    const started = await orchestrator();
-    return { runs: started.list(Number(req.query?.limit) || 20) };
+    const limit = Number(req.query?.limit) || 20;
+    const includePlans = req.query?.include === 'plans' || req.query?.include === 'all';
+    let runs = [];
+    if (orchestratorOn()) {
+      try { runs = (await orchestrator()).list(limit); }
+      catch (error) { if (!includePlans) throw error; }
+    } else if (!includePlans) {
+      const error = new Error('编排器未启用：去掉 LAGENT_ORCHESTRATOR=legacy 并重启服务');
+      error.status = 503;
+      throw error;
+    }
+    const plans = includePlans ? engine.listPlans(limit) : [];
+    return { runs: mergeRuns(runs, plans, limit) };
   }));
   app.post('/api/work/runs', runRoute(async req => {
     const started = await orchestrator();
@@ -130,8 +147,11 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     }) };
   }));
   app.get('/api/work/runs/:id', runRoute(async req => {
+    // 计划 id 直接命中计划投影，不需要拉起编排器（也可能根本没启用）。
+    const plan = engine.findPlan(req.params.id);
+    if (plan) return { run: planToRun(plan) };
     const started = await orchestrator();
-    return { run: started.get(req.params.id) };
+    return { run: taggedRun(started.get(req.params.id)) };
   }));
   app.post('/api/work/runs/:id/approve', runRoute(async req => {
     const started = await orchestrator();

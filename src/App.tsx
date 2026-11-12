@@ -1,22 +1,12 @@
-import { MemoryPanel } from './components/MemoryPanel';
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { ArrowDownToLine, ArrowRight, Check, ChevronDown, ChevronRight, Database, FileText, Gamepad2, Menu, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRight, Plus, RefreshCw, Search, Settings2, Sparkles, SunMoon, Wifi, Zap } from 'lucide-react';
 import { api } from './api';
 import { useAppearance } from './appearance-context';
 import { AppearanceSettings } from './components/AppearanceSettings';
-import { ConciseWorkspace } from './components/ConciseWorkspace';
-import { SuperAgentShell } from './components/SuperAgentShell';
+const SuperAgentShell = lazy(() => import('./components/SuperAgentShell').then(module => ({ default: module.SuperAgentShell })));
 import { useAuth } from './auth-context';
 import type { Bootstrap, Dataset, Mode, Settings, Skill, Task, TaskSnapshot, TaskSummary, View, Wallet } from './types';
-import { Sidebar } from './components/Sidebar';
-import { Workspace } from './components/ReportView';
-import { RunPanel } from './components/RunPanel';
-import { DataPage, ReportsPage, SkillsPage, WalletPage } from './components/Pages';
-import { DataPreview, DomainModal, HelpModal, NewAnalysis, SettingsModal, SkillModal } from './components/Modals';
-import { AccountModal } from './components/AccountModal';
-import { ReportDownload } from './components/ReportDownload';
 import { Logo, Spinner, Toast } from './components/ui';
-import { OnboardingChecklist } from './components/OnboardingChecklist';
 import { useOnboarding } from './use-onboarding';
 import { isPresetSample } from './onboarding';
 import { analysisAccess } from './product-state';
@@ -24,18 +14,33 @@ import { useTaskMonitor } from './use-task-monitor';
 import { taskSummaries, setDesktopState, setDesktopSummaries, subscribeDesktopNew } from './desktop-tray';
 import { mergeWalletState, mergeTaskDetails, mergeTaskSummaries } from './task-monitor';
 import { choiceKey, readChoices } from './analysis-draft';
-import { AnalysisTemplates } from './components/AnalysisTemplates';
 import { CommandPalette } from './components/CommandPalette';
 import { ShortcutHelp } from './components/ShortcutHelp';
 import { shortcutAction } from './commands';
 import type { Command } from './commands';
 import { continuationDraft } from './report-assets';
 import { useReportMetadata } from './use-report-metadata';
-import './experience.css';
-import './data-workflow.css';
-import './task-control.css';
-import './commands.css';
-import './report-assets.css';
+// 旧分析工作台只在没有 superagent 能力时渲染，单独拆包后主包不再背它的组件。
+const LegacyStyles = lazy(() => import('./legacy-styles').then(module => ({ default: module.LegacyStyles })));
+const MemoryPanel = lazy(() => import('./components/MemoryPanel').then(module => ({ default: module.MemoryPanel })));
+const ConciseWorkspace = lazy(() => import('./components/ConciseWorkspace').then(module => ({ default: module.ConciseWorkspace })));
+const Sidebar = lazy(() => import('./components/Sidebar').then(module => ({ default: module.Sidebar })));
+const Workspace = lazy(() => import('./components/ReportView').then(module => ({ default: module.Workspace })));
+const RunPanel = lazy(() => import('./components/RunPanel').then(module => ({ default: module.RunPanel })));
+const DataPage = lazy(() => import('./components/Pages').then(module => ({ default: module.DataPage })));
+const ReportsPage = lazy(() => import('./components/Pages').then(module => ({ default: module.ReportsPage })));
+const SkillsPage = lazy(() => import('./components/Pages').then(module => ({ default: module.SkillsPage })));
+const WalletPage = lazy(() => import('./components/Pages').then(module => ({ default: module.WalletPage })));
+const DataPreview = lazy(() => import('./components/Modals').then(module => ({ default: module.DataPreview })));
+const DomainModal = lazy(() => import('./components/Modals').then(module => ({ default: module.DomainModal })));
+const HelpModal = lazy(() => import('./components/Modals').then(module => ({ default: module.HelpModal })));
+const NewAnalysis = lazy(() => import('./components/Modals').then(module => ({ default: module.NewAnalysis })));
+const SettingsModal = lazy(() => import('./components/Modals').then(module => ({ default: module.SettingsModal })));
+const SkillModal = lazy(() => import('./components/Modals').then(module => ({ default: module.SkillModal })));
+const AccountModal = lazy(() => import('./components/AccountModal').then(module => ({ default: module.AccountModal })));
+const ReportDownload = lazy(() => import('./components/ReportDownload').then(module => ({ default: module.ReportDownload })));
+const OnboardingChecklist = lazy(() => import('./components/OnboardingChecklist').then(module => ({ default: module.OnboardingChecklist })));
+const AnalysisTemplates = lazy(() => import('./components/AnalysisTemplates').then(module => ({ default: module.AnalysisTemplates })));
 
 const viewNames: Record<View, string> = { workspace: '分析工作台', datasets: '数据源', reports: '分析报告', skills: 'Skill 能力库', wallet: '额度与记录', memory: '记忆' };
 export default function App() {
@@ -145,7 +150,7 @@ export default function App() {
     return () => cancelAnimationFrame(frame);
   }, [exportOpen, view, exportFocusRequest]);
   if (!data) return <div className="app-loading"><div className="loading-brand"><Logo /><strong>Lagent.</strong></div>{error ? <><h2>连接分析服务时遇到问题</h2><p role="alert">{error}</p><button className="button primary" onClick={() => void load()}><RefreshCw size={15} />重试连接</button><small>{cloud ? '请检查网络；若问题持续，请联系本服务管理员。' : '开发环境请运行 npm run dev；生产环境请运行 npm start。'}</small></> : <><Spinner size={24} /><p role="status">正在准备你的分析工作空间…</p></>}</div>;
-  if (runtime.capabilities?.superagent) return <SuperAgentShell user={user} runtime={runtime} settings={data.settings} onSettingsSaved={settings => setData(previous => previous ? { ...previous, settings } : previous)} notify={notify} />;
+  if (runtime.capabilities?.superagent) return <Suspense fallback={<div className="app-loading"><div className="loading-brand"><Logo /><strong>Lagent.</strong></div><Spinner size={24} /><p role="status">正在载入工作台…</p></div>}><SuperAgentShell user={user} runtime={runtime} settings={data.settings} onSettingsSaved={settings => setData(previous => previous ? { ...previous, settings } : previous)} notify={notify} /></Suspense>;
   const access = analysisAccess(runtime, data.settings, data.wallet);
   const currentDataset = data.datasets.find(d => d.id === task?.datasetId);
   const commands: Command[] = [
@@ -164,7 +169,8 @@ export default function App() {
     ...data.skills.map(item => ({ id: `skill:${item.id}`, title: item.name, group: 'Skill', hint: item.description, keywords: item.id, run: () => setSkill(item) })),
   ];
   const concise = appearance.view === 'concise';
-  return <div className={`app-shell ${view === 'workspace' ? 'with-run-panel' : ''} ${appearance.railCollapsed ? 'rail-collapsed' : ''} ${concise ? 'concise-workspace-shell' : ''} ${concise && panelOpen ? 'concise-details-open' : ''}`}>
+  return <Suspense fallback={<div className="app-loading"><Spinner size={24} /><p role="status">正在载入分析工作台…</p></div>}><div className={`app-shell ${view === 'workspace' ? 'with-run-panel' : ''} ${appearance.railCollapsed ? 'rail-collapsed' : ''} ${concise ? 'concise-workspace-shell' : ''} ${concise && panelOpen ? 'concise-details-open' : ''}`}>
+    <LegacyStyles />
     <a className="skip-link" href="#main-content">跳到主内容</a>
     <Sidebar collapsed={appearance.railCollapsed} view={view} setView={setView} wallet={data.wallet} tasks={data.tasks} selectedId={activeId} selectTask={selectTask} onNew={() => onNew()} onSettings={() => setSettingsOpen(true)} onHelp={openHelp} onAccount={() => { setSidebarOpen(false); setAccountOpen(true); }} open={sidebarOpen} close={() => setSidebarOpen(false)} onDomain={() => setDomainOpen(true)} domainId={activeDomain?.id} domainName={activeDomain?.name} />
     <div className="app-main"><header className="topbar"><div className="breadcrumb"><button className="icon-button rail-toggle" aria-label={appearance.railCollapsed ? "展开侧栏" : "折叠侧栏"} title={appearance.railCollapsed ? "展开侧栏" : "折叠侧栏"} aria-pressed={appearance.railCollapsed} onClick={() => appearance.setRailCollapsed(!appearance.railCollapsed)}>{appearance.railCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button><button className="icon-button mobile-menu" aria-label="打开导航" onClick={() => setSidebarOpen(true)}><Menu size={19} /></button><span>工作空间</span><ChevronRight size={12} /><strong>{viewNames[view]}</strong></div><div className="topbar-right"><span className={`connection-state ${monitor.connection === 'reconnecting' ? 'disconnected' : ''}`} role="status" aria-live="polite" title={cloud ? window.location.host : undefined}><span className="online-dot" /><span className="connection-label">{monitor.connection === 'reconnecting' ? '连接中断，正在重连' : cloud ? '云端服务已连接' : '本地服务已连接'}</span></span><button className="icon-button command-trigger" aria-label="打开命令面板" title="查找并执行（Ctrl / ⌘ K）" onClick={() => setCommandOpen(true)}><Search size={17} /></button><button className="icon-button" aria-label="显示设置" title="显示设置（Ctrl / ⌘ + Shift + D）" onClick={() => setAppearanceOpen(true)}><SunMoon size={17} /></button><span className="topbar-divider" /><button className={`model-status ${access.canUseAI ? 'configured' : ''}`} onClick={() => setSettingsOpen(true)}><Sparkles size={13} />{access.modelLabel}<ArrowRight size={12} /></button>{!access.canStart && <span className="quota-status" role="status">额度不足 · 需 20 额度</span>}<button className="topbar-avatar" onClick={() => cloud ? setAccountOpen(true) : openHelp()} aria-label={cloud ? `账号与安全，${user?.displayName}，用户名 ${user?.username}` : '打开使用指南'} title={user ? `${user.displayName} @${user.username}` : undefined}>{user?.displayName.slice(0, 1).toUpperCase() || 'D'}</button></div></header>
@@ -194,5 +200,5 @@ export default function App() {
     {helpOpen && <HelpModal onShortcuts={() => { closeHelp(); setShortcutsOpen(true); }} close={closeHelp} section={helpSection} canStart={access.canStart} onReviewOnboarding={() => { closeHelp(); setView('workspace'); onboarding.reopen(); }} onStartCollaborative={() => { closeHelp(); onNew('', task?.datasetId || sampleReport?.datasetId, 'collaborative'); }} />}
     {skill && <SkillModal skill={skill} close={closeSkill} />}
     {toast && <Toast message={toast.text} error={toast.error} close={() => setToast(null)} />}
-  </div>;
+  </div></Suspense>;
 }

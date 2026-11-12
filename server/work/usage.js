@@ -101,10 +101,11 @@ function add(row, call) {
   row.costEstimate += number(call.costEstimate);
 }
 
-export function summarizeUsage(store, { projectId, executorId, from, to, days = 30, now } = {}) {
+export function summarizeUsage(store, { projectId, executorId, from, to, days = 30, now, budgetTokens } = {}) {
   const toDay = to || day(now ?? Date.now());
   const fromDay = from || (days === 'all' ? null : new Date(Date.parse(`${toDay}T00:00:00Z`) - (Number(days) - 1) * 86400000).toISOString().slice(0, 10));
   const inRange = date => date && date <= toDay && (!fromDay || date >= fromDay);
+  const budget = Number.isSafeInteger(budgetTokens) && budgetTokens > 0 ? budgetTokens : null;
   const totals = counters();
   const maps = {
     byExecutor: new Map(),
@@ -128,12 +129,25 @@ export function summarizeUsage(store, { projectId, executorId, from, to, days = 
       add(maps.byTicket.get(call.ticketId), call);
     }
   }
+  const byTicket = [...maps.byTicket.values()]
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+    .slice(0, 100)
+    .map(row => budget
+      ? { ...row, ratio: row.totalTokens / budget, warning: row.totalTokens >= budget * 0.8 }
+      : row);
   const result = {
     range: { days, from: fromDay, to: toDay, timeZone: 'Asia/Shanghai' },
     totals,
+    budget: budget
+      ? {
+          maxTokensPerTicket: budget,
+          warningRatio: 0.8,
+          warnings: byTicket.filter(row => row.warning).map(row => ({ ticketId: row.ticketId, used: row.totalTokens, ratio: row.ratio }))
+        }
+      : null,
     byExecutor: [...maps.byExecutor.values()].sort((a, b) => b.totalTokens - a.totalTokens),
     byDay: [...maps.byDay.values()].sort((a, b) => b.date.localeCompare(a.date)),
-    byTicket: [...maps.byTicket.values()].sort((a, b) => b.totalTokens - a.totalTokens).slice(0, 100)
+    byTicket
   };
   return result;
 }

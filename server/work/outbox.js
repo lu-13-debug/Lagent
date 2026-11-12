@@ -59,19 +59,22 @@ export function enqueue(store, input, options = {}) {
   const key = requiredString(input?.key, 'key', 200);
   const ticketId = requiredString(input?.ticketId, 'ticketId', 100);
   const stepId = typeof input?.stepId === 'string' && input.stepId.trim() ? input.stepId.trim().slice(0, 100) : null;
+  // 优先级越小越先执行：用户交互 0 > 系统回报 1 > routine 2。
+  const priority = Number.isSafeInteger(input?.priority) ? Math.max(0, Math.min(9, input.priority)) : 0;
   if (!input?.payload || typeof input.payload !== 'object' || Array.isArray(input.payload)) throw new TypeError('payload 必须是对象');
   const payload = clone(input.payload);
   return atomically(store, () => {
     const existing = store.list('work-effect').find(effect => effect.kind === kind && effect.key === key);
     const stamp = new Date(now).toISOString();
     const effect = existing
-      ? { ...existing, ticketId, stepId, payload, status: 'pending', nextAt: now, lastError: null, updatedAt: stamp }
+      ? { ...existing, ticketId, stepId, priority, payload, status: 'pending', nextAt: now, lastError: null, updatedAt: stamp }
       : {
           id: randomUUID(),
           kind,
           key,
           ticketId,
           stepId,
+          priority,
           payload,
           status: 'pending',
           attempts: 0,
@@ -89,14 +92,34 @@ export function claimDue(store, limitOrOptions = 10, explicitNow) {
   const options = typeof limitOrOptions === 'object' && !(limitOrOptions instanceof Date) ? limitOrOptions : {};
   const limit = typeof limitOrOptions === 'number' ? limitOrOptions : options.limit ?? 10;
   const kind = options.kind ?? WORK_EFFECT_KIND;
+  // 同一工单同时最多跑 N 个 effect，避免一个长任务把队列占满。
+  const maxPerTicket = Number.isSafeInteger(options.maxPerTicket) && options.maxPerTicket > 0 ? options.maxPerTicket : 1;
   const now = optionsAt(options, Date.now(), explicitNow);
   if (!Number.isSafeInteger(limit) || limit < 0) throw new TypeError('limit 必须是非负整数');
   return atomically(store, () => {
-    const due = store.list('work-effect')
+    const all = store.list('work-effect');
+    const runningByTicket = new Map();
+    for (const effect of all) {
+      if (effect.kind !== kind || effect.status !== 'running') continue;
+      runningByTicket.set(effect.ticketId, (runningByTicket.get(effect.ticketId) || 0) + 1);
+    }
+    const order = all
       .filter(effect => effect.kind === kind && effect.status === 'pending' && effect.nextAt <= now)
-      .sort((left, right) => left.nextAt - right.nextAt || left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
-      .slice(0, limit);
-    return due.map(effect => {
+      .sort((left, right) => (left.priority ?? 0) - (right.priority ?? 0)
+        || left.nextAt - right.nextAt
+        || left.createdAt.localeCompare(right.createdAt)
+        || left.id.localeCompare(right.id));
+    // 同一批里也要算上刚领走的 effect，否则同一工单会在一批内被领走多个。
+    const picked = [];
+    const pickedByTicket = new Map();
+    for (const effect of order) {
+      if (picked.length >= limit) break;
+      const inFlight = (runningByTicket.get(effect.ticketId) || 0) + (pickedByTicket.get(effect.ticketId) || 0);
+      if (inFlight >= maxPerTicket) continue;
+      picked.push(effect);
+      pickedByTicket.set(effect.ticketId, (pickedByTicket.get(effect.ticketId) || 0) + 1);
+    }
+    return picked.map(effect => {
       const claimed = {
         ...effect,
         status: 'running',

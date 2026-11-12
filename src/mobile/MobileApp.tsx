@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Check, ChevronRight, Inbox, ListChecks, Moon, RefreshCw, Send, Settings2, ShieldCheck, Sun, Terminal, Unplug } from 'lucide-react';
+import { STATUS_LABELS } from '../status';
 import './mobile.css';
 
 type MobileDevice = { deviceId: string; deviceToken: string; expiresAt: string; name?: string };
@@ -25,10 +26,7 @@ type MobileBootstrap = {
 
 const DEVICE_KEY = 'lagent:mobile:device:v1';
 const BOOT_APPEARANCE_KEY = 'lagent:appearance:boot:v1';
-const statusNames: Record<string, string> = {
-  queued: '排队中', working: '执行中', awaiting_review: '待确认', blocked: '受阻', failed: '失败',
-  waiting: '等待触发', completed: '已完成', cancelled: '已停止', pending: '待执行', running: '执行中', accepted: '已接受'
-};
+const statusNames: Record<string, string> = { ...STATUS_LABELS, accepted: '已接受' };
 const time = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
 
 class MobileApiError extends Error { status: number; constructor(message: string, status: number) { super(message); this.status = status; } }

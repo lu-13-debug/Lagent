@@ -1,5 +1,5 @@
 import type { ModelUsageReport, Bootstrap, PublicReport, ShareItem, Dataset, ExploreInput, Exploration, Mode, ModelCatalog, ReportMetadata, Runtime, Settings, Task, TaskSnapshot, TaskResponse, Transaction, User, Wallet } from './types';
-import type { WorkAction, WorkAcceptance, WorkBootstrap, WorkPlan, WorkPlanStep, WorkPolicy, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkRun, WorkTaskAnalysis, WorkTeam, WorkTeamwork, WorkTicket, WorkTicketDetail } from './superagent';
+import type { WorkAction, WorkAcceptance, WorkBootstrap, WorkEffect, WorkPlan, WorkPlanStep, WorkPolicy, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkRosterEntry, WorkRun, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamTemplate, WorkTeamwork, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
 import { uploadFiles } from './upload.ts';
 import type { UploadOptions } from './upload';
 
@@ -31,8 +31,9 @@ async function request<T>(path: string, options: RequestInit = {}, authenticatio
 }
 export const api = {
   workBootstrap: (signal?: AbortSignal) => request<WorkBootstrap>('/work/bootstrap', { signal }),
-  workCommand: (text: string, clientRequestId?: string, datasetId?: string, executorId?: string, executorInput?: unknown) => request<{ ticket: WorkTicket }>('/work/command', { method: 'POST', body: JSON.stringify({ text, ...(clientRequestId ? { clientRequestId } : {}), ...(datasetId ? { datasetId } : {}), ...(executorId ? { executorId } : {}), ...(executorInput !== undefined ? { executorInput } : {}) }) }),
+  workCommand: (text: string, clientRequestId?: string, datasetId?: string, executorId?: string, executorInput?: unknown, extra?: { verify?: WorkVerifySpec; contract?: WorkTaskContract }) => request<{ ticket: WorkTicket }>('/work/command', { method: 'POST', body: JSON.stringify({ text, ...(clientRequestId ? { clientRequestId } : {}), ...(datasetId ? { datasetId } : {}), ...(executorId ? { executorId } : {}), ...(executorInput !== undefined ? { executorInput } : {}), ...(extra?.verify ? { verify: extra.verify } : {}), ...(extra?.contract ? { contract: extra.contract } : {}) }) }),
   workTicket: (id: string) => request<WorkTicketDetail>(`/work/tickets/${encodeURIComponent(id)}`),
+  workTicketTrace: (id: string) => request<WorkTrace>(`/work/tickets/${encodeURIComponent(id)}/trace`),
   workVerifyTicket: (id: string) => request<{ ticket: WorkTicket; acceptance: WorkAcceptance }>(`/work/tickets/${encodeURIComponent(id)}/verify`, { method: 'POST', body: '{}' }),
   workProjects: () => request<{ projects: WorkProject[] }>('/work/projects'),
   workImportProject: (path: string, name?: string) => request<{ project: WorkProject; created: boolean }>('/work/projects', { method: 'POST', body: JSON.stringify({ path, ...(name ? { name } : {}) }) }),
@@ -44,7 +45,13 @@ export const api = {
   workProjectChanges: (id: string) => request<{ changes: WorkProjectChange[] }>(`/work/projects/${encodeURIComponent(id)}/changes`),
   workRecordProjectChange: (id: string, input: { title?: string; summary?: string; files?: string[]; executorId?: string; ticketId?: string }) => request<{ change: WorkProjectChange }>(`/work/projects/${encodeURIComponent(id)}/changes`, { method: 'POST', body: JSON.stringify(input) }),
   workDeleteProjectChange: (projectId: string, changeId: string) => request<{ id: string }>(`/work/projects/${encodeURIComponent(projectId)}/changes/${encodeURIComponent(changeId)}`, { method: 'DELETE' }),
-  workProjectMemory: (id: string) => request<WorkProjectMemory>(`/work/projects/${encodeURIComponent(id)}/memory`),
+  workProjectMemory: (id: string, options?: { query?: string; scope?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (options?.query) params.set('query', options.query);
+    if (options?.scope) params.set('scope', options.scope);
+    if (options?.limit) params.set('limit', String(options.limit));
+    return request<WorkProjectMemory>(`/work/projects/${encodeURIComponent(id)}/memory${params.toString() ? `?${params.toString()}` : ''}`);
+  },
   workDeleteProjectMemory: (projectId: string, memoryId: string) => request<{ ok: boolean }>(`/work/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(memoryId)}`, { method: 'DELETE' }),
   workDeleteProject: (id: string) => request<{ id: string }>(`/work/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   workRenameProject: (id: string, name: string) => request<{ project: WorkProject }>(`/work/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
@@ -67,19 +74,43 @@ export const api = {
   workDeleteTicket: (id: string) => request<{ id: string; removed: number; ids: string[]; planRemoved: boolean }>(`/work/tickets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   // 编排器：一次运行 = 分析 → 拆解 → 批准 → 分发 → 验证（可返工）→ 汇总
   workOrchestrator: () => request<{ enabled: boolean }>('/work/orchestrator'),
-  workRuns: (limit = 20) => request<{ runs: WorkRun[] }>(`/work/runs?limit=${limit}`),
+  workRuns: (limit = 20, includePlans = false) => request<{ runs: WorkRun[] }>(`/work/runs?limit=${limit}${includePlans ? '&include=plans' : ''}`),
   workStartRun: (input: { goal: string; projectId?: string | null; chatId?: string | null; templateId?: string | null }) => request<{ run: WorkRun }>('/work/runs', { method: 'POST', body: JSON.stringify(input) }),
   workApproveRun: (id: string, decision: 'approve' | 'reject' = 'approve') => request<{ run: WorkRun }>(`/work/runs/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify({ decision }) }),
   workCancelRun: (id: string) => request<{ run: WorkRun }>(`/work/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' }),
+  workResumeRun: (id: string) => request<{ run: WorkRun }>(`/work/runs/${encodeURIComponent(id)}/resume`, { method: 'POST', body: '{}' }),
+  workRun: (id: string) => request<{ run: WorkRun }>(`/work/runs/${encodeURIComponent(id)}`),
+  workEffects: (options?: { ticketId?: string; kind?: string; status?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (options?.ticketId) params.set('ticketId', options.ticketId);
+    if (options?.kind) params.set('kind', options.kind);
+    if (options?.status) params.set('status', options.status);
+    if (options?.limit) params.set('limit', String(options.limit));
+    return request<{ effects: WorkEffect[] }>(`/work/effects${params.toString() ? `?${params.toString()}` : ''}`);
+  },
+  workRetryEffect: (id: string) => request<{ effect: WorkEffect }>(`/work/effects/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' }),
+  workUsage: (options?: { projectId?: string; executorId?: string; from?: string; to?: string; days?: number | 'all' }) => {
+    const params = new URLSearchParams();
+    if (options?.projectId) params.set('projectId', options.projectId);
+    if (options?.executorId) params.set('executorId', options.executorId);
+    if (options?.from) params.set('from', options.from);
+    if (options?.to) params.set('to', options.to);
+    params.set('days', String(options?.days ?? 30));
+    return request<WorkUsageReport>(`/work/usage?${params.toString()}`);
+  },
   workReviewTeam: (id: string, nodeId: string, decision: 'accept' | 'reject') => request<{ team: WorkTeam }>(`/work/tickets/${encodeURIComponent(id)}/team/${encodeURIComponent(nodeId)}/review`, { method: 'POST', body: JSON.stringify({ decision }) }),
   workDecideProposal: (id: string, nodeId: string, proposalId: string, decision: 'accept' | 'reject') => request<{ team: WorkTeam }>(`/work/tickets/${encodeURIComponent(id)}/team/${encodeURIComponent(nodeId)}/proposals/${encodeURIComponent(proposalId)}`, { method: 'POST', body: JSON.stringify({ decision }) }),
+  workAgentRoster: () => request<{ agents: WorkRosterEntry[] }>('/work/agents/roster'),
+  workTeamTemplates: (projectId?: string) => request<{ templates: WorkTeamTemplate[] }>(`/work/team-templates${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+  workSaveTeamTemplate: (input: Omit<Partial<WorkTeamTemplate>, 'createdAt' | 'updatedAt'> & { name: string; roles: WorkTeamTemplate['roles'] }) => request<{ template: WorkTeamTemplate }>('/work/team-templates', { method: 'POST', body: JSON.stringify(input) }),
+  workDeleteTeamTemplate: (id: string) => request<{ id: string }>(`/work/team-templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   workPolicy: () => request<{ policy: WorkPolicy }>('/work/policy'),
   workWindows: () => request<{ windows: { id: string; handle: number; pid: number; process: string; title: string }[] }>('/work/windows'),
   workProviders: (refresh = false) => request<{ providers: { id: string; name: string; kind?: string; command: string | null; installed: boolean; version: string | null; status: string; message: string; auth: { loggedIn: boolean | null; method: string | null; message: string } }[] }>(`/work/providers${refresh ? '?refresh=1' : ''}`),
   mcpToken: () => request<{ endpoint: string; token: string; deviceId: string; expiresAt: string }>('/mcp/token', { method: 'POST', body: '{}' }),  readWorkWindow: (id: string) => request<{ text: string }>(`/work/windows/${encodeURIComponent(id)}/text`),
   sendWorkWindow: (id: string, text: string, submit: boolean) => request<{ ok: boolean; process: string; submitted: boolean }>(`/work/windows/${encodeURIComponent(id)}/send`, { method: 'POST', body: JSON.stringify({ text, submit }) }),
   createWorkPlan: (goal: string, steps: { executorId: string; text: string; executorInput?: unknown; datasetId?: string; dependsOn?: number[] }[], clientRequestId?: string, autoRun = false, projectChatId?: string) => request<{ plan: WorkPlan }>('/work/plans', { method: 'POST', body: JSON.stringify({ goal, steps, autoRun, ...(clientRequestId ? { clientRequestId } : {}), ...(projectChatId ? { projectChatId } : {}) }) }),
-  suggestWorkPlan: (goal: string, executors: string[], projectChatId?: string) => request<{ steps: { executorId: string; text: string; datasetId?: string; reason?: string; dependsOn?: number[]; executorInput?: { handle?: number; process?: string; title?: string } }[] }>('/work/plans/suggest', { method: 'POST', body: JSON.stringify({ goal, executors, ...(projectChatId ? { projectChatId } : {}) }) }),
+  suggestWorkPlan: (goal: string, executors: string[], projectChatId?: string) => request<{ steps: { executorId: string; text: string; datasetId?: string; reason?: string; dependsOn?: number[]; executorInput?: { handle?: number; process?: string; title?: string }; verify?: WorkVerifySpec; contract?: WorkTaskContract }[] }>('/work/plans/suggest', { method: 'POST', body: JSON.stringify({ goal, executors, ...(projectChatId ? { projectChatId } : {}) }) }),
   workPlan: (id: string) => request<{ plan: WorkPlan; tickets?: WorkTicket[] }>(`/work/plans/${encodeURIComponent(id)}`),
   workCommander: (goal: string, executors: string[], options?: { projectChatId?: string; projectId?: string; autoRun?: boolean }) => request<{ plan: WorkPlan; steps: { executorId: string; text: string; dependsOn?: number[] }[]; analysis?: WorkTaskAnalysis | null }>('/work/commander', { method: 'POST', body: JSON.stringify({ goal, executors, ...(options?.projectChatId ? { projectChatId: options.projectChatId } : {}), ...(!options?.projectChatId && options?.projectId ? { projectId: options.projectId } : {}), ...(options?.autoRun ? { autoRun: true } : {}) }) }),
   workAnalyze: (goal: string, executors: string[], options?: { projectId?: string }) => request<WorkTaskAnalysis>('/work/analyze', { method: 'POST', body: JSON.stringify({ goal, executors, ...(options?.projectId ? { projectId: options.projectId } : {}) }) }),  workCommanderReport: (id: string) => request<{ plan: { id: string; goal: string; status: string }; rows: { index: number; title: string; executorId: string; executorName: string; status: string; ticketId: string; summary: string }[]; completed: number; total: number; markdown: string }>(`/work/commander/${encodeURIComponent(id)}/report`),

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AppWindow, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, Plus, RefreshCw, Save, Send, ShieldCheck, SkipForward, Sparkles, Trash2, Users, X } from 'lucide-react';
+import { AppWindow, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, LayoutDashboard, Package, Plus, RefreshCw, Save, Send, ShieldCheck, SkipForward, Sparkles, Trash2, Users, X } from 'lucide-react';
 import { api } from '../api';
 import { Modal } from './ui';
 import { ChatModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
 import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkRun, WorkTeamwork, WorkTicket } from '../superagent';
+import { ACTIVE_TICKET_STATUS, RUN_STATUS_LABELS, RUN_STEP_LABELS, STATUS_LABELS } from '../status';
 import '../projects.css';
 
 type Props = {
@@ -50,48 +51,11 @@ const EXECUTOR_LABELS: Record<string, string> = {
 // 分派优先级：先 CLI（能改文件、能续接会话），再 ACP，最后其它本机 Agent。
 const DISPATCH_ORDER = ['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi'];
 
-const STATUS_LABELS: Record<string, string> = {
-  queued: '排队中',
-  working: '执行中',
-  awaiting_review: '待确认',
-  blocked: '受阻',
-  failed: '失败',
-  waiting: '等待触发',
-  completed: '已完成',
-  cancelled: '已停止',
-  pending: '待执行',
-  running: '执行中',
-  accepted: '已接受',
-  recorded: '已记录'
-};
-
-// 还没走完的状态：有这些消息时对话页会自己轮询，批准后的状态变化不用手动刷新。
-const ACTIVE_TICKET_STATUS = new Set(['queued', 'working', 'awaiting_review', 'waiting', 'pending', 'running']);
-
 // 编排运行的状态文案；步骤状态复用执行器的那套，避免多一套词。
 const PERMISSION_LABELS: Record<'read' | 'workspace' | 'full', string> = {
   read: '仅查看',
   workspace: '仅工作区内修改',
   full: '完全权限'
-};
-const RUN_STATUS_LABELS: Record<string, string> = {
-  drafting: '分析中',
-  awaiting_approval: '等你批准',
-  running: '执行中',
-  verifying: '验证中',
-  repairing: '返工中',
-  completed: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
-  interrupted: '已中断'
-};
-const RUN_STEP_LABELS: Record<string, string> = {
-  pending: '待执行',
-  running: '执行中',
-  completed: '完成',
-  failed: '失败',
-  skipped: '跳过',
-  waiting: '等待'
 };
 
 export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onExitChat, onBackToProjects, onApprove, onSkip, onTicketsChanged }: Props) {
@@ -142,7 +106,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const [planGoal, setPlanGoal] = useState('');
   const [planSteps, setPlanSteps] = useState<{ executorId: string; text: string; dependsOn?: number[] }[]>([]);
   const [planBusy, setPlanBusy] = useState('');
-  const [tab, setTab] = useState<'chat' | 'archive' | 'memory'>('chat');
+  const [tab, setTab] = useState<'overview' | 'chat' | 'archive' | 'memory' | 'artifacts'>('chat');
   const [memory, setMemory] = useState<WorkProjectMemory | null>(null);
   const [memoryBusy, setMemoryBusy] = useState('');
   const [brief, setBrief] = useState<WorkProjectBrief | null>(null);
@@ -173,6 +137,22 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
 
   const project = useMemo(() => projects.find(item => item.id === activeProjectId) || null, [projects, activeProjectId]);
   const dispatchExecutors = useMemo(() => DISPATCH_ORDER.filter(id => allowedExecutors.includes(id)), [allowedExecutors]);
+  // 产物不看工单，只看项目变更档案：同一路径可能被多次改动，合并成一行。
+  const artifactRows = useMemo(() => {
+    const rows = new Map<string, { path: string; count: number; last: string; executor: string }>();
+    for (const change of changes) {
+      for (const file of change.files) {
+        const previous = rows.get(file);
+        rows.set(file, {
+          path: file,
+          count: (previous?.count || 0) + 1,
+          last: !previous || change.createdAt > previous.last ? change.createdAt : previous.last,
+          executor: !previous || change.createdAt > previous.last ? change.executorId : previous.executor
+        });
+      }
+    }
+    return [...rows.values()].sort((left, right) => right.last.localeCompare(left.last));
+  }, [changes]);
   // 能跟着内置 Agent 一起干活的外部 Agent：不含内置 Agent 自己，最多再选 3 个。
   const collabCandidates = useMemo(() => dispatchExecutors.filter(id => id !== 'model'), [dispatchExecutors]);
   const chat = useMemo(() => project?.chats.find(item => item.id === activeChatId) || null, [project, activeChatId]);
@@ -682,6 +662,10 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     setTab('archive');
     if (!brief) void loadArchive();
   };
+  // 概览与产物都依赖简报/变更档案；直接切过去时按需补一次，不要求用户先点档案。
+  useEffect(() => {
+    if ((tab === 'overview' || tab === 'artifacts') && !brief) void loadArchive();
+  }, [tab, brief, activeProjectId]);
   const loadMemory = async (projectId = activeProjectId) => {
     if (!projectId) return;
     setMemoryBusy('load');
@@ -1099,21 +1083,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       </div>
     </form>}
 
-    {!chatMode && <div className={`pj-layout${projectMode ? ' pj-layout-single' : ''}`}>
-      {!projectMode && <aside className="pj-projects">
-        <div className="pj-side-title"><span>已导入的项目</span><span>{projects.length}</span></div>
-        {loading ? <p className="pj-empty">载入中…</p> : projects.length ? <ul>
-          {projects.map(item => <li key={item.id}>
-            <button type="button" className={`pj-project ${item.id === activeProjectId ? 'active' : ''}`} onClick={() => setActiveProjectId(item.id)}>
-              <span className="pj-project-name">{item.name}</span>
-              <span className="pj-project-meta">{item.gitBranch ? <><GitBranch size={11} />{item.gitBranch}</> : '非 Git 目录'} · {item.chatCount} 个对话</span>
-              <span className="pj-project-path">{item.path}</span>
-            </button>
-            <button type="button" className="pj-icon" aria-label={`移除 ${item.name}`} disabled={busy === `delete-${item.id}`} onClick={() => void removeProject(item)}><Trash2 size={13} /></button>
-          </li>)}
-        </ul> : <div className="pj-empty-block"><p>还没有导入项目。</p><p>选择本地文件夹，或粘贴绝对路径。</p></div>}
-      </aside>}
-
+    {!chatMode && <div className="pj-layout pj-layout-single">
       <div className="pj-main">
         {!project ? <div className="pj-empty-block pj-placeholder"><FolderGit2 size={26} /><p>导入一个本地文件夹开始。</p></div> : <>
           {!projectMode && <div className="pj-project-head">
@@ -1130,10 +1100,45 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
 
 
           <div className="pj-tabs">
+            <button type="button" className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}><LayoutDashboard size={13} />概览</button>
             <button type="button" className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}><Bot size={13} />对话</button>
             <button type="button" className={tab === 'archive' ? 'active' : ''} onClick={openArchive}><History size={13} />变更档案</button>
             <button type="button" className={tab === 'memory' ? 'active' : ''} onClick={openMemory}><Brain size={13} />项目记忆</button>
+            <button type="button" className={tab === 'artifacts' ? 'active' : ''} onClick={() => setTab('artifacts')}><Package size={13} />产物</button>
           </div>
+
+          {tab === 'overview' && <div className="pj-overview">
+            <div className="pj-overview-grid">
+              <div className="pj-overview-stat"><span>对话</span><strong>{project?.chats.length || 0}</strong></div>
+              <div className="pj-overview-stat"><span>变更</span><strong>{changes.length}</strong></div>
+              <div className="pj-overview-stat"><span>产物文件</span><strong>{artifactRows.length}</strong></div>
+              <div className="pj-overview-stat"><span>最近更新</span><strong>{brief ? new Date(brief.updatedAt).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }) : '—'}</strong></div>
+            </div>
+            <section className="pj-overview-block">
+              <h3>现在做到哪</h3>
+              <p>{brief?.summary || brief?.goal || '还没有项目简报。打开「变更档案」补充目标与当前进展。'}</p>
+              {brief?.nextSteps.length ? <ul>{brief.nextSteps.slice(0, 5).map(item => <li key={item}>{item}</li>)}</ul> : null}
+            </section>
+            {brief?.verifyCommands.length ? <section className="pj-overview-block">
+              <h3>接手先跑</h3>
+              <ul className="pj-overview-commands">{brief.verifyCommands.map(item => <li key={item}><code>{item}</code></li>)}</ul>
+            </section> : null}
+            <section className="pj-overview-block">
+              <h3>最近变更</h3>
+              {changes.length ? <ul>{changes.slice(0, 4).map(change => <li key={change.id}><strong>{change.title}</strong><span>{EXECUTOR_LABELS[change.executorId] || change.executorId} · {new Date(change.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span></li>)}</ul> : <p>还没有变更记录。</p>}
+            </section>
+          </div>}
+
+          {tab === 'artifacts' && <div className="pj-artifacts">
+            <div className="pj-card-head"><strong>项目产物</strong><span>{artifactRows.length} 个文件</span></div>
+            {artifactRows.length ? <ul className="pj-artifact-list">
+              {artifactRows.map(row => <li key={row.path}>
+                <FileIcon size={14} />
+                <span className="pj-artifact-path" title={row.path}>{row.path}</span>
+                <span className="pj-artifact-meta">{EXECUTOR_LABELS[row.executor] || row.executor} · {row.count} 次 · {new Date(row.last).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}</span>
+              </li>)}
+            </ul> : <p className="pj-empty">还没有产物。Agent 完成一次写入后，这里会按文件聚合。</p>}
+          </div>}
 
           {tab === 'chat' && sessionsOpen && <div className="pj-sessions">
             <div className="pj-sessions-head"><strong>该项目可导入的 Agent 会话</strong><button type="button" className="pj-link" onClick={() => setSessionsOpen(false)}>收起</button></div>
