@@ -1184,23 +1184,26 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   }, [moreOpen]);
 
   const handoffTargets = usableAgents.filter(agent => conversationExecutorIds.includes(agent.id) && agent.id !== 'analysis');
+  // 详情弹窗和线程内联交接共用同一份来源：优先当前弹窗，其次线程里打开的那条工单。
+  const handoffSource = detail?.ticket || activeTicket;
   useEffect(() => {
-    if (detail?.ticket.status === 'completed' && !handoffTargets.some(agent => agent.id === handoffExecutor)) setHandoffExecutor(handoffTargets[0]?.id || '');
-  }, [detail?.ticket.status, handoffTargets, handoffExecutor]);
+    if (handoffSource?.status === 'completed' && !handoffTargets.some(agent => agent.id === handoffExecutor)) setHandoffExecutor(handoffTargets[0]?.id || '');
+  }, [handoffSource?.status, handoffTargets, handoffExecutor]);
   const handoff = async () => {
-    if (!detail || !handoffExecutor) return;
+    if (!handoffSource || !handoffExecutor) return;
     try {
       const text = handoffText.trim();
-      const executorInput = ['codex', 'claude-code'].includes(handoffExecutor) ? { prompt: text || detail.ticket.title } : undefined;
-      const artifacts = [...new Set((detail.reports || []).flatMap(report => Object.keys((report.artifacts || {}) as Record<string, unknown>)))].slice(0, 10);
-      const acceptance = detail.ticket.acceptance;
+      const sourceDetail = detail && detail.ticket.id === handoffSource.id ? detail : activeDetail;
+      const executorInput = ['codex', 'claude-code'].includes(handoffExecutor) ? { prompt: text || handoffSource.title } : undefined;
+      const artifacts = [...new Set((sourceDetail?.reports || []).flatMap(report => Object.keys((report.artifacts || {}) as Record<string, unknown>)))].slice(0, 10);
+      const acceptance = handoffSource.acceptance;
       const handoff = {
-        summary: reportText(detail) || detail.ticket.summary || '',
+        summary: reportText(sourceDetail) || handoffSource.summary || '',
         artifacts,
         evidence: acceptance?.command ? [`验收${acceptance.status === 'passed' ? '通过' : '未通过'}：${acceptance.command}`] : [],
         nextSteps: text ? [text] : []
       };
-      const result = await api.workAction(detail.ticket.id, 'handoff', { executorId: handoffExecutor, ...(text ? { text } : {}), handoff, ...(executorInput ? { executorInput } : {}) });
+      const result = await api.workAction(handoffSource.id, 'handoff', { executorId: handoffExecutor, ...(text ? { text } : {}), handoff, ...(executorInput ? { executorInput } : {}) });
       await refresh(); setDetail(await api.workTicket(result.ticket.id)); setHandoffText(''); notify('已交给下一棒 Agent。');
     } catch (cause) { notify((cause as Error).message, true); }
   };

@@ -32,14 +32,14 @@ async function mockDesktop(page) {
 test('桌面端把已完成工单交接给另一个执行器', async ({ page }) => {
   await mockDesktop(page);
   await page.goto('/');
-  await page.locator('.sa-ticket-list button').filter({ hasText: '完成检查' }).click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog).toContainText('交给另一个 Agent');
-  await dialog.getByRole('combobox').selectOption('codex');
-  await dialog.getByPlaceholder('可选：希望下一棒关注什么').fill('请检查 CI');
-  await dialog.getByRole('button', { name: '交接', exact: true }).click();
-  await expect(dialog).toContainText('接手修复');
-  await expect(dialog).toContainText('来自上一棒工单');
+  // 只有一条工单时，指挥台会自动打开它，交接区直接出现在线程底部。
+  const form = page.locator('.sa-handoff-inline');
+  await expect(form).toContainText('交给另一个 Agent');
+  await form.getByRole('combobox').selectOption('codex');
+  await form.getByPlaceholder('可选：希望下一棒关注什么').fill('请检查 CI');
+  await form.getByRole('button', { name: '交接', exact: true }).click();
+  await expect(page.getByText('接手修复').first()).toBeVisible();
+  await expect(page.getByText(/来自上一棒工单/).first()).toBeVisible();
 });
 
 test('手机端把已完成工单交接给另一个执行器', async ({ page }) => {
