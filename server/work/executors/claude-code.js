@@ -48,6 +48,33 @@ export function parseClaudeOutput({ stdout, stderr, exitCode }) {
   };
 }
 
+// Claude Code 的 stream-json 每轮吐一条 assistant：thinking 块是它的思考，tool_use 是它要做什么。
+// 逐条映射成 activity，界面就能边跑边看，而不是等进程退出才有东西。
+const TOOL_HINT = { Bash: 'command', Read: 'file_path', Write: 'file_path', Edit: 'file_path', Glob: 'pattern', Grep: 'pattern', WebFetch: 'url', Task: 'description' };
+
+export function claudeStreamActivity(event) {
+  if (event?.type !== 'assistant') return null;
+  const content = Array.isArray(event.message?.content) ? event.message.content : Array.isArray(event.content) ? event.content : [];
+  const entries = [];
+  for (const block of content) {
+    if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) {
+      entries.push({ kind: 'thought', text: block.thinking });
+      continue;
+    }
+    if (block?.type === 'tool_use') {
+      const hint = TOOL_HINT[block.name] || '';
+      const value = hint && block.input && typeof block.input[hint] === 'string' ? block.input[hint] : '';
+      entries.push({ kind: 'tool', text: `${block.name || '工具'}${value ? ` · ${String(value).slice(0, 120)}` : ''}` });
+      continue;
+    }
+    // 正文留给最终摘要，这里只留一句提示，避免把整段答案也当成「过程」。
+    if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim() && block.text.trim().length <= 300) {
+      entries.push({ kind: 'note', text: block.text.trim() });
+    }
+  }
+  return entries.length ? entries : null;
+}
+
 export function claudeCodeExecutor({
   store,
   cwd,
@@ -93,6 +120,7 @@ export function claudeCodeExecutor({
     validateInput,
     buildArgs,
     parseOutput: parseClaudeOutput,
+    streamActivity: claudeStreamActivity,
     capabilities: ['cli', 'claude-code', 'read-only', 'stream-json', 'human-approval', 'project-write', 'resume-session']
   });
   executor.buildArgs = buildArgs;

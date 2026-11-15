@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('list', 'read', 'send')][string]$Command,
+  [Parameter(Mandatory = $true)][ValidateSet('list', 'read', 'send', 'capture')][string]$Command,
   [long]$Handle = 0,
   [string]$Text = '',
   [switch]$Submit,
@@ -8,6 +8,7 @@ param(
   [string]$Allow = 'codex|ChatGPT|claude|WindowsTerminal|wt|DSH Desktop|DeepSeek',
   [ValidateRange(1, 100000)][int]$MaxText = 8000,
   [ValidateRange(1, 200000)][int]$MaxRead = 20000,
+  [ValidateRange(10, 90)][int]$Quality = 55,
   [ValidateRange(1024, 1048576)][int]$MaxOutput = 65536,
   [ValidateRange(1000, 60000)][int]$TimeoutMs = 12000
 )
@@ -232,6 +233,70 @@ function Invoke-Read {
   Write-Json ([pscustomobject]@{ text = $text; process = [string]$process.ProcessName })
 }
 
+function Get-WindowTitle([long]$windowHandle) {
+  $buffer = New-Object System.Text.StringBuilder 512
+  try { [void][WindowBridgeNative]::GetWindowTextW([IntPtr]$windowHandle, $buffer, 512) } catch { }
+  return Clean-Text $buffer.ToString() 200
+}
+
+function Invoke-Capture {
+  $process = Get-AllowedProcess $Handle
+  Assert-Budget
+  $title = Get-WindowTitle $Handle
+  $bounds = New-Object WindowBridgeNative+RECT
+  $resolved = $false
+  try {
+    # DWMWA_EXTENDED_FRAME_BOUNDS = 9：排除 Windows 10+ 的不可见阴影边框。
+    $resolved = [WindowBridgeNative]::DwmGetWindowAttribute([IntPtr]$Handle, 9, [ref]$bounds, [System.Runtime.InteropServices.Marshal]::SizeOf($bounds)) -eq 0
+  } catch { $resolved = $false }
+  if (-not $resolved) {
+    try { $resolved = [WindowBridgeNative]::GetWindowRect([IntPtr]$Handle, [ref]$bounds) } catch { $resolved = $false }
+  }
+  if (-not $resolved) { Exit-Failure 'window_not_found' '窗口不存在或不可访问' }
+  $width = [int]($bounds.Right - $bounds.Left)
+  $height = [int]($bounds.Bottom - $bounds.Top)
+  if ($width -lt 80 -or $height -lt 60) { Exit-Failure 'window_not_ready' '窗口已最小化或尺寸过小' }
+  if ($width -gt 4096 -or $height -gt 4096) { Exit-Failure 'invalid_result' '窗口尺寸超过限制' }
+  $bitmap = New-Object System.Drawing.Bitmap $width, $height
+  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  try {
+    $graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bitmap.Size)
+  } catch {
+    $bitmap.Dispose(); $graphics.Dispose()
+    Exit-Failure 'capture_failed' '窗口截图失败'
+  }
+  $graphics.Dispose()
+  $budget = [Math]::Max(8000, $MaxOutput - 2048)
+  $encoded = $null
+  foreach ($level in @($Quality, 40, 28, 18)) {
+    Assert-Budget
+    $stream = New-Object System.IO.MemoryStream
+    try {
+      $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' } | Select-Object -First 1
+      $parameters = New-Object System.Drawing.Imaging.EncoderParameters 1
+      $parameters.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]$level)
+      $bitmap.Save($stream, $codec, $parameters)
+      $bytes = $stream.ToArray()
+      if ($bytes.Length -le $budget) {
+        $encoded = [Convert]::ToBase64String($bytes)
+        break
+      }
+    } finally {
+      $stream.Dispose()
+    }
+  }
+  $bitmap.Dispose()
+  if ($null -eq $encoded) { Exit-Failure 'frame_too_large' '截图体积超过限制' }
+  Write-Json ([pscustomobject]@{
+    ok = $true
+    process = [string]$process.ProcessName
+    title = $title
+    width = $width
+    height = $height
+    image = "data:image/jpeg;base64,$encoded"
+  })
+}
+
 function ConvertTo-SendKeys([string]$value) {
   $safe = [regex]::Replace($value, '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '')
   $safe = $safe.Replace('{', '{{}').Replace('}', '{}}')
@@ -376,8 +441,21 @@ try {
   [void](Add-Type -AssemblyName UIAutomationTypes)
   [void](Add-Type -AssemblyName System.Windows.Forms)
   [void](Add-Type -AssemblyName Microsoft.VisualBasic)
+  [void](Add-Type -AssemblyName System.Drawing)
   if (-not ('WindowBridgeNative' -as [type])) {
-    $nativeSource = 'using System; using System.Runtime.InteropServices; public static class WindowBridgeNative { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); }'
+    $nativeSource = @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class WindowBridgeNative {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out RECT rect, int size);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hWnd, StringBuilder text, int max);
+}
+'@
     [void](Add-Type -TypeDefinition $nativeSource)
   }
 } catch {
@@ -391,6 +469,11 @@ if ($Command -eq 'read') {
 
 if ($Command -eq 'send') {
   try { Invoke-Send } catch { Exit-Failure 'send_failed' '窗口文本发送失败' }
+  exit 0
+}
+
+if ($Command -eq 'capture') {
+  try { Invoke-Capture } catch { Exit-Failure 'capture_failed' '窗口截图失败' }
   exit 0
 }
 

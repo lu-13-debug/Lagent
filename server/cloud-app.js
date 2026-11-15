@@ -4,11 +4,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { createApp } from './app.js';
+import { APP_VERSION } from './version.js';
 import { shareSnapshot } from './report-sharing.js';
 import { DEFAULT_MODEL_HOSTS } from './gateway.js';
 import { taskCapabilities } from './task-monitor.js';
-import { Accounts, PasswordHasher, AuthRateLimiter, authError, usernameValue, passwordValue, publicUser } from './accounts.js';
+import { Accounts, PasswordHasher, AuthRateLimiter, authError, usernameValue, passwordValue, publicUser, tokenHash } from './accounts.js';
+import { createPhoneAuth, createSmsSender } from './phone-auth.js';
 import { MobileGateway, hasDeviceToken, registerMobilePairingRoutes } from './mobile-gateway.js';
+import { randomBytes } from 'node:crypto';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const loopback = hostname => ['localhost', '127.0.0.1', '[::1]'].includes(hostname);
@@ -32,10 +35,11 @@ function modelPolicy(hosts, { production, allowLocalModelHttp, fetchImpl }) {
   };
   return { allowed, assert };
 }
-function cookieToken(req) {
-  const values = String(req.headers.cookie || '').split(';').map(x => x.trim()).filter(x => x.startsWith('da_session='));
-  return values.length === 1 ? values[0].slice('da_session='.length) : '';
+function cookieValue(req, name) {
+  const values = String(req.headers.cookie || '').split(';').map(x => x.trim()).filter(x => x.startsWith(`${name}=`));
+  return values.length === 1 ? values[0].slice(name.length + 1) : '';
 }
+function cookieToken(req) { return cookieValue(req, 'da_session'); }
 
 export function createCloudApp(options = {}) {
   const production = options.production ?? process.env.NODE_ENV === 'production';
@@ -52,13 +56,29 @@ export function createCloudApp(options = {}) {
   const accounts = new Accounts(dataDir, { now, sessionTtlMs: options.sessionTtlMs });
   const hasher = new PasswordHasher({ maxConcurrent: options.maxKdfConcurrent || 2, maxQueue: options.maxKdfQueue ?? 16 });
   const limiter = new AuthRateLimiter(options.authRateLimit, now);
+  // 短信发送器允许测试注入；生产从 LAGENT_SMS_* 环境变量读取，未配置时短信接口返回 503。
+  const phoneSms = options.phoneSms || (options.smsProvider ? createSmsSender({ env: { ...process.env, LAGENT_SMS_PROVIDER: options.smsProvider } }) : undefined);
+  const phoneAuth = createPhoneAuth({ accounts, now, sms: phoneSms, requirePhone: options.phoneRequired, secret: options.phoneSecret || process.env.LAGENT_PHONE_SECRET });
   const app = express(); app.disable('x-powered-by');
   const trustProxy = options.trustProxy ?? process.env.TRUST_PROXY === '1';
   app.set('trust proxy', trustProxy ? 1 : false);
   const workspaces = new Map(); const maxWorkspaces = options.maxWorkspaces || 32; const idleMs = options.workspaceIdleMs ?? 15 * 60 * 1000;
   let inFlight = 0; let closed = false;
   const cookieOptions = { httpOnly: true, sameSite: 'strict', secure: production || publicUrl?.protocol === 'https:', path: '/', maxAge: accounts.sessionTtlMs };
+  // 设备标识单独放一年期 cookie：用于「记住此设备」和用户名密码登录时的二次验证。
+  const deviceOptions = { httpOnly: true, sameSite: 'strict', secure: cookieOptions.secure, path: '/', maxAge: 365 * 86400000 };
+  const deviceHashOf = (req, res, { create = false } = {}) => {
+    let token = cookieValue(req, 'da_device');
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) {
+      // 未启用手机号验证时不写设备 cookie：避免给旧部署凭空增加一个长期标识。
+      if (!create || !phoneAuth.required) return '';
+      token = randomBytes(32).toString('base64url');
+      res.cookie('da_device', token, deviceOptions);
+    }
+    return tokenHash(token);
+  };
   const sendSession = (res, user, status = 200) => { const token = accounts.createSession(user.id); res.cookie('da_session', token, cookieOptions); return res.status(status).json({ user: publicUser(user) }); };
+  const autoUsername = () => `u${randomBytes(5).toString('hex')}`;
   const requireSession = req => { const session = accounts.session(cookieToken(req)); if (!session) throw authError('登录已失效，请重新登录', 401); return session; };
   const idle = workspace => workspace.refs === 0 && !workspace.app.locals.isBusy();
   const releaseStream = (_req, res) => { res.locals.releaseCloudRequest?.(); res.locals.releaseWorkspaceRequest?.(); };
@@ -77,6 +97,8 @@ export function createCloudApp(options = {}) {
       maxReportExplorations: options.maxReportExplorations, reportExploreWorkerFactory: options.reportExploreWorkerFactory, reportExploreTimeoutMs: options.reportExploreTimeoutMs,
       isSessionValid: req => Boolean(accounts.session(cookieToken(req))),
       mobileGateway, mobileOwnerId: userId, onMobileEventConnect: releaseStream,
+      // 作用域令牌要能脱离浏览器会话使用：把哈希登记到账号库，外层据此找到账号。
+      mcpTokenIndex: { onIssue: hash => accounts.registerMcpToken(hash, userId), onRevoke: hash => accounts.revokeMcpToken(hash) },
       getTaskEventOrigin: (_req, res) => res.locals.cloudRequestOrigin,
       onTaskEventConnect: releaseStream,
       getKey: (req, baseUrl) => req.cloudSession?.hash ? accounts.getKey(req.cloudSession.hash, baseUrl) : '', setKey: (req, key, baseUrl) => { if (!req.cloudSession?.hash) throw authError('移动端无模型凭据写权限', 403); accounts.setKey(req.cloudSession.hash, key, baseUrl); }, assertModelSettings: policy.assert });
@@ -110,24 +132,149 @@ export function createCloudApp(options = {}) {
   app.use(express.json({ limit: '128kb' }));
   if (enableWork) registerMobilePairingRoutes(app, mobileGateway, { desktopOwner: req => requireSession(req).user.id });
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
-  app.get('/api/runtime', (_req, res) => res.json({ mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: '1.1.0', modelHosts: policy.allowed, capabilities: { ...taskCapabilities(workEnabled(options)), reportSharing: true } }));
+  app.get('/api/runtime', (_req, res) => {
+    const runtime = { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: APP_VERSION, modelHosts: policy.allowed, capabilities: { ...taskCapabilities(workEnabled(options)), reportSharing: true } };
+    // 只在启用手机号验证时增加字段，保持旧部署的运行时契约不变。
+    if (phoneAuth.required) Object.assign(runtime, { phoneRequired: true, smsConfigured: phoneAuth.configured });
+    res.json(runtime);
+  });
   app.get('/api/auth/session', (req, res) => { const session = accounts.session(cookieToken(req)); res.json({ user: session?.user || null }); });
+  app.get('/api/auth/me', (req, res) => {
+    const session = requireSession(req); const user = accounts.userById(session.user.id);
+    res.json({ user: publicUser(user), phoneRequired: phoneAuth.required && !user.phone_verified_at });
+  });
   const rateLimit = req => { const name = typeof req.body?.username === 'string' ? req.body.username.toLowerCase().slice(0, 128) : ''; limiter.consume(req.ip, name); };
+  const phoneRegistration = req => phoneAuth.required || (typeof req.body?.phone === 'string' && req.body.phone.trim() !== '');
+  app.post('/api/auth/sms/send', async (req, res) => {
+    const purpose = req.body?.purpose || 'login';
+    // 绑定/换号必须已登录；登录/注册/找回不需要。
+    let phone = req.body?.phone;
+    if (purpose === 'bind' || purpose === 'change') {
+      const session = requireSession(req);
+      const current = accounts.userById(session.user.id);
+      if (purpose === 'change' && !phone && current.phone) phone = current.phone;
+    }
+    // 账号密码登录时若被要求二次验证，客户端只知道用户名；由服务端查出绑定号码，
+    // 不把完整手机号回传给浏览器。
+    if ((purpose === 'login' || purpose === 'reset') && (typeof phone !== 'string' || !phone.trim()) && typeof req.body?.username === 'string' && req.body.username.trim()) {
+      const candidate = accounts.userByName(req.body.username.trim().toLowerCase());
+      if (!candidate?.phone) throw authError('该账号未绑定手机号，请使用密码登录');
+      phone = candidate.phone;
+    }
+    if (typeof phone !== 'string' || !phone.trim()) throw authError('请输入手机号');
+    const result = await phoneAuth.sendCode({ phone, purpose, ip: req.ip, deviceHash: deviceHashOf(req, res), captchaToken: req.body?.captchaToken });
+    res.json(result);
+  });
   app.post('/api/auth/register', async (req, res) => {
-    rateLimit(req); const username = usernameValue(req.body?.username); const password = passwordValue(req.body?.password);
+    // 公网部署可用 LAGENT_REGISTRATION=closed 关闭自助注册，只保留管理员已有账号。
+    if (process.env.LAGENT_REGISTRATION === 'closed') return res.status(403).json({ error: '当前服务未开放注册' });
+    rateLimit(req);
+    if (phoneRegistration(req)) {
+      if (typeof req.body?.phone !== 'string' || !req.body.phone.trim()) throw authError('请输入手机号');
+      if (typeof req.body?.code !== 'string' || !req.body.code.trim()) throw authError('请输入短信验证码');
+      const deviceHash = deviceHashOf(req, res, { create: true });
+      const verified = await phoneAuth.verifyCode({ phone: req.body.phone, code: req.body.code.trim(), purpose: 'register', ip: req.ip, deviceHash });
+      // 冲突提示放在验证码校验之后，避免通过注册接口枚举手机号。
+      if (accounts.userByPhone(verified.phone)) throw authError('该手机号已注册，请直接登录', 409);
+      let username = typeof req.body?.username === 'string' && req.body.username.trim() ? usernameValue(req.body.username) : '';
+      if (!username) {
+        for (let attempt = 0; attempt < 5 && !username; attempt++) {
+          const candidate = autoUsername();
+          if (!accounts.userByName(candidate)) username = candidate;
+        }
+        if (!username) throw authError('暂时无法分配用户名，请稍后重试', 503);
+      }
+      const displayName = typeof req.body?.displayName === 'string' && req.body.displayName.trim() ? req.body.displayName.trim() : `用户${verified.phone.slice(-4)}`;
+      if ([...displayName].length > 40) throw authError('显示名称须为 1–40 个字符');
+      const password = req.body?.password !== undefined && req.body.password !== '' ? passwordValue(req.body.password) : randomBytes(18).toString('base64url');
+      const hash = await hasher.hash(password);
+      const user = accounts.register(username, displayName, hash, { shareToken: req.body?.shareToken, visitorToken: req.body?.visitorToken }, { phone: verified.phone, phoneVerifiedAt: new Date(now()).toISOString() });
+      if (req.body?.rememberDevice !== false) accounts.trustDevice(user.id, deviceHash, now() + 30 * 86400000);
+      accounts.auditAuth({ userId: user.id, action: 'register', result: 'ok', phoneHash: verified.phoneHash, deviceHash });
+      return sendSession(res, user, 201);
+    }
+    const username = usernameValue(req.body?.username); const password = passwordValue(req.body?.password);
     const displayName = req.body?.displayName;
     if (typeof displayName !== 'string' || !displayName.trim() || [...displayName.trim()].length > 40) throw authError('显示名称须为 1–40 个字符');
     const hash = await hasher.hash(password); const user = accounts.register(username, displayName.trim(), hash, { shareToken: req.body?.shareToken, visitorToken: req.body?.visitorToken }); sendSession(res, user, 201);
   });
   app.post('/api/auth/login', async (req, res) => {
     rateLimit(req);
+    if (typeof req.body?.phone === 'string' && req.body.phone.trim()) {
+      if (typeof req.body?.code !== 'string' || !req.body.code.trim()) throw authError('请输入短信验证码');
+      const deviceHash = deviceHashOf(req, res, { create: true });
+      // 登录侧统一成 401：验证码错误、过期与已使用不应给攻击者额外的状态区分。
+      let verified;
+      try { verified = await phoneAuth.verifyCode({ phone: req.body.phone, code: req.body.code.trim(), purpose: 'login', ip: req.ip, deviceHash }); }
+      catch (error) { if (error?.status === 429) throw error; throw authError('手机号或验证码错误', 401); }
+      const user = accounts.userByPhone(verified.phone);
+      if (!user) throw authError('手机号或验证码错误', 401);
+      if (req.body?.rememberDevice !== false) accounts.trustDevice(user.id, deviceHash, now() + 30 * 86400000);
+      accounts.auditAuth({ userId: user.id, action: 'login', result: 'ok', phoneHash: verified.phoneHash, deviceHash });
+      return sendSession(res, user);
+    }
     let username, password;
     try { username = usernameValue(req.body?.username); password = passwordValue(req.body?.password); } catch { throw authError('用户名或密码错误', 401); }
     const user = accounts.userByName(username);
     if (!await hasher.verify(password, user?.password_hash)) throw authError('用户名或密码错误', 401);
     // A password change during the asynchronous KDF must not create a stale session.
     if (accounts.userByName(username)?.password_hash !== user.password_hash) throw authError('用户名或密码错误', 401);
+    // 已绑定手机号的账号在新设备上登录时需要短信验证码；可信设备 30 天内免验证。
+    if (phoneAuth.required && user.phone && !accounts.isTrustedDevice(user.id, deviceHashOf(req, res))) {
+      if (typeof req.body?.code !== 'string' || !req.body.code.trim()) {
+        return res.status(401).json({ error: '新设备登录需要短信验证码', code: 'PHONE_CODE_REQUIRED', phoneMasked: phoneAuth.maskPhone(user.phone) });
+      }
+      try { await phoneAuth.verifyCode({ phone: user.phone, code: req.body.code.trim(), purpose: 'login', ip: req.ip, deviceHash: deviceHashOf(req, res) }); }
+      catch (error) { if (error?.status === 429) throw error; throw authError('手机号或验证码错误', 401); }
+    }
+    const deviceHash = deviceHashOf(req, res, { create: true });
+    if (req.body?.rememberDevice !== false && user.phone) accounts.trustDevice(user.id, deviceHash, now() + 30 * 86400000);
     sendSession(res, user);
+  });
+  app.post('/api/auth/phone/bind', async (req, res) => {
+    const session = requireSession(req); limiter.consume(req.ip, session.user.username);
+    if (typeof req.body?.phone !== 'string' || typeof req.body?.code !== 'string') throw authError('请输入手机号和验证码');
+    const deviceHash = deviceHashOf(req, res, { create: true });
+    const verified = await phoneAuth.verifyCode({ phone: req.body.phone, code: req.body.code.trim(), purpose: 'bind', ip: req.ip, deviceHash });
+    const owner = accounts.userByPhone(verified.phone);
+    if (owner && owner.id !== session.user.id) throw authError('该手机号已绑定其他账号', 409);
+    let user;
+    try { user = accounts.setPhone(session.user.id, verified.phone); }
+    catch { throw authError('该手机号已绑定其他账号', 409); }
+    accounts.trustDevice(user.id, deviceHash, now() + 30 * 86400000);
+    accounts.auditAuth({ userId: user.id, action: 'bind', result: 'ok', phoneHash: verified.phoneHash, deviceHash });
+    res.json({ user: publicUser(user), phoneRequired: false });
+  });
+  app.post('/api/auth/phone/change', async (req, res) => {
+    const session = requireSession(req); limiter.consume(req.ip, session.user.username);
+    const current = accounts.userById(session.user.id);
+    if (!current?.phone) throw authError('当前账号尚未绑定手机号，请先绑定');
+    if (typeof req.body?.oldCode !== 'string' || typeof req.body?.newPhone !== 'string' || typeof req.body?.newCode !== 'string') throw authError('请填写原手机号验证码、新手机号和新验证码');
+    const deviceHash = deviceHashOf(req, res, { create: true });
+    await phoneAuth.verifyCode({ phone: current.phone, code: req.body.oldCode.trim(), purpose: 'change', ip: req.ip, deviceHash });
+    const verified = await phoneAuth.verifyCode({ phone: req.body.newPhone, code: req.body.newCode.trim(), purpose: 'bind', ip: req.ip, deviceHash });
+    const owner = accounts.userByPhone(verified.phone);
+    if (owner && owner.id !== current.id) throw authError('该手机号已绑定其他账号', 409);
+    let user;
+    try { user = accounts.setPhone(current.id, verified.phone); }
+    catch { throw authError('该手机号已绑定其他账号', 409); }
+    // 换号后撤销其他设备会话，避免旧号码留下的登录继续可用。
+    accounts.revokeOtherSessions(current.id, session.hash);
+    accounts.auditAuth({ userId: current.id, action: 'change', result: 'ok', phoneHash: verified.phoneHash, deviceHash });
+    res.json({ user: publicUser(user) });
+  });
+  app.post('/api/auth/devices/revoke-all', async (req, res) => {
+    const session = requireSession(req); limiter.consume(req.ip, session.user.username);
+    const current = accounts.userById(session.user.id);
+    const deviceHash = deviceHashOf(req, res);
+    if (current?.phone) {
+      if (typeof req.body?.code !== 'string' || !req.body.code.trim()) throw authError('请输入短信验证码');
+      await phoneAuth.verifyCode({ phone: current.phone, code: req.body.code.trim(), purpose: 'login', ip: req.ip, deviceHash });
+    }
+    const sessions = accounts.revokeOtherSessions(current.id, session.hash);
+    const devices = accounts.revokeOtherTrustedDevices(current.id, deviceHash);
+    accounts.auditAuth({ userId: current.id, action: 'revoke', result: 'ok', deviceHash });
+    res.json({ ok: true, sessions, devices });
   });
   app.post('/api/auth/logout', (req, res) => {
     const session = accounts.session(cookieToken(req)); if (session) accounts.revoke(session.hash);
@@ -137,10 +284,19 @@ export function createCloudApp(options = {}) {
     const session = requireSession(req); limiter.consume(req.ip, session.user.username);
     const next = passwordValue(req.body?.newPassword); const current = req.body?.currentPassword;
     if (typeof current !== 'string' || current.length > 128 || !await hasher.verify(current, session.passwordHash)) throw authError('当前密码错误', 401);
+    // 修改密码属于敏感操作：已绑定手机号的账号需要短信二次验证。
+    const phoneUser = accounts.userById(session.user.id);
+    if (phoneAuth.required && phoneUser?.phone) {
+      if (typeof req.body?.code !== 'string' || !req.body.code.trim()) throw authError('请输入短信验证码');
+      try { await phoneAuth.verifyCode({ phone: phoneUser.phone, code: req.body.code.trim(), purpose: 'change', ip: req.ip, deviceHash: deviceHashOf(req, res) }); }
+      catch (error) { if (error?.status === 429) throw error; throw authError('验证码错误或已过期'); }
+    }
     const hash = await hasher.hash(next);
     const latest = accounts.session(cookieToken(req));
     if (!latest || latest.passwordHash !== session.passwordHash) throw authError('登录已失效，请重新登录', 401);
-    accounts.changePassword(session.user.id, hash); res.clearCookie('da_session', { ...cookieOptions, maxAge: undefined }); res.json({ ok: true });
+    accounts.changePassword(session.user.id, hash);
+    accounts.auditAuth({ userId: session.user.id, action: 'change-password', result: 'ok' });
+    res.clearCookie('da_session', { ...cookieOptions, maxAge: undefined }); res.json({ ok: true });
   });
   // Short-lived in-memory rate limiting; addresses are never persisted or included in reports.
   const shareLimiter = new AuthRateLimiter(options.shareRateLimit || { maxIp: 120, maxUsername: 10000, windowMs: 60000, maxEntries: 10000 }, now);
@@ -181,13 +337,24 @@ export function createCloudApp(options = {}) {
     if (!req.path.toLowerCase().startsWith('/api/')) return next();
     if (req.path.startsWith('/api/mobile/') && !mobileWorkRoute(req)) return res.status(404).json({ error: '移动接口不存在' });
     let userId;
-    if (hasDeviceToken(req)) {
+    // 作用域 MCP 令牌：外部 Agent 通常没有浏览器会话，用令牌哈希在账号库里反查归属账号。
+    const scoped = /^Bearer\s+(lagent_mcp_[A-Za-z0-9_-]{43})$/i.exec(String(req.get('authorization') || '').trim())?.[1] || '';
+    if (scoped) {
+      // 作用域令牌只开放 JSON-RPC 入口，不能当移动设备 token 使用。
+      if (!(req.method === 'POST' && req.path === '/api/mcp')) return res.status(401).json({ error: 'MCP 令牌仅可用于 MCP 接口' });
+      const ownerId = accounts.mcpTokenUser(tokenHash(scoped));
+      if (!ownerId) return res.status(401).json({ error: 'MCP 令牌无效或已撤销' });
+      userId = ownerId;
+    } else if (hasDeviceToken(req)) {
       if (!mobileWorkRoute(req)) return res.status(401).json({ error: '设备 token 仅可用于移动 Work API' });
       const device = mobileGateway.authenticateRequest(req);
       req.mobileAuthenticated = true; req.mobileDevice = device; userId = device.ownerId;
     } else {
       req.cloudSession = requireSession(req); userId = req.cloudSession.user.id;
+      // 强制手机号模式下，未绑定账号只能看到账号接口；绑定后才能创建工作区数据。
+      if (phoneAuth.required && !req.cloudSession.user.phoneVerified) return res.status(403).json({ error: '请先绑定手机号', code: 'PHONE_BIND_REQUIRED' });
     }
+    if (phoneAuth.required && !accounts.userById(userId)?.phone_verified_at) return res.status(403).json({ error: '请先绑定手机号', code: 'PHONE_BIND_REQUIRED' });
     const workspace = workspaceFor(userId);
     if (workspace.refs >= (options.maxWorkspaceRequests || 8)) throw authError('当前账号请求过多，请稍后再试', 429);
     workspace.refs++; workspace.lastUsed = now();

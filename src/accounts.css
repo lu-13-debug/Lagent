@@ -279,6 +279,30 @@
   color: var(--muted);
   margin-top: 19px;
 }
+.account-section {
+  margin-bottom: 24px;
+}
+.account-section .field-help {
+  line-height: 1.8;
+}
+.account-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 4px 0 16px;
+}
+.account-revoke {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.account-modal-body .code-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: -8px 0 16px;
+}
 .account-modal-body+.modal-footer {
   flex-wrap: wrap;
   gap: 13px;
@@ -467,5 +491,54 @@
   }
   .account-summary strong {
     font-size: var(--text-lg);
+  }
+}
+
+/* 手机号验证：验证码输入行与方法切换。短信按钮与输入框同高，窄屏自动换行。 */
+.auth-method-switch {
+  margin-top: 8px;
+}
+
+.code-field > label {
+  display: block;
+}
+
+.code-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.code-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.code-row .button {
+  white-space: nowrap;
+}
+
+.code-field .field-help.form-error,
+.code-field .form-error {
+  display: block;
+  margin-top: 4px;
+}
+
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+@media (max-width: 520px) {
+  .code-row {
+    flex-direction: column;
   }
 }

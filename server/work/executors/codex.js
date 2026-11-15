@@ -67,6 +67,32 @@ export function parseCodexOutput({ stdout, stderr, exitCode }) {
   };
 }
 
+// codex exec --json 边跑边吐 item.* 事件：reasoning 是它的思考，command_execution / file_change
+// 是它在做什么。以前只在退出后解析一遍，界面十几分钟看不到东西，这里映射成 activity 实时推给界面。
+export function codexStreamActivity(event) {
+  const item = event?.item;
+  if (!item || typeof item !== 'object') return null;
+  const done = event.type === 'item.completed';
+  if (item.type === 'reasoning') {
+    const text = typeof item.text === 'string'
+      ? item.text
+      : Array.isArray(item.summary) ? item.summary.map(part => part?.text ?? part).filter(Boolean).join('\n') : '';
+    return typeof text === 'string' && text.trim() ? { kind: 'thought', text } : null;
+  }
+  if (!done) return null;
+  if (item.type === 'command_execution') return { kind: 'tool', text: String(item.command || item.name || '运行命令').slice(0, 200) };
+  if (item.type === 'mcp_tool_call') return { kind: 'tool', text: `MCP 工具 ${item.server ? `${item.server}.` : ''}${item.tool || '调用'}` };
+  if (item.type === 'file_change') {
+    const changed = (Array.isArray(item.changes) ? item.changes : []).map(change => change?.path).filter(Boolean);
+    const paths = changed.length ? changed : (item.path ? [item.path] : []);
+    return { kind: 'note', text: paths.length ? `改写 ${paths.slice(0, 4).join('、')}` : '改写了文件' };
+  }
+  if (item.type === 'agent_message' && typeof item.text === 'string' && item.text.trim()) {
+    return { kind: 'note', text: item.text.trim().slice(0, 240) };
+  }
+  return null;
+}
+
 export function codexExecutor({
   store,
   cwd,
@@ -116,6 +142,7 @@ export function codexExecutor({
     validateInput,
     buildArgs,
     parseOutput: parseCodexOutput,
+    streamActivity: codexStreamActivity,
     capabilities: ['cli', 'codex', 'read-only', 'jsonl', 'human-approval', 'project-write', 'resume-session']
   });
   executor.buildArgs = buildArgs;

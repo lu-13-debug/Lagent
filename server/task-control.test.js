@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createApp } from './app.js';
+import { APP_VERSION } from './version.js';
 import { createCloudApp } from './cloud-app.js';
 import { createDataset } from './datasets.js';
 
@@ -58,8 +59,8 @@ const register = (c, username) => c.api('/api/auth/register', 'POST', { username
 for (const cloud of [false, true]) test(`${cloud ? 'cloud' : 'local'} runtime advertises implemented task capabilities without authentication`, async t => {
   const s = await setup(t, {}, cloud); const runtime = await s.api('/api/runtime');
   assert.equal(runtime.status, 200); assert.equal(runtime.mode, cloud ? 'cloud' : 'local'); assert.equal(runtime.authRequired, cloud);
-  assert.equal(runtime.serviceName, 'Lagent'); assert.equal(runtime.version, '1.1.0');
-  assert.deepEqual(runtime.capabilities, { taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, modelHub: true, reportPdf: true, agentTrace: true, memory: true, modelUsage: true, ...(cloud ? { reportSharing: true } : {}) });
+  assert.equal(runtime.serviceName, 'Lagent'); assert.equal(runtime.version, APP_VERSION);
+  assert.deepEqual(runtime.capabilities, { taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, modelHub: true, reportPdf: true, agentTrace: true, memory: true, modelUsage: true, superagent: true, ...(cloud ? { reportSharing: true } : {}) });
 });
 
 test('summary is bounded, preserves older active tasks, and excludes full task content', async t => {

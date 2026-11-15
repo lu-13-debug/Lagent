@@ -2,8 +2,8 @@ export interface InsightPanel { enabled: boolean; degraded: boolean; participant
 export type Mode = 'collaborative' | 'automatic';
 export type View = 'workspace' | 'datasets' | 'reports' | 'skills' | 'wallet' | 'memory';
 export type TaskStatus = 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
-export interface User { id: string; username: string; displayName: string; createdAt: string }
-export interface Runtime { mode: 'local' | 'cloud'; authRequired: boolean; serviceName: 'Lagent'; version: string; modelHosts?: string[]; capabilities?: { superagent?: boolean; agentTrace?: boolean; memory?: boolean; modelUsage?: boolean; taskEvents?: boolean; taskSummaries?: boolean; taskRecovery?: boolean; taskSkip?: boolean; idempotentTasks?: boolean; walletVersion?: boolean; reportExplore?: boolean; reportMetadata?: boolean; reportContinuation?: boolean; reportSharing?: boolean; modelHub?: boolean; reportPdf?: boolean } }
+export interface User { id: string; username: string; displayName: string; createdAt: string; phoneMasked?: string; phoneVerified?: boolean }
+export interface Runtime { mode: 'local' | 'cloud'; authRequired: boolean; serviceName: 'Lagent'; version: string; modelHosts?: string[]; phoneRequired?: boolean; smsConfigured?: boolean; capabilities?: { superagent?: boolean; agentTrace?: boolean; memory?: boolean; modelUsage?: boolean; taskEvents?: boolean; taskSummaries?: boolean; taskRecovery?: boolean; taskSkip?: boolean; idempotentTasks?: boolean; walletVersion?: boolean; reportExplore?: boolean; reportMetadata?: boolean; reportContinuation?: boolean; reportSharing?: boolean; modelHub?: boolean; reportPdf?: boolean } }
 export interface Wallet { balance: number; frozen: number; spent: number }
 export interface WalletState { wallet: Wallet; walletVersion?: number }
 export interface TaskResponse extends WalletState { task: Task }

@@ -98,7 +98,7 @@ export async function runStageAgent({ stage, context, resolveContext, task, data
       if (contract && ['report', 'insights'].includes(stage.id)) validateNarrativeClaims(result, buildEvidence(report, { dataset, contract, numericTransforms: result.numericTransforms }));
       if (stage.id === 'verify' && !contract && (result.approved !== true || (Array.isArray(result.issues) && result.issues.length))) throw failure('结果核验未通过，请查看阶段记录并调整分析。');
       trace.stopReason='completed';
-      return { ...result, ...(subagents?.length ? {delegations} : {}), trace, summary: redact(result.summary, context.key), findings: Array.isArray(result.findings) ? result.findings.slice(0, 12) : [], recommendations: Array.isArray(result.recommendations) ? result.recommendations.filter(x => typeof x === 'string').slice(0, 12) : [], calls, tools: executed, verified: stage.id === 'verify' };
+      return { ...result, ...(subagents?.length ? {delegations} : {}), trace, summary: context.redact ? context.redact(result.summary) : redact(result.summary, context.key), findings: Array.isArray(result.findings) ? result.findings.slice(0, 12) : [], recommendations: Array.isArray(result.recommendations) ? result.recommendations.filter(x => typeof x === 'string').slice(0, 12) : [], calls, tools: executed, verified: stage.id === 'verify' };
     }
     if (round === maxRounds-1) throw stop('round_budget','阶段工具调用达到轮次上限，任务已停止。');
     // Validate the complete action set before any side effect starts.

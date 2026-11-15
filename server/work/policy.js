@@ -1,6 +1,7 @@
 import path from 'node:path';
 
-export const workEnabled = options => options?.workEnabled === true || (options?.workEnabled === undefined && process.env.LAGENT_WORK_ENABLED === '1');
+// 指挥台是唯一的前端界面，默认启用；显式设置 LAGENT_WORK_ENABLED=0 仍可关闭接口。
+export const workEnabled = options => options?.workEnabled === true || (options?.workEnabled === undefined && process.env.LAGENT_WORK_ENABLED !== '0');
 
 export const EXTERNAL_EXECUTORS = Object.freeze([
   'codex',
@@ -18,7 +19,8 @@ export const EXTERNAL_EXECUTORS = Object.freeze([
   'codebuddy',
   'qoder',
   'iflow',
-  'kimi'
+  'kimi',
+  'workbuddy'
 ]);
 export const WORK_POLICY_ID = 'default';
 

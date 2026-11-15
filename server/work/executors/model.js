@@ -4,6 +4,7 @@ import path from 'node:path';
 import { workError } from '../domain.js';
 import { classifyCommand } from '../command-risk.js';
 import { modelRequest, readModelResponse, providerUsage, toolCallsOf, visibleReply } from '../../model-protocol.js';
+import { createMcpBridge } from '../mcp-client.js';
 
 // Lagent：用已经接入的模型自己推理 + 调工具，把一个任务在项目目录里做完。
 // 与 CLI 执行器不同，它的每一步都写进 task.activity，界面因此能像看 dsh 一样看到过程。
@@ -413,7 +414,68 @@ function runCommand(guard, command, { approved = false, shell = '' } = {}) {
   }
 }
 
-export function modelSystemPrompt({ maxSteps, write, permission = write ? 'workspace' : 'read', roots = [] }) {
+// 长任务里工具结果会一直堆在 messages 里：12 步、每步 6KB，很容易把上下文顶满。
+// 这里不做额外的模型摘要（那会再花一次调用），而是确定性地把较早的工具结果压成一行；
+// 最近几条保持原样，保证模型还能接着上一步继续做。
+export const CONTEXT_BUDGET_BYTES = 60 * 1024;
+const CONTEXT_KEEP_RECENT = 8;
+
+const messageBytes = message => Buffer.byteLength(
+  typeof message?.content === 'string' ? message.content : JSON.stringify(message?.content ?? ''),
+) + 64;
+
+const isObservation = message => Boolean(message) && (
+  message.role === 'tool'
+  || (message.role === 'user' && /^(工具结果|工具错误)/.test(String(message.content || '')))
+);
+
+/**
+ * 超过预算时折叠较早的工具结果，返回折叠条数与折叠后的近似字节数。
+ * 只改内容、不删消息：chat-completions 的 tool_call_id 配对不能断。
+ */
+export function foldContextMessages(messages, { budgetBytes = CONTEXT_BUDGET_BYTES, keepRecent = CONTEXT_KEEP_RECENT } = {}) {
+  if (!Array.isArray(messages) || messages.length <= 2) return { folded: 0, bytes: 0 };
+  let bytes = messages.reduce((sum, message) => sum + messageBytes(message), 0);
+  if (bytes <= budgetBytes) return { folded: 0, bytes };
+  let folded = 0;
+  const observations = [];
+  messages.forEach((message, index) => { if (isObservation(message)) observations.push(index); });
+  const foldable = observations.slice(0, Math.max(0, observations.length - keepRecent));
+  const shorten = (message, label) => {
+    const content = String(message.content || '');
+    if (content.length <= 240) return false;
+    message.content = `${label}（已折叠，原始 ${content.length} 字）：${content.slice(0, 180).replace(/\s+/g, ' ')}…`;
+    return true;
+  };
+  for (const index of foldable) {
+    const message = messages[index];
+    const label = message.role === 'tool' ? '工具结果' : (/^工具错误/.test(String(message.content || '')) ? '工具错误' : '工具结果');
+    if (!shorten(message, label)) continue;
+    folded += 1;
+    bytes = messages.reduce((sum, item) => sum + messageBytes(item), 0);
+    if (bytes <= budgetBytes) break;
+  }
+  // 还超预算时，把较早的工具调用参数也压掉——write_file 的 content 往往一次就几十 KB。
+  if (bytes > budgetBytes) {
+    const cutoff = Math.max(0, messages.length - keepRecent);
+    for (let index = 0; index < cutoff; index += 1) {
+      const message = messages[index];
+      if (message?.role !== 'assistant' || !Array.isArray(message.tool_calls)) continue;
+      for (const call of message.tool_calls) {
+        const args = call?.function?.arguments;
+        if (typeof args !== 'string' || args.length <= 600) continue;
+        call.function.arguments = JSON.stringify({ folded: true, note: '较早的工具调用参数已省略' });
+        folded += 1;
+        bytes = messages.reduce((sum, item) => sum + messageBytes(item), 0);
+        if (bytes <= budgetBytes) break;
+      }
+      if (bytes <= budgetBytes) break;
+    }
+  }
+  return { folded, bytes };
+}
+
+export function modelSystemPrompt({ maxSteps, write, permission = write ? 'workspace' : 'read', roots = [], mcpTools = [] }) {
   const mode = PERMISSIONS.includes(permission) ? permission : 'workspace';
   const extra = roots.length ? `已获得长期授权的其它目录：${roots.join('、')}。` : '';
   return [
@@ -423,7 +485,7 @@ export function modelSystemPrompt({ maxSteps, write, permission = write ? 'works
     '· 结束任务：{"final":{"done":true,"summary":"做了什么、结论是什么","files":["改动过的文件"]}}',
     '· 只有确实全部做完才写 done:true；没做完、缺东西、需要人接手，写 done:false 并在 summary 里说清还差什么。',
     '',
-    `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content,append?}、replace_in_file{path,find,replace,all?}、move_path{from,to}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command,shell?}、project_changes{}。`,
+    `可用工具：list_files{path?}、read_file{path,offset?,limit?}、search_code{pattern,path?}${write ? '、write_file{path,content,append?}、replace_in_file{path,find,replace,all?}、move_path{from,to}、delete_path{path,recursive?,dryRun?}' : ''}、run_command{command,shell?}、project_changes{}${mcpTools.length ? `；外部 MCP 工具：${mcpTools.join('、')}` : ''}。`,
     '接手一个已经有改动的项目时，先调 project_changes：它会告诉你谁在什么时候改了什么文件；然后按需 read_file 读那一段（offset/limit 都是行号，返回带行号，超长会提示下次从第几行接着读），或 run_command 跑 git diff 看差异，不要动辄把整个文件从头读一遍。',
     '注意：环境是 Windows。要跑 PowerShell 就写 run_command{command:"<脚本本体>",shell:"powershell"}，command 直接给脚本，不要自己再拼 powershell -Command 和引号。',
     '查文件内容一律用 search_code；不要用 Select-String / findstr / Get-Content 管道去搜（管道里带 ForEach-Object、脚本块会被当成写操作，卡在等用户确认上）。真要跑命令，先只用 git status / git diff / node --check 这类。',
@@ -661,7 +723,7 @@ export function describeOutput(tool, output = {}) {
   return '';
 }
 
-export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fetch, perCallTimeoutMs = 120000, totalTimeoutMs = 900000, projectState = () => '' }) {
+export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fetch, perCallTimeoutMs = 120000, totalTimeoutMs = 900000, projectState = () => '', mcpServers = null }) {
   if (!store || typeof cwd !== 'string' || !cwd) throw new TypeError('model 执行器需要 store 和 cwd');
   const workspace = path.resolve(cwd);
   const running = new Map();
@@ -677,25 +739,53 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
 
   async function askModel(messages, task, signal, profileId, effort) {
     const ctx = profileId && typeof contextFor === 'function' ? contextFor(profileId, effort) : (typeof context === 'function' ? context() : context);
-    if (!ctx?.key || !ctx?.settings?.model) throw statusError('还没有可用的模型：请在「设置 → 规划设置」里配置并选择默认模型', 503);
+    if ((!ctx?.key && !ctx?.pool) || !ctx?.settings?.model) throw statusError('还没有可用的模型：请在「设置 → 规划设置」里配置并选择默认模型', 503);
     task.modelLabel = ctx.profileName || ctx.settings.model;
     // 写文件动辄几千字，4096 的输出预算经常不够；先按 8192 要，供应商不认再退回 4096。
     const budget = Math.min(8192, Number(ctx.maxTokens) || 8192);
     // 原生工具调用优先：协议支持就声明，供应商拒绝（有的兼容接口不认 tools）就退回文本 JSON。
-    const toolOptions = task.noTools ? {} : { tools: TOOL_SCHEMAS };
-    const request = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, budget, false, { ...ctx.settings, ...toolOptions, sessionId: task.projectChatId || task.id });
-    let response;
-    try {
-      response = await fetchImpl(request.endpoint, {
+    const mcpSchemas = typeof task.mcpBridge?.schemas === 'function' ? task.mcpBridge.schemas() : [];
+    const toolOptions = task.noTools ? {} : { tools: [...TOOL_SCHEMAS, ...mcpSchemas] };
+    const protocolOf = settings => settings.protocol || (new URL(settings.baseUrl).hostname === 'api.anthropic.com' ? 'anthropic' : 'chat-completions');
+    // 一次模型调用：单 Key 直接 fetch；Key 池由 pool.execute 逐 Key 切换并记录路由。
+    const call = async (settings, extra = {}, budgetValue = budget) => {
+      const merged = { ...ctx.settings, ...settings, ...extra, sessionId: task.projectChatId || task.id };
+      if (ctx.pool && ctx.poolId) {
+        const executed = await ctx.pool.execute(ctx.poolId, ({ key, settings: pooled }) => {
+          const request = modelRequest(pooled.baseUrl, merged.model || ctx.settings.model, messages, key, budgetValue, false, {
+            ...merged,
+            baseUrl: pooled.baseUrl,
+            protocol: pooled.protocol,
+          });
+          return fetchImpl(request.endpoint, {
+            method: 'POST',
+            headers: request.headers,
+            body: JSON.stringify(request.body),
+            signal,
+            redirect: 'error',
+          });
+        }, { affinity: task.projectChatId || task.id, model: merged.model || ctx.settings.model });
+        return executed.result;
+      }
+      const request = modelRequest(ctx.settings.baseUrl, merged.model || ctx.settings.model, messages, ctx.key, budgetValue, false, merged);
+      return fetchImpl(request.endpoint, {
         method: 'POST',
         headers: request.headers,
         body: JSON.stringify(request.body),
         signal,
         redirect: 'error',
       });
+    };
+    let response;
+    try {
+      response = await call(ctx.settings, { ...toolOptions }, budget);
     } catch (error) {
-      if (error?.name === 'AbortError' || error?.name === 'TimeoutError') throw statusError('模型调用超时', 504);
-      throw statusError(`模型接口无法访问：${error?.message || '网络错误'}`, 502);
+      // 池化失败时可能保留最后一次响应，用它读取供应商错误正文做参数兼容判断。
+      if (error?.response) response = error.response;
+      else {
+        if (error?.name === 'AbortError' || error?.name === 'TimeoutError' || error?.status === 504) throw statusError('模型调用超时', 504);
+        throw statusError(`模型接口无法访问：${error?.message || '网络错误'}`, error?.status === 429 ? 429 : 502);
+      }
     }
     if (!response.ok) {
       // 把供应商返回的错误正文带出来，否则只剩「HTTP 400」无法判断是参数不被支持还是模型名不存在。
@@ -706,34 +796,32 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       // 有的兼容接口不认 tools 字段：退回纯文本 JSON 协议重试，别让整个任务因为一个可选能力失败。
       if (!task.noTools && [400, 422].includes(response.status) && /tool|function|unsupported|unknown (?:parameter|field)/i.test(detail)) {
         task.noTools = true;
-        const retry = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, budget, false, { ...ctx.settings, sessionId: task.projectChatId || task.id });
-        const second = await fetchImpl(retry.endpoint, { method: 'POST', headers: retry.headers, body: JSON.stringify(retry.body), signal, redirect: 'error' });
+        const second = await call(ctx.settings, {}, budget);
         if (second.ok) {
           const payload = await readModelResponse(second);
-          return { payload, protocol: retry.protocol, usage: providerUsage(payload?.usage, retry.protocol) };
+          return { payload, protocol: protocolOf(ctx.settings), usage: providerUsage(payload?.usage, protocolOf(ctx.settings)) };
         }
         try { detail = (await second.text()).replace(/\s+/g, ' ').trim().slice(0, 300); } catch { /* 同上 */ }
+        throw statusError(`模型接口返回 HTTP ${second.status}${detail ? `：${detail}` : ''}`, 502);
       }
       // 未验证的思考强度可能被供应商拒绝：自动退回默认档重试一次，并在结果里说明，
       // 避免用户只是选了个档位就整条任务失败。
       if (ctx.settings.effort && ctx.settings.effort !== 'default' && [400, 422].includes(response.status) && /effort|reasoning/i.test(detail)) {
         task.effortFallback = true;
-        const retry = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, budget, false, { ...ctx.settings, effort: 'default', sessionId: task.projectChatId || task.id });
-        const second = await fetchImpl(retry.endpoint, { method: 'POST', headers: retry.headers, body: JSON.stringify(retry.body), signal, redirect: 'error' });
+        const second = await call(ctx.settings, { effort: 'default' }, budget);
         if (second.ok) {
           const payload = await readModelResponse(second);
-          return { payload, protocol: retry.protocol, usage: providerUsage(payload?.usage, retry.protocol) };
+          return { payload, protocol: protocolOf(ctx.settings), usage: providerUsage(payload?.usage, protocolOf(ctx.settings)) };
         }
         try { detail = (await second.text()).replace(/\s+/g, ' ').trim().slice(0, 300); } catch { /* 同上 */ }
         throw statusError(`模型接口返回 HTTP ${second.status}${detail ? `：${detail}` : ''}`, 502);
       }
       // 有些供应商的输出上限比 8192 低：被拒时按 4096 再试一次，而不是让整个任务失败。
       if (budget > 4096 && [400, 422].includes(response.status) && /max_tokens|max output|too (?:large|long)|exceed/i.test(detail)) {
-        const retry = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, 4096, false, { ...ctx.settings, sessionId: task.projectChatId || task.id });
-        const third = await fetchImpl(retry.endpoint, { method: 'POST', headers: retry.headers, body: JSON.stringify(retry.body), signal, redirect: 'error' });
+        const third = await call(ctx.settings, {}, 4096);
         if (third.ok) {
           const payload = await readModelResponse(third);
-          return { payload, protocol: retry.protocol, usage: providerUsage(payload?.usage, retry.protocol) };
+          return { payload, protocol: protocolOf(ctx.settings), usage: providerUsage(payload?.usage, protocolOf(ctx.settings)) };
         }
         try { detail = (await third.text()).replace(/\s+/g, ' ').trim().slice(0, 300); } catch { /* 同上 */ }
         throw statusError(`模型接口返回 HTTP ${third.status}${detail ? `：${detail}` : ''}`, 502);
@@ -747,18 +835,17 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       // 网关偶尔回空正文 / 推理模型把预算全花在 thinking 上：各重试一次，比让任务直接失败有用。
       const retryable = ['REASONING_ONLY', 'EMPTY_RESPONSE'].includes(error?.code);
       if (retryable) {
-        const settings = error.code === 'REASONING_ONLY' ? { ...ctx.settings, thinking: 'off' } : ctx.settings;
-        const retry = modelRequest(ctx.settings.baseUrl, ctx.settings.model, messages, ctx.key, budget, false, { ...settings, sessionId: task.projectChatId || task.id });
-        const second = await fetchImpl(retry.endpoint, { method: 'POST', headers: retry.headers, body: JSON.stringify(retry.body), signal, redirect: 'error' });
+        const settings = error.code === 'REASONING_ONLY' ? { thinking: 'off' } : {};
+        const second = await call(ctx.settings, settings, budget);
         if (second.ok) {
           task.emptyRetry = true;
           const retried = await readModelResponse(second);
-          return { payload: retried, protocol: retry.protocol, usage: providerUsage(retried?.usage, retry.protocol) };
+          return { payload: retried, protocol: protocolOf(ctx.settings), usage: providerUsage(retried?.usage, protocolOf(ctx.settings)) };
         }
       }
       throw error;
     }
-    return { payload, protocol: request.protocol, usage: providerUsage(payload?.usage, request.protocol) };
+    return { payload, protocol: protocolOf(ctx.settings), usage: providerUsage(payload?.usage, protocolOf(ctx.settings)) };
   }
 
   function replyOf(payload, protocol) {
@@ -835,6 +922,11 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
   }
 
   async function runTool(task, name, args, guard, { write, confirmDanger, permission = 'workspace' }) {
+    if (task.mcpBridge?.owns(name)) {
+      // MCP 工具可能写外部系统；只读模式一律不调用，避免“只读”名义下产生副作用。
+      if (permission === 'read') throw new Error('当前是「只读」模式，不能调用 MCP 工具；要使用请切换到「工作区修改」或「完全权限」。');
+      return task.mcpBridge.call(name, args);
+    }
     const writeTools = WRITE_TOOLS;
     if (writeTools.has(name) && !write) throw new Error(`当前是「${PERMISSION_LABELS.read}」模式，不能修改文件；要改动请在设置里切换到「${PERMISSION_LABELS.workspace}」。`);
     if (name === 'project_changes') {
@@ -912,7 +1004,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
   async function execute(task, input, runWorkspace) {
     const guard = pathGuard(runWorkspace, input.roots);
     const messages = [
-      { role: 'system', content: modelSystemPrompt({ maxSteps: input.maxSteps, write: input.write, permission: input.permission, roots: guard.extras }) },
+      { role: 'system', content: modelSystemPrompt({ maxSteps: input.maxSteps, write: input.write, permission: input.permission, roots: guard.extras, mcpTools: task.mcpToolNames || [] }) },
       { role: 'user', content: `任务：${input.prompt}\n\n工作目录：${runWorkspace}` },
     ];
     const usage = {};
@@ -925,6 +1017,9 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       if (task.cancelled) throw statusError('Lagent 已停止', 499);
       const remaining = deadline - Date.now();
       if (remaining <= 1000) throw statusError('Lagent 超出总时长限制', 504);
+      // 上下文接近预算时折叠较早的工具结果；不额外调用模型，也不删消息。
+      const folded = foldContextMessages(messages);
+      if (folded.folded > 0) pushActivity(task, { kind: 'note', text: `上下文接近上限，已折叠 ${folded.folded} 条较早的工具记录` });
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), Math.min(perCallTimeoutMs, remaining));
       let reply = '';
@@ -1017,6 +1112,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
     try {
       const remaining = deadline - Date.now();
       if (remaining > 1000) {
+        foldContextMessages(messages);
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), Math.min(perCallTimeoutMs, remaining));
         let reply = '';
@@ -1091,7 +1187,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       const normalized = normalizeModelInput(input?.executorInput ?? input);
       // 没有可用模型时立刻报错：不要让用户以为任务在跑，结果几秒后才失败。
       const ctx = typeof context === 'function' ? context() : context;
-      if (!ctx?.key || !ctx?.settings?.model) {
+      if ((!ctx?.key && !ctx?.pool) || !ctx?.settings?.model) {
         throw statusError('还没有可用的模型：请在「设置 → 规划设置」里配置并选择默认模型', 503);
       }
       const runWorkspace = normalized.workspace ? path.resolve(normalized.workspace) : workspace;
@@ -1123,15 +1219,35 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
       const startedAt = Date.now();
       const controller = new AbortController();
       task.controller = controller;
-      void execute(task, normalized, runWorkspace)
-        // 步数用完 / 模型自己说没做成：如实标成失败，别人看到「已完成」会以为事情做完了。
-        .then(result => {
-          const error = result.exhausted
-            ? `到达步数上限（${result.steps} 步），任务没有做完`
-            : result.failed;
-          return finalize(task, error ? { ...result, startedAt, error } : { ...result, startedAt });
-        })
-        .catch(error => {
+      void (async () => {
+        let bridge = null;
+        try {
+          // MCP 服务器按项目动态加载：连不上只记录在过程里，不让整个模型任务因此失败。
+          if (typeof mcpServers === 'function') {
+            try {
+              const configs = await mcpServers(runWorkspace);
+              if (Array.isArray(configs) && configs.length) {
+                bridge = createMcpBridge({ servers: configs, onEvent: event => pushActivity(task, {
+                  kind: 'mcp',
+                  text: event.ok ? `MCP ${event.server} 已连接（${event.tools} 个工具）` : `MCP ${event.server} 连接失败`,
+                  detail: event.error || ''
+                }) });
+                await bridge.connect();
+                task.mcpHealth = bridge.health();
+                task.mcpToolNames = bridge.schemas().map(row => row.function.name);
+                // bridge 含函数/子进程句柄，不能写进持久化任务。
+                Object.defineProperty(task, 'mcpBridge', { value: bridge, enumerable: false, configurable: true });
+                persist(task);
+              }
+            } catch (failure) {
+              pushActivity(task, { kind: 'error', text: 'MCP 服务加载失败', detail: String(failure?.message || failure).slice(0, 300) });
+            }
+          }
+          const result = await execute(task, normalized, runWorkspace);
+          // 步数用完 / 模型自己说没做成：如实标成失败，别人看到「已完成」会以为事情做完了。
+          const error = result.exhausted ? `到达步数上限（${result.steps} 步），任务没有做完` : result.failed;
+          finalize(task, error ? { ...result, startedAt, error } : { ...result, startedAt });
+        } catch (error) {
           const cancelled = task.cancelled === true;
           finalize(task, {
             summary: cancelled ? 'Lagent 已停止' : '',
@@ -1141,8 +1257,12 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
             steps: 0,
             startedAt,
           });
-        })
-        .finally(() => { running.delete(task.id); grantedAccess.delete(task.id); });
+        } finally {
+          if (bridge) await bridge.close().catch(() => {});
+          running.delete(task.id);
+          grantedAccess.delete(task.id);
+        }
+      })();
       return task;
     },
     get: taskId => (taskId && store.get('task', taskId)) || null,

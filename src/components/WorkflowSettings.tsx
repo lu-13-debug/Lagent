@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BookOpen, Check, FileUp, KeyRound, Layers3, Plus, RefreshCw, Save, Settings2, X, Zap } from 'lucide-react';
 import { suggestedModels } from '../model-providers';
 import { completeWorkflow, EFFORT_LABELS, effortOptions, normalizeEffort, validateSkillFile, validateWorkflow, WORKFLOW_STAGES } from '../workflow-types';
-import type { CredentialInput, HubModelCatalog, HubModelProfile, ModelHubState, ModelProfileInput, WorkflowConfig, WorkflowSkill, WorkflowSkillInput, WorkflowStageConfig } from '../workflow-types';
+import type { CredentialInput, HubModelCatalog, HubModelProfile, ModelHubState, ModelProfileInput, ProviderPool, WorkflowConfig, WorkflowSkill, WorkflowSkillInput, WorkflowStageConfig } from '../workflow-types';
 import { CredentialManager } from './CredentialManager';
 import { Spinner } from './ui';
 import '../workflow-settings.css';
@@ -68,9 +68,14 @@ export function ModelHubSettings({ onWorkflowChanged, compact = false }: { onWor
     await refresh();
   }
   async function removeSkill(id: string) { await hubRequest(`/workflow-skills/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); }
+  async function savePool(input: { name: string; strategy: ProviderPool['strategy']; maxAttempts: number; cooldownMs: number; members: { credentialId: string }[] }, id?: string) {
+    await hubRequest(id ? `/provider-pools/${encodeURIComponent(id)}` : '/provider-pools', id ? 'PUT' : 'POST', input);
+    await refresh();
+  }
+  async function removePool(id: string) { await hubRequest(`/provider-pools/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); }
 
   const [profileSeed, setProfileSeed] = useState('');
-  const sections = [{ id: 'workflow', name: '规划设置', icon: Layers3 }, { id: 'credentials', name: '凭据库', icon: KeyRound }, { id: 'profiles', name: '模型配置', icon: Settings2 }, { id: 'skills', name: 'Skill 与插件', icon: BookOpen }];
+  const sections = [{ id: 'workflow', name: '规划设置', icon: Layers3 }, { id: 'credentials', name: '凭据库', icon: KeyRound }, { id: 'profiles', name: '模型配置', icon: Settings2 }, { id: 'pools', name: 'Key 池', icon: Zap }, { id: 'skills', name: 'Skill 与插件', icon: BookOpen }];
   return <section className="model-hub" aria-label="模型中心与工作流">
     {compact && <div className="hub-title"><div><h3>规划模型与 Skill</h3><p>为后续任务指定规划模型与 Skill 版本。</p></div></div>}
     {loading && <p className="hub-loading" role="status"><Spinner size={16} />正在读取账号配置…</p>}
@@ -78,10 +83,11 @@ export function ModelHubSettings({ onWorkflowChanged, compact = false }: { onWor
     {error && <div className="hub-notice" role="alert"><p>{error}</p><button type="button" className="text-button" onClick={() => setRevision(value => value + 1)}><RefreshCw size={14} />重新读取</button></div>}
     {hub && !loading && !error && <>
       {!hub.vault.available && <p className="hub-notice" role="status">{hub.vault.reason || '持久凭据库当前不可用，请联系管理员检查部署主密钥。'}</p>}
-      {!compact && <nav className="hub-nav" aria-label="模型中心分区">{sections.map(item => <button key={item.id} type="button" aria-label={item.name} aria-pressed={section === item.id} onClick={() => setSection(item.id)}><item.icon size={15} />{item.name}{item.id === 'credentials' && hub.credentials.length > 0 && <span className="hub-nav-count">{hub.credentials.length}</span>}{item.id === 'profiles' && hub.profiles.length > 0 && <span className="hub-nav-count">{hub.profiles.length}</span>}</button>)}</nav>}
+      {!compact && <nav className="hub-nav" aria-label="模型中心分区">{sections.map(item => <button key={item.id} type="button" aria-label={item.name} aria-pressed={section === item.id} onClick={() => setSection(item.id)}><item.icon size={15} />{item.name}{item.id === 'credentials' && hub.credentials.length > 0 && <span className="hub-nav-count">{hub.credentials.length}</span>}{item.id === 'profiles' && hub.profiles.length > 0 && <span className="hub-nav-count">{hub.profiles.length}</span>}{item.id === 'pools' && (hub.pools || []).length > 0 && <span className="hub-nav-count">{hub.pools.length}</span>}</button>)}</nav>}
       <div hidden={!compact && section !== 'workflow'}><WorkflowSettings workflow={hub.workflow} profiles={hub.profiles} skills={hub.skills} onSave={saveWorkflow} /></div>
       {!compact && <><div hidden={section !== 'credentials'}><CredentialManager credentials={hub.credentials} profiles={hub.profiles} writable={hub.vault.available} vaultReason={hub.vault.reason} onSave={saveCredential} onDelete={removeCredential} onUseForProfile={id => { setProfileSeed(id); setSection('profiles'); }} onDetect={id => hubRequest<HubModelCatalog>(`/model-credentials/${encodeURIComponent(id)}/models`, 'POST', {})} /></div>
       <div hidden={section !== 'profiles'}><ProfileManager hub={hub} seedCredentialId={profileSeed} onSeedConsumed={() => setProfileSeed('')} onSave={saveProfile} onDelete={removeProfile} onDetect={id => hubRequest<HubModelCatalog>(`/model-credentials/${encodeURIComponent(id)}/models`, 'POST', {})} /></div>
+      <div hidden={section !== 'pools'}><PoolManager hub={hub} onSave={savePool} onDelete={removePool} /></div>
       <div hidden={section !== 'skills'}><SkillManager skills={hub.skills} workflow={hub.workflow} onSave={saveSkill} onDelete={removeSkill} /></div></>}
     </>}
   </section>;
@@ -138,7 +144,7 @@ export function WorkflowSettings({ workflow, profiles, skills, onSave }: { workf
 function ProfileManager({ hub, seedCredentialId, onSeedConsumed, onSave, onDelete, onDetect }: { hub: ModelHubState; seedCredentialId?: string; onSeedConsumed?: () => void; onSave: (input: ModelProfileInput, id?: string) => Promise<void>; onDelete: (id: string) => Promise<void>; onDetect: (id: string) => Promise<HubModelCatalog> }) {
   const [editing, setEditing] = useState(false);
   const [id, setId] = useState<string>();
-  const [draft, setDraft] = useState<ModelProfileInput>({ name: '', credentialId: '', model: '' });
+  const [draft, setDraft] = useState<ModelProfileInput>({ name: '', credentialId: '', poolId: '', model: '' });
   const [catalog, setCatalog] = useState<HubModelCatalog>();
   const [busy, setBusy] = useState('');
   const [detecting, setDetecting] = useState(false);
@@ -149,14 +155,22 @@ function ProfileManager({ hub, seedCredentialId, onSeedConsumed, onSave, onDelet
   const [detected, setDetected] = useState(0);
   const detectRef = useRef(onDetect);
   detectRef.current = onDetect;
-  const credential = hub.credentials.find(item => item.id === draft.credentialId);
+  const pool = (hub.pools || []).find(item => item.id === draft.poolId);
+  const credential = hub.credentials.find(item => item.id === (draft.credentialId || pool?.members[0]?.credentialId));
+  const bindingValue = draft.poolId ? `pool:${draft.poolId}` : draft.credentialId ? `cred:${draft.credentialId}` : '';
+  const setBinding = (value: string) => {
+    const [kind, id = ''] = value.split(':');
+    setDraft(previous => ({ ...previous, credentialId: kind === 'cred' ? id : '', poolId: kind === 'pool' ? id : '', model: '' }));
+    setCatalog(undefined); setDetectError('');
+    setDetected(count => count + 1);
+  };
   const suggestions = credential ? suggestedModels(credential.baseUrl) : [];
-  // 选好凭据就自动识别可用模型，不用再点「检测」。
+  // 选好凭据或 Key 池就自动识别可用模型，不用再点「检测」。
   useEffect(() => {
-    if (!editing || !draft.credentialId || !hub.vault.available) return;
+    if (!editing || !credential || !hub.vault.available) return;
     let active = true;
     setDetecting(true); setDetectError(''); setCatalog(undefined);
-    detectRef.current(draft.credentialId)
+    detectRef.current(credential.id)
       .then(result => {
         if (!active) return;
         setCatalog(result);
@@ -166,8 +180,14 @@ function ProfileManager({ hub, seedCredentialId, onSeedConsumed, onSave, onDelet
       .catch(error => { if (active) setDetectError((error as Error).message || '未能读取模型列表。'); })
       .finally(() => { if (active) setDetecting(false); });
     return () => { active = false; };
-  }, [editing, draft.credentialId, hub.vault.available, detected]);
-  function edit(profile?: HubModelProfile) { setId(profile?.id); setDraft(profile ? { name: profile.name, credentialId: profile.credentialId, model: profile.model } : { name: '', credentialId: hub.credentials[0]?.id || '', model: '' }); setCatalog(undefined); setDetectError(''); setError(''); setMessage(''); setEditing(true); setDeleting(''); setDetected(value => value + 1); }
+  }, [editing, credential?.id, hub.vault.available, detected]);
+  function edit(profile?: HubModelProfile) {
+    setId(profile?.id);
+    setDraft(profile
+      ? { name: profile.name, ...(profile.poolId ? { poolId: profile.poolId } : { credentialId: profile.credentialId || '' }), model: profile.model }
+      : { name: '', credentialId: hub.credentials[0]?.id || '', model: '' });
+    setCatalog(undefined); setDetectError(''); setError(''); setMessage(''); setEditing(true); setDeleting(''); setDetected(value => value + 1);
+  }
   // 从「凭据库」点「用它新建模型」跳过来时，直接带着这条凭据打开编辑器。
   const seedRef = useRef(onSeedConsumed);
   seedRef.current = onSeedConsumed;
@@ -182,30 +202,82 @@ function ProfileManager({ hub, seedCredentialId, onSeedConsumed, onSave, onDelet
   }, [seedCredentialId]);
   async function act(name: string, action: () => Promise<void>) { setBusy(name); setError(''); setMessage(''); try { await action(); } catch (e) { setError((e as Error).message); } finally { setBusy(''); } }
   async function save() {
-    if (!draft.name.trim() || !draft.model.trim() || !draft.credentialId) { setError('请填写名称、选择凭据和完整模型 ID。'); return; }
+    if (!draft.name.trim() || !draft.model.trim() || (!draft.credentialId && !draft.poolId)) { setError('请填写名称、选择凭据或 Key 池，并填写完整模型 ID。'); return; }
     await act('save', async () => { await onSave({ ...draft, name: draft.name.trim(), model: draft.model.trim() }, id); setEditing(false); setMessage('模型配置已保存。能力由服务端按模型和协议确认。'); });
   }
   return <section className="hub-section" aria-label="模型配置">
-    <div className="hub-section-heading"><div><h3>模型配置</h3><p>每个配置绑定一组凭据和完整模型 ID。</p></div><button type="button" className="button secondary" disabled={!!busy || !hub.credentials.length || !hub.vault.available} onClick={() => edit()}><Plus size={15} />新增模型</button></div>
-    {!hub.credentials.length && <p className="hub-empty">请先在「凭据库」添加模型供应商凭据。</p>}
+    <div className="hub-section-heading"><div><h3>模型配置</h3><p>每个配置绑定一组凭据或一个 Key 池，再指定完整模型 ID。</p></div><button type="button" className="button secondary" disabled={!!busy || (!hub.credentials.length && !(hub.pools || []).length) || !hub.vault.available} onClick={() => edit()}><Plus size={15} />新增模型</button></div>
+    {!hub.credentials.length && !(hub.pools || []).length && <p className="hub-empty">请先在「凭据库」添加模型供应商凭据，或创建 Key 池。</p>}
     {editing && <form className="hub-editor" onSubmit={event => { event.preventDefault(); void save(); }}><div className="hub-editor-heading"><h4>{id ? '编辑模型配置' : '新增模型配置'}</h4><button type="button" className="hub-icon-button" aria-label="取消编辑模型" disabled={!!busy} onClick={() => setEditing(false)}><X size={17} /></button></div>
       <label className="field">配置名称<input required maxLength={80} value={draft.name} disabled={!!busy} placeholder="例如：报告撰写模型" onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
-      <label className="field">使用凭据<select required value={draft.credentialId} disabled={!!busy} onChange={event => { setDraft({ ...draft, credentialId: event.target.value, model: '' }); setCatalog(undefined); setDetectError(''); setDetected(value => value + 1); }}><option value="">请选择凭据</option>{hub.credentials.map(item => <option key={item.id} value={item.id}>{item.name} · {item.provider} · {item.keyHint || '已保存'}</option>)}</select></label>
+      <label className="field">使用凭据或 Key 池<select required value={bindingValue} disabled={!!busy} onChange={event => setBinding(event.target.value)}><option value="">请选择凭据或 Key 池</option>{hub.credentials.length > 0 && <optgroup label="单条凭据">{hub.credentials.map(item => <option key={item.id} value={`cred:${item.id}`}>{item.name} · {item.provider} · {item.keyHint || '已保存'}</option>)}</optgroup>}{(hub.pools || []).length > 0 && <optgroup label="Key 池">{(hub.pools || []).map(item => <option key={item.id} value={`pool:${item.id}`}>{item.name} · {item.members.length} 个 Key · {item.strategy}</option>)}</optgroup>}</select></label>
       {catalog && catalog.models.length > 0 && <label className="field">识别到 {catalog.models.length} 个模型<select aria-label="从检测结果填入" value="" disabled={!!busy} onChange={event => { if (event.target.value) setDraft({ ...draft, model: event.target.value }); }}><option value="">选择模型（{catalog.models.length} 个）</option>{catalog.models.map(item => <option key={item.id} value={item.id}>{item.name && item.name !== item.id ? `${item.name} · ` : ''}{item.id}</option>)}</select><small>{catalog.partial ? '供应商仅返回部分列表，仍可手动填写其他模型。' : '模型目录不代表当前 Key 已获全部调用权限。'}</small></label>}
       {(!catalog || !catalog.models.length) && suggestions.length > 0 && <label className="field">目录里的常见型号<select aria-label="从供应商目录填入" value="" disabled={!!busy} onChange={event => { if (event.target.value) setDraft({ ...draft, model: event.target.value }); }}><option value="">选择常见型号（{suggestions.length} 个）</option>{suggestions.map(model => <option key={model} value={model}>{model}</option>)}</select><small>{detectError ? `${detectError.replace(/[。；;]\s*$/, '')}；下面这些型号来自供应商目录，权限仍以供应商控制台为准。` : '这些型号来自供应商目录，是否可用仍以供应商控制台为准。'}</small></label>}
       <label className="field">完整模型 ID<input required maxLength={200} value={draft.model} disabled={!!busy} placeholder="填写供应商提供的完整模型 ID" onChange={event => setDraft({ ...draft, model: event.target.value })} /></label>
       <div className="hub-catalog-row">
-        <button type="button" className="text-button" disabled={!!busy || detecting || !draft.credentialId || !hub.vault.available} onClick={() => setDetected(value => value + 1)}>{busy === 'detect' || detecting ? <Spinner size={14} /> : <RefreshCw size={14} />}{detecting ? '正在识别可用模型…' : '重新识别模型'}</button>
+        <button type="button" className="text-button" disabled={!!busy || detecting || !credential || !hub.vault.available} onClick={() => setDetected(value => value + 1)}>{busy === 'detect' || detecting ? <Spinner size={14} /> : <RefreshCw size={14} />}{detecting ? '正在识别可用模型…' : '重新识别模型'}</button>
         {detecting && <span className="hub-field-hint" role="status">正在用这条凭据读取供应商的模型列表…</span>}
       </div>
       <p className="hub-field-hint">未知模型仅开放默认强度。保存不会自动发起付费连接测试。</p><div className="hub-actions"><button className="button primary" type="submit" disabled={!!busy || !hub.vault.available}>{busy === 'save' ? <Spinner size={15} /> : <Save size={15} />}保存模型</button><button className="button secondary" type="button" disabled={!!busy} onClick={() => setEditing(false)}>取消</button></div>
     </form>}
     <div className="hub-card-list">{hub.profiles.map(profile => {
       const credential = hub.credentials.find(item => item.id === profile.credentialId);
+      const boundPool = (hub.pools || []).find(item => item.id === profile.poolId);
       const used = hub.workflow.defaultProfileId === profile.id || Object.values(hub.workflow.stages).some(stage => stage.profileId === profile.id);
-      return <article className="hub-card" key={profile.id}><div className="hub-card-heading"><div><h4>{profile.name}</h4><p>{profile.model}</p></div>{hub.workflow.defaultProfileId === profile.id && <span className="hub-badge">默认模型</span>}</div><p>{credential ? `${credential.name} · ${credential.provider}` : '凭据已不可用'} · 强度：{effortOptions(profile).filter(item => item.supported).map(item => item.label).join(' / ')}</p><div className="hub-actions"><button className="text-button" type="button" disabled={!!busy || !hub.vault.available} onClick={() => void act(profile.id, async () => { const result = await hubRequest<{ ok: boolean; message: string }>(`/model-profiles/${encodeURIComponent(profile.id)}/test`, 'POST', {}); if (!result.ok) throw new Error(result.message || '连接测试失败。'); setMessage(`${profile.name}：${result.message || '连接成功。'}`); })}>{busy === profile.id ? <Spinner size={14} /> : <Zap size={14} />}测试连接</button><button className="text-button" type="button" disabled={!!busy} onClick={() => edit(profile)}>编辑</button><button className="text-button danger-text" type="button" disabled={!!busy} onClick={() => setDeleting(profile.id)}>删除</button></div>{deleting === profile.id && <div className="hub-delete-confirm"><p>{used ? '此模型正在用于工作流，请先在阶段工作流中更换引用并保存。' : `确认删除「${profile.name}」？关联凭据将保留。`}</p><div className="hub-actions"><button className="button secondary" type="button" disabled={!!busy || used} onClick={() => void act(profile.id, async () => { await onDelete(profile.id); setDeleting(''); setMessage('模型配置已删除。'); })}>确认删除</button><button className="text-button" type="button" disabled={!!busy} onClick={() => setDeleting('')}>取消</button></div></div>}</article>;
+      return <article className="hub-card" key={profile.id}><div className="hub-card-heading"><div><h4>{profile.name}</h4><p>{profile.model}</p></div>{hub.workflow.defaultProfileId === profile.id && <span className="hub-badge">默认模型</span>}</div><p>{boundPool ? `Key 池 · ${boundPool.name}（${boundPool.members.length} 个 Key）` : credential ? `${credential.name} · ${credential.provider}` : '凭据已不可用'}{profile.capabilities?.reason ? ` · ${profile.capabilities.reason}` : ''} · 强度：{effortOptions(profile).filter(item => item.supported).map(item => item.label).join(' / ')}</p><div className="hub-actions"><button className="text-button" type="button" disabled={!!busy || !hub.vault.available} onClick={() => void act(profile.id, async () => { const result = await hubRequest<{ ok: boolean; message: string }>(`/model-profiles/${encodeURIComponent(profile.id)}/test`, 'POST', {}); if (!result.ok) throw new Error(result.message || '连接测试失败。'); setMessage(`${profile.name}：${result.message || '连接成功。'}`); })}>{busy === profile.id ? <Spinner size={14} /> : <Zap size={14} />}测试连接</button><button className="text-button" type="button" disabled={!!busy} onClick={() => edit(profile)}>编辑</button><button className="text-button danger-text" type="button" disabled={!!busy} onClick={() => setDeleting(profile.id)}>删除</button></div>{deleting === profile.id && <div className="hub-delete-confirm"><p>{used ? '此模型正在用于工作流，请先在阶段工作流中更换引用并保存。' : `确认删除「${profile.name}」？关联凭据将保留。`}</p><div className="hub-actions"><button className="button secondary" type="button" disabled={!!busy || used} onClick={() => void act(profile.id, async () => { await onDelete(profile.id); setDeleting(''); setMessage('模型配置已删除。'); })}>确认删除</button><button className="text-button" type="button" disabled={!!busy} onClick={() => setDeleting('')}>取消</button></div></div>}</article>;
     })}</div>
     <p className="hub-field-hint">检测只读取模型目录；点击「测试连接」会发起一次模型请求，可能产生供应商费用。</p>{error && <p className="form-error" role="alert">{error}</p>}{message && <p className="hub-feedback" role="status">{message}</p>}
+  </section>;
+}
+
+const POOL_STRATEGIES: { id: ProviderPool['strategy']; label: string; desc: string }[] = [
+  { id: 'priority', label: '按优先级', desc: '优先使用排在前面的 Key，失败后再降级。' },
+  { id: 'round-robin', label: '加权轮询', desc: '按权重分摊请求，适合多把同额度的 Key。' },
+  { id: 'least-failed', label: '最少失败', desc: '优先选择最近失败更少的 Key。' },
+  { id: 'cheapest', label: '最低成本', desc: '按每千 Token 成本从低到高选择。' }
+];
+
+function PoolManager({ hub, onSave, onDelete }: { hub: ModelHubState; onSave: (input: { name: string; strategy: ProviderPool['strategy']; maxAttempts: number; cooldownMs: number; members: { credentialId: string }[] }, id?: string) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
+  const pools = hub.pools || [];
+  const [editing, setEditing] = useState(false);
+  const [id, setId] = useState<string>();
+  const [draft, setDraft] = useState({ name: '', strategy: 'priority' as ProviderPool['strategy'], maxAttempts: 3, cooldownMs: 60000, members: [] as string[] });
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [deleting, setDeleting] = useState('');
+  function edit(pool?: ProviderPool) {
+    setId(pool?.id);
+    setDraft(pool
+      ? { name: pool.name, strategy: pool.strategy, maxAttempts: pool.maxAttempts, cooldownMs: pool.cooldownMs, members: pool.members.map(member => member.credentialId) }
+      : { name: '', strategy: 'priority', maxAttempts: 3, cooldownMs: 60000, members: hub.credentials[0] ? [hub.credentials[0].id] : [] });
+    setEditing(true); setError(''); setMessage(''); setDeleting('');
+  }
+  function toggleMember(credentialId: string) {
+    setDraft(previous => ({ ...previous, members: previous.members.includes(credentialId) ? previous.members.filter(item => item !== credentialId) : [...previous.members, credentialId] }));
+  }
+  async function act(name: string, action: () => Promise<void>) { setBusy(name); setError(''); setMessage(''); try { await action(); } catch (e) { setError((e as Error).message); } finally { setBusy(''); } }
+  return <section className="hub-section" aria-label="Key 池">
+    <div className="hub-section-heading"><div><h3>Key 池与自动切换</h3><p>同一个提供商、接口地址下的多把 Key；遇到 429/5xx 自动换 Key，401/403 会隔离该 Key。</p></div><button type="button" className="button secondary" disabled={!!busy || !hub.credentials.length} onClick={() => edit()}><Plus size={15} />新建 Key 池</button></div>
+    {!hub.credentials.length && <p className="hub-empty">先到「凭据库」添加至少一把同提供商的 Key。</p>}
+    {editing && <form className="hub-editor" onSubmit={event => { event.preventDefault(); void act('save', async () => { if (!draft.name.trim() || !draft.members.length) throw new Error('请填写池名称并至少选择一把 Key。'); await onSave({ ...draft, name: draft.name.trim(), members: draft.members.map(credentialId => ({ credentialId })) }, id); setEditing(false); setMessage('Key 池已保存。'); }); }}>
+      <div className="hub-editor-heading"><h4>{id ? '编辑 Key 池' : '新建 Key 池'}</h4><button type="button" className="hub-icon-button" aria-label="取消编辑 Key 池" disabled={!!busy} onClick={() => setEditing(false)}><X size={17} /></button></div>
+      <div className="hub-form-grid">
+        <label className="field">名称<input required maxLength={80} value={draft.name} disabled={!!busy} placeholder="例如：主力账号 Key 池" onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
+        <label className="field">选择策略<select value={draft.strategy} disabled={!!busy} onChange={event => setDraft({ ...draft, strategy: event.target.value as ProviderPool['strategy'] })}>{POOL_STRATEGIES.map(item => <option key={item.id} value={item.id}>{item.label} · {item.desc}</option>)}</select></label>
+      </div>
+      <div className="hub-form-grid"><label className="field">最多尝试次数<input type="number" min={1} max={5} value={draft.maxAttempts} disabled={!!busy} onChange={event => setDraft({ ...draft, maxAttempts: event.target.valueAsNumber })} /></label><label className="field">失败冷却（毫秒）<input type="number" min={1000} max={3600000} value={draft.cooldownMs} disabled={!!busy} onChange={event => setDraft({ ...draft, cooldownMs: event.target.valueAsNumber })} /></label></div>
+      <div className="hub-checkbox-group">{hub.credentials.map(credential => <label className="hub-checkbox" key={credential.id}><input type="checkbox" checked={draft.members.includes(credential.id)} disabled={!!busy} onChange={() => toggleMember(credential.id)} />{credential.name} · {credential.provider} · {credential.keyHint || '已保存'}</label>)}</div>
+      <p className="hub-field-hint">同一池中的 Key 必须属于同一提供商、接口地址和协议；顺序决定「按优先级」策略的先后。</p>
+      <div className="hub-actions"><button className="button primary" type="submit" disabled={!!busy || !draft.members.length}>{busy === 'save' ? <Spinner size={15} /> : <Save size={15} />}保存 Key 池</button><button className="button secondary" type="button" disabled={!!busy} onClick={() => setEditing(false)}>取消</button></div>
+    </form>}
+    <div className="hub-card-list">{pools.map(pool => <article className="hub-card" key={pool.id}><div className="hub-card-heading"><div><h4>{pool.name}</h4><p>{pool.provider} · {pool.baseUrl}</p></div><span className="hub-badge">{POOL_STRATEGIES.find(item => item.id === pool.strategy)?.label || pool.strategy}</span></div>
+      <p>{pool.members.length} 个 Key · 最多尝试 {pool.maxAttempts} 次 · 冷却 {Math.round(pool.cooldownMs / 1000)} 秒</p>
+      <ul className="hub-pool-members">{pool.members.map(member => <li key={member.credentialId}><span>{member.keyHint || member.credentialId}</span><em>{member.coolingUntil ? `冷却至 ${new Date(member.coolingUntil).toLocaleTimeString()}` : member.usedToday ? `今日 ${member.usedToday} 次` : '可用'}{member.failures ? ` · 失败 ${member.failures}` : ''}</em></li>)}</ul>
+      <div className="hub-actions"><button type="button" className="text-button" disabled={!!busy} onClick={() => void act(pool.id, async () => { const result = await hubRequest<{ ok: boolean; message: string }>(`/provider-pools/${encodeURIComponent(pool.id)}/test`, 'POST', {}); setMessage(result.message || '连接成功。'); })}>{busy === pool.id ? <Spinner size={14} /> : <Zap size={14} />}测试切换</button><button type="button" className="text-button" disabled={!!busy} onClick={() => edit(pool)}>编辑</button><button type="button" className="text-button danger-text" disabled={!!busy} onClick={() => setDeleting(pool.id)}>删除</button></div>
+      {deleting === pool.id && <div className="hub-delete-confirm"><p>{hub.profiles.some(profile => profile.poolId === pool.id) ? '有模型配置正在引用此 Key 池，请先改绑后再删除。' : `确认删除「${pool.name}」？关联凭据会保留，路由记录仍可查看。`}</p><div className="hub-actions"><button className="button secondary" type="button" disabled={!!busy || hub.profiles.some(profile => profile.poolId === pool.id)} onClick={() => void act(pool.id, async () => { await onDelete(pool.id); setDeleting(''); setMessage('Key 池已删除。'); })}>确认删除</button><button className="text-button" type="button" disabled={!!busy} onClick={() => setDeleting('')}>取消</button></div></div>}
+    </article>)}</div>
+    <p className="hub-field-hint">测试会使用池中第一把可用 Key 发起一次真实请求，可能产生供应商费用与 Token 消耗。</p>{error && <p className="form-error" role="alert">{error}</p>}{message && <p className="hub-feedback" role="status">{message}</p>}
   </section>;
 }
 

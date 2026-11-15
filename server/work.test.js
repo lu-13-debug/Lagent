@@ -94,7 +94,7 @@ test('Work契约字段、命令幂等、输入校验及严格投影', t => {
   assert.throws(() => f.engine.command({ text: '不同指令', clientRequestId: 'once', datasetId: 'dataset-one' }), { status: 409 });
   assert.deepEqual(Object.keys(ticket).sort(), ['acceptance', 'attention', 'chainRootId', 'contract', 'createdAt', 'datasetId', 'executor', 'handoff', 'handoffChildId', 'handoffDepth', 'handoffSummary', 'id', 'parentTicketId', 'planId', 'planStep', 'planTotal', 'preview', 'source', 'stage', 'status', 'summary', 'title', 'updatedAt', 'verify']);
   const bootstrap = f.engine.bootstrap();
-  assert.deepEqual(Object.keys(bootstrap).sort(), ['agents', 'attention', 'capabilities', 'datasets', 'plans', 'policy', 'projects', 'tickets', 'tools', 'workspace']);
+  assert.deepEqual(Object.keys(bootstrap).sort(), ['activeProfile', 'agents', 'attention', 'capabilities', 'datasets', 'plans', 'policy', 'profiles', 'projects', 'queue', 'tickets', 'tools', 'workspace']);
   assert.deepEqual(bootstrap.projects, []);
   assert.equal(bootstrap.capabilities.work, true);
   assert.equal(bootstrap.policy.acceptMode, 'explicit');

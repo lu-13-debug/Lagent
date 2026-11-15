@@ -220,6 +220,9 @@ export function localAgentExecutor(profileName, {
     validateInput: input => normalizeCliInput(input, { defaultMaxTurns: 8, maxTurns: 60 }),
     buildArgs,
     parseOutput: parseTextOutput,
+    // 这些 CLI 只输出纯文本结论，没有结构化事件；把 stdout 当成它正在写的东西记录下来，
+    // 面板里才看得见「它在动」，而不是一直停在「Agent 正在思考…」。
+    streamText: true,
     capabilities: profile.capabilities
   });
   executor.buildArgs = buildArgs;

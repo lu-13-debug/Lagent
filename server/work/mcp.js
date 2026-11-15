@@ -1,6 +1,17 @@
 import { workError } from './domain.js';
+import { MCP_WRITE_TOOLS } from './mcp-tokens.js';
+import { APP_VERSION } from '../version.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
+const PROJECT_TOOLS = new Set(['work_project_brief', 'work_project_memory', 'work_memory_search', 'work_update_project_brief', 'work_record_change']);
+const toolAllowed = (scope, name) => !scope?.tools?.length || scope.tools.includes(name);
+const scopedInput = (scope, name, input) => {
+  if (!scope?.projectId || !PROJECT_TOOLS.has(name)) return input;
+  const next = { ...(input || {}) };
+  if (!next.projectId) next.projectId = scope.projectId;
+  if (next.projectId !== scope.projectId) throw workError('该 MCP 令牌只能访问绑定的项目', 403);
+  return next;
+};
 
 const tool = (name, description, inputSchema, handler) => ({ name, description, inputSchema, handler });
 
@@ -50,7 +61,7 @@ export function createMcpHandler({ engine, windowBridge, actor = 'mcp' } = {}) {
     }),
     tool('work_send_command', '向指挥台发送一条指令', {
       type: 'object',
-      properties: { text: { type: 'string' }, executorId: { type: 'string' }, datasetId: { type: 'string' }, executorInput: { type: 'object' }, clientRequestId: { type: 'string' }, verify: { type: 'object' } },
+      properties: { text: { type: 'string' }, executorId: { type: 'string' }, datasetId: { type: 'string' }, projectId: { type: 'string' }, executorInput: { type: 'object' }, clientRequestId: { type: 'string' }, verify: { type: 'object' } },
       required: ['text'], additionalProperties: false
     }, async input => textResult({ ticket: engine.command({ ...input, origin: actor }) })),
     tool('work_ticket_action', '对工单执行 approve/reject/stop/retry/resume', {
@@ -180,6 +191,7 @@ export function createMcpHandler({ engine, windowBridge, actor = 'mcp' } = {}) {
           }
         },
         autoRun: { type: 'boolean' },
+        projectId: { type: 'string' },
         clientRequestId: { type: 'string' }
       },
       required: ['goal', 'steps'], additionalProperties: false
@@ -203,28 +215,55 @@ export function createMcpHandler({ engine, windowBridge, actor = 'mcp' } = {}) {
   ];
   const byName = new Map(tools.map(item => [item.name, item]));
 
-  async function handle(payload) {
+  // 作用域令牌只能看到、只能调用自己被授权的工具；返回列表也要按项目过滤，
+  // 否则「绑定项目」只是摆设，外部 Agent 仍能读到别的项目工单。
+  function scopedResult(name, result, scope) {
+    if (!scope?.projectId) return result;
+    try {
+      const value = JSON.parse(result?.content?.[0]?.text || 'null');
+      if (name === 'work_list_tickets' && Array.isArray(value?.tickets)) {
+        value.tickets = value.tickets.filter(ticket => engine.ticketProjectId(ticket.id) === scope.projectId);
+      } else if (name === 'work_list_projects' && Array.isArray(value?.projects)) {
+        value.projects = value.projects.filter(project => project.id === scope.projectId);
+      } else if (name === 'work_list_plans' && Array.isArray(value?.plans)) {
+        value.plans = value.plans.filter(plan => engine.planProjectId?.(plan.id) === scope.projectId);
+      } else return result;
+      return textResult(value);
+    } catch { return result; }
+  }
+
+  async function handle(payload, { scope } = {}) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw workError('MCP 请求必须是 JSON-RPC 对象');
     if (payload.jsonrpc !== '2.0' || typeof payload.method !== 'string') throw workError('MCP 请求格式无效');
     if (payload.method === 'initialize') {
       return {
         protocolVersion: typeof payload.params?.protocolVersion === 'string' ? payload.params.protocolVersion : PROTOCOL_VERSION,
         capabilities: { tools: {} },
-        serverInfo: { name: 'Lagent', version: '1.1.0' }
+        serverInfo: { name: 'Lagent', version: APP_VERSION }
       };
     }
     if (payload.method === 'notifications/initialized' || payload.method === 'notifications/cancelled') return null;
     if (payload.method === 'ping') return {};
     if (payload.method === 'tools/list') {
-      return { tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) };
+      const visible = scope
+        ? tools.filter(entry => toolAllowed(scope, entry.name) && !(scope.readOnly && MCP_WRITE_TOOLS.includes(entry.name)))
+        : tools;
+      return { tools: visible.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) };
     }
     if (payload.method === 'tools/call') {
       const name = requiredString(payload.params, 'name');
       const entry = byName.get(name);
       if (!entry) throw Object.assign(workError('未知 MCP 工具', 404), { code: 'MCP_TOOL_NOT_FOUND' });
-      const input = payload.params?.arguments;
+      if (scope && !toolAllowed(scope, name)) throw workError('该 MCP 令牌无权调用此工具', 403);
+      if (scope?.readOnly && MCP_WRITE_TOOLS.includes(name)) throw workError('该 MCP 令牌是只读令牌，不能修改工作区', 403);
+      let input = payload.params?.arguments;
       if (input !== undefined && (!input || typeof input !== 'object' || Array.isArray(input))) throw workError('MCP 工具参数必须是对象');
-      return entry.handler(input || {});
+      input = scopedInput(scope, name, input || {});
+      if (scope?.projectId && ['work_send_command', 'work_create_plan'].includes(name)) {
+        if (input.projectId && input.projectId !== scope.projectId) throw workError('该 MCP 令牌只能访问绑定的项目', 403);
+        input = { ...input, projectId: scope.projectId };
+      }
+      return scopedResult(name, await entry.handler(input), scope);
     }
     throw Object.assign(workError('未知 MCP 方法', 404), { code: 'MCP_METHOD_NOT_FOUND' });
   }
@@ -232,33 +271,80 @@ export function createMcpHandler({ engine, windowBridge, actor = 'mcp' } = {}) {
   return { handle, tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) };
 }
 
-export function registerMcpRoutes(app, { engine, gateway, ownerId, windowBridge, actor = 'mcp' } = {}) {
+export function registerMcpRoutes(app, { engine, gateway, ownerId, windowBridge, actor = 'mcp', mcpTokens = null } = {}) {
   if (!engine || !gateway) throw new TypeError('MCP 路由需要 engine 与 gateway');
   const handler = createMcpHandler({ engine, windowBridge, actor });
   const authenticate = req => gateway.authenticateRequest(req, { ownerId });
+  const scopedToken = req => {
+    const value = String(req.get?.('authorization') || '').trim();
+    return value.toLowerCase().startsWith('bearer lagent_mcp_') ? value.slice(7).trim() : '';
+  };
+  const ticketIdOf = result => {
+    try {
+      const value = JSON.parse(result?.content?.[0]?.text || 'null');
+      return typeof value?.ticket?.id === 'string' ? value.ticket.id : null;
+    } catch { return null; }
+  };
 
   app.post('/api/mcp/token', (req, res) => {
+    if (scopedToken(req)) return res.status(403).json({ error: '作用域令牌不能签发新的令牌' });
     const pair = gateway.createPair(ownerId);
     const device = gateway.claim(pair.code, typeof req.body?.name === 'string' ? req.body.name : 'MCP 客户端', `mcp-${ownerId}`);
     engine.auditExternal('mcp/token', 'mcp', 'created');
     res.status(201).json({ endpoint: '/api/mcp', token: device.deviceToken, deviceId: device.deviceId, expiresAt: device.expiresAt });
   });
 
+  if (mcpTokens) {
+    // 作用域令牌管理只接受界面会话；云端的会话校验在父级中间件完成。
+    app.get('/api/mcp/tokens', (req, res) => {
+      if (scopedToken(req)) return res.status(403).json({ error: '作用域令牌不能管理令牌' });
+      res.json({ tokens: mcpTokens.list() });
+    });
+    app.post('/api/mcp/tokens', (req, res) => {
+      if (scopedToken(req)) return res.status(403).json({ error: '作用域令牌不能管理令牌' });
+      const knownTools = new Set(handler.tools.map(tool => tool.name));
+      const issued = mcpTokens.issue(req.body, { knownTools });
+      engine.auditExternal('mcp/token', 'mcp', 'scoped', issued.record.id.slice(0, 8));
+      res.status(201).json({ endpoint: '/api/mcp', ...issued });
+    });
+    app.delete('/api/mcp/tokens/:id', (req, res) => {
+      if (scopedToken(req)) return res.status(403).json({ error: '作用域令牌不能管理令牌' });
+      res.json({ token: mcpTokens.revoke(req.params.id) });
+    });
+  }
+
   app.post('/api/mcp', async (req, res) => {
-    authenticate(req);
-    const payload = req.body;
-    const id = payload && typeof payload === 'object' && 'id' in payload ? payload.id : undefined;
-    if (id === undefined) {
-      try { await handler.handle(payload); res.status(202).end(); }
-      catch { res.status(202).end(); }
-      return;
-    }
+    let scope = null; let release = () => {}; let toolName = '';
     try {
-      const result = await handler.handle(payload);
-      res.json({ jsonrpc: '2.0', id, result });
+      const token = scopedToken(req);
+      if (token) {
+        if (!mcpTokens) throw workError('该服务未启用作用域 MCP 令牌', 403);
+        scope = mcpTokens.authenticate(token);
+        release = mcpTokens.enter(scope);
+      } else authenticate(req);
+      const payload = req.body;
+      const id = payload && typeof payload === 'object' && 'id' in payload ? payload.id : undefined;
+      toolName = payload?.method === 'tools/call' ? payload?.params?.name : '';
+      if (scope && toolName) mcpTokens.assertTool(scope, toolName, payload?.params?.arguments || {});
+      if (id === undefined) {
+        try { await handler.handle(payload, { scope }); res.status(202).end(); }
+        catch { res.status(202).end(); }
+        return;
+      }
+      try {
+        const result = await handler.handle(payload, { scope });
+        if (scope && toolName) mcpTokens.recordCall(scope, { ticketId: ticketIdOf(result) });
+        res.json({ jsonrpc: '2.0', id, result });
+      } catch (error) {
+        if (scope && toolName) engine.auditExternal('mcp/call', 'mcp', 'denied', `${toolName}: ${String(error?.message || '').slice(0, 120)}`);
+        const status = Number.isInteger(error?.status) ? error.status : 400;
+        res.status(status === 401 ? 401 : 200).json({ jsonrpc: '2.0', id, error: { code: status, message: error?.message || 'MCP 请求失败' } });
+      }
     } catch (error) {
+      // 令牌鉴权、工具白名单与项目绑定都在这里被拒绝：同样写入脱敏审计。
+      if (scope) engine.auditExternal('mcp/call', 'mcp', 'denied', `${toolName || 'request'}: ${String(error?.message || '').slice(0, 120)}`);
       const status = Number.isInteger(error?.status) ? error.status : 400;
-      res.status(status === 401 ? 401 : 200).json({ jsonrpc: '2.0', id, error: { code: status, message: error?.message || 'MCP 请求失败' } });
-    }
+      res.status(status).json({ error: error?.message || 'MCP 请求失败' });
+    } finally { release(); }
   });
 }

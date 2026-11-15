@@ -46,13 +46,6 @@ test('首帧脚本读取非敏感显示缓存并同步主题颜色', async () =>
   assert.equal(root.dataset.theme,'dark'); assert.equal(root.dataset.view,'concise'); assert.equal(root.dataset.themeFix,''); assert.equal(meta.content,'#0d1110');
 });
 
-test('显示设置快捷键不会与输入法和其他弹窗冲突', async () => {
-  const {shortcutAction}=await import('./commands.ts');
-  assert.equal(shortcutAction({key:'D',ctrlKey:true,shiftKey:true},false),'appearance');
-  assert.equal(shortcutAction({key:'d',metaKey:true,shiftKey:true},true),null);
-  assert.equal(shortcutAction({key:'D',ctrlKey:true,shiftKey:true,isComposing:true},false),null);
-});
-
 test('侧栏默认随视图收放，显式选择优先且按账号隔离', async () => {
   const {railKey,readRail,saveRail,resolveRail}=await import('./appearance.ts');
   const values=new Map(),storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};

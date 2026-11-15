@@ -4,9 +4,9 @@
 
 Windows 桌面客户端既可连接可部署的云端账号服务，也可连接本机服务 `http://127.0.0.1:3001`；连接云端时注册登录后使用自己的项目、对话与审批记录，连接本机时直接使用本地工作台。
 
-当前账号版：**1.1.0**。源码：[lu-13-debug/Lagent](https://github.com/lu-13-debug/Lagent)。1.0.0 为原本地单用户版，发布历史保留。
+当前账号版：**1.2.0**。源码：[lu-13-debug/Lagent](https://github.com/lu-13-debug/Lagent)。1.0.0 为原本地单用户版，发布历史保留。
 
-> **界面定位调整**：主界面现在聚焦 Agent 指挥与项目协作。原有的数据分析/报告/额度页面、快捷命令与执行器选项已从界面隐藏，服务端代码与测试完整保留；未启用指挥台（`LAGENT_WORK_ENABLED`）时仍会进入原数据分析界面。
+> **界面定位**：主界面只有 Agent 指挥与项目协作。原有的数据分析/报告/额度网页入口已移除；对应的服务端工作流与接口仍然保留，供 API 调用与测试使用。
 
 ## 账号服务与部署
 
@@ -28,7 +28,7 @@ npm.cmd run cloud
 
 ## Windows 桌面版
 
-从 [发布页](https://github.com/lu-13-debug/Lagent/releases) 下载账号版 `Lagent-Setup-1.1.0-x64.exe`，或从源码构建到 `release/`。支持 Windows 10/11 的 x64 系统；双击安装，可选择目录，安装后从桌面或开始菜单打开 **Lagent**。桌面版内置运行时，无需安装 Node.js。它既能连接云端账号服务，也能连接本机 `http://127.0.0.1:3001`（需先启动本机服务，或在连接页填入该地址）。
+从 [发布页](https://github.com/lu-13-debug/Lagent/releases) 下载账号版 `Lagent-Setup-1.2.0-x64.exe`，或从源码构建到 `release/`。支持 Windows 10/11 的 x64 系统；双击安装，可选择目录，安装后从桌面或开始菜单打开 **Lagent**。桌面版内置运行时，无需安装 Node.js。它既能连接云端账号服务，也能连接本机 `http://127.0.0.1:3001`（需先启动本机服务，或在连接页填入该地址）。
 
 首次打开连接管理员提供的 HTTPS 服务地址，随后注册或登录。可在打包前通过 `build/cloud-config.json` 预置服务地址。云端工作台需要联网，菜单支持切换服务并清理原服务会话。旧版 `%APPDATA%\Lagent\storage` 中的本地数据保留，不会自动归到任何云端账号。
 
@@ -71,9 +71,9 @@ npm.cmd run dev
 
 ## 指挥台：接入外部 Agent（ACP / MCP）
 
-指挥台（`/api/work/*`）需要设置 `LAGENT_WORK_ENABLED=1`；接入外部 Agent 还需要 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1`，并在「设置 → 执行器策略」中勾选对应执行器。
+指挥台（`/api/work/*`）默认启用；只有显式设置 `LAGENT_WORK_ENABLED=0` 才会关闭接口。接入外部 Agent 还需要 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1`，并在「设置 → 执行器策略」中勾选对应执行器。
 
-**主界面**：左侧存放对话记录与功能入口（收件箱、项目、Agent、工具、记忆、设置），右侧上方是 Agent 的思考与执行流，输入框固定在底部。选中多个 Agent 后发送，会并行创建工单做交叉验证；任一方完成后可选一个 Agent 汇总，比较一致点、分歧点与各自依据。交叉验证也可选运行中的窗口 Agent（如未装 ACP 的 DeepSeek Harness）；窗口输出同样进入对比与汇总，但窗口不作为汇总者。数据分析执行器已从界面选项移除，主界面只保留外部 Agent 与受控终端类执行器。
+**主界面**：左侧存放对话记录与功能入口（指挥台、项目、团队、运行、工具、记忆、设置），右侧上方是 Agent 的思考与执行流，输入框固定在底部。选中多个 Agent 后发送，会并行创建工单做交叉验证；任一方完成后可选一个 Agent 汇总，比较一致点、分歧点与各自依据。交叉验证也可选运行中的窗口 Agent（如未装 ACP 的 DeepSeek Harness）；窗口输出同样进入对比与汇总，但窗口不作为汇总者。数据分析执行器作为内置工具保留，派活前需要先选择数据集；项目工作文件夹里只能派给外部 Agent、窗口 Agent 与内置模型。
 
 **ACP（推荐）**：统一驱动 Claude Code、Codex、DeepSeek Harness。
 
@@ -96,6 +96,8 @@ claude mcp add --transport http lagent http://127.0.0.1:3001/api/mcp \
 
 **窗口兜底**：没有协议入口的桌面 Agent，可用窗口 Agent 直接向白名单进程窗口键入指令并读取输出；窗口句柄变化时会按进程与标题自动刷新并重试一次。白名单默认包含 codex、ChatGPT、claude、WindowsTerminal、wt、opencode、DSH Desktop、DeepSeek Harness、DeepSeek，可用 `LAGENT_WINDOW_PROCESSES` 覆盖。运行中的 DeepSeek Harness 桌面版会被「本机 Agent 探测」识别为可用（不需要 `dsh` 命令或 ACP 适配器），直接选左下方的「窗口 · DeepSeek Harness」即可。窗口 Agent 会优先定位底部的会话输入框并排除搜索框；窗口不在会话页、或输入框里已有未发送草稿时明确拒绝，不会把指令打进搜索栏或覆盖草稿。发送后默认轮询 30 秒等待新输出，可用 `LAGENT_WINDOW_WAIT_MS` 调整。
 
+**WorkBuddy 桌面端**：WorkBuddy 属于外部执行器，启动 Lagent 时需设置 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1`，再到「Agent」页打开 WorkBuddy 开关，之后新对话里就能像其它 CLI 一样给它派任务。执行器通过 Chromium 调试端口驱动 WorkBuddy 界面：新建任务、填入提示词、点击发送，再按消息帧状态等待完成并把回复写回工单摘要。WorkBuddy 未运行时 Lagent 会自动带调试端口拉起；已经在运行但没开端口时会提示先退出重启，不会强行结束正在使用的进程。端口与超时可用 `LAGENT_WORKBUDDY_PORT`、`LAGENT_WORKBUDDY_TIMEOUT_MS` 调整，安装路径用 `LAGENT_WORKBUDDY_EXE` 覆盖。
+
 ## 项目工作区：导入本地文件夹与已有会话
 
 「项目」页把本地文件夹接入指挥台，让 Agent 在真实项目里干活：
@@ -116,11 +118,23 @@ claude mcp add --transport http lagent http://127.0.0.1:3001/api/mcp \
 - **Markdown 导出**：`GET /api/work/projects/:id/brief.md` 返回完整文本；MCP 工具 `work_project_brief` 让外部 Agent 直接读取，`work_record_change` 用于回写修改。
 - 删除项目时，简报、变更记录与项目对话一并清理，不影响 Agent 端的会话文件。
 
-命令：`npm run dev`（前端）配合启用了 `LAGENT_WORK_ENABLED=1 LAGENT_ALLOW_EXTERNAL_EXECUTORS=1` 的服务。注意：CLI 执行器是一次性进程，不会在 Claude Code / Codex 桌面端自动打开该会话；软件内的项目对话只维护会话 ID 与消息记录。
+命令：`npm run dev`（前端）配合启用了 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1` 的服务。注意：CLI 执行器是一次性进程，不会在 Claude Code / Codex 桌面端自动打开该会话；软件内的项目对话只维护会话 ID 与消息记录。
 
-## 数据（指挥台模式下界面隐藏）
+### 协作与自动化（P1）
 
-以下数据分析能力仍完整保留在服务端与测试中，供原数据分析界面和接口使用；指挥台模式下不展示相关导航、快捷命令与执行器选项。需要恢复时，关闭 `LAGENT_WORK_ENABLED` 即回到原数据分析界面，或重新把对应入口加回 `src/components/SuperAgentShell.tsx`。
+「设置 → 协作与自动化」集中管理以下能力，后端接口在 `/api/work/*`：
+
+- **Library 同步**：把项目简报、约束、决定与项目记忆写入 `CLAUDE.md`、`AGENTS.md`、`.cursor/rules/lagent.mdc`，可选合并 `.mcp.json` 的 Lagent 服务。只替换 `<!-- lagent:begin -->` / `<!-- lagent:end -->` 托管块，保留用户内容；每次写入前备份到 `.lagent/library/backups/`，可一键回滚。路径被限制在项目目录内，拒绝 `.git`、`.ssh`、密钥与 `.env`。
+- **例行任务**：固定间隔、每天定时、手动、签名 Webhook、Git 提交或项目内文件变化触发，默认只生成「待确认」建议工单；只有策略未要求审批时，`auto` 模式才会自动批准。Git 触发只比较 HEAD，文件触发只比较修改时间与大小，不读取内容；不能监视 `.git`、`.ssh`、密钥或 `.env`，并支持防抖。Webhook 令牌只在创建/轮换时显示一次，数据库只存哈希。定时调度可用 `LAGENT_WORK_ROUTINES=0` 关闭。
+- **Key 池**：同一提供商、接口地址下的多把 Key 按优先级、加权轮询、最少失败或最低成本选择；429/5xx 自动换 Key，401/403 隔离当前 Key，支持每日配额、冷却与缓存亲和。成员只保存凭据 ID，不复制明文。
+- **MCP 客户端**：内置模型 Agent 可连接你显式添加的 stdio MCP 服务器，工具以 `mcp__服务器__工具` 暴露；命令限制为 node/npx/python/uvx 等，环境变量只透传安全白名单。项目 `.mcp.json` 默认不读取，需 `LAGENT_MCP_PROJECT_CONFIG=1`；`LAGENT_MCP_CLIENT=0` 可整体关闭。
+- **IM 通知与远程审批**：支持 Slack、Teams、飞书、企业微信、钉钉和通用 Webhook。审批链接格式 `v1.<ticketId>.<action>.<expiresAt>.<nonce>.<hmac>`，24 小时有效、只能使用一次，打开后还需在确认页再点一次；没有未签名审批入口。Webhook 地址与签名密钥不回显。审批链接需要设置 `LAGENT_PUBLIC_URL` 或用渠道的「外部访问地址」。
+- **团队房间**：聚合计划步骤、工单状态、报告、消息、认领与决定日志；执行仍复用计划与工单，不另起调度。
+- **实时观察与接管**：对白名单窗口每秒截取一帧（仅保留内存，不落盘）。标题出现支付、银行、密码、验证码、身份证、钱包、OTP 等敏感词时立即暂停并清空画面；点「我接管」立即停止截图。`LAGENT_LIVE_VIEW=0` 可关闭，`LAGENT_LIVE_INTERVAL_MS` 调整间隔（800–5000 毫秒）。
+
+## 数据分析接口（无网页界面）
+
+数据分析工作流、报告导出与额度接口仍完整保留在服务端与测试中，供 API 调用；网页界面已移除，仓库不再包含对应的前端组件。指挥台里的「数据分析」执行器仍可对已上传数据集派活。
 
 首次运行生成一份清楚标注的演示数据和计算报告，方便无 Key 体验。演示数据不代表真实业务。
 
@@ -190,6 +204,14 @@ npm.cmd run cloud
 
 账号服务按单实例 SQLite 部署，内置认证、会话、同源检查与用户隔离；生产需配置 HTTPS 的 `PUBLIC_URL` 和可信模型主机白名单，并按部署说明备份数据。不要将原单用户入口暴露公网，也不要把本版作为多副本集群运行。正式收费仍需另外接入支付和运营流程。
 
+## 云端手机号验证与加密备份
+
+设置 `LAGENT_REQUIRE_PHONE=1` 后，云端注册必须使用手机号+短信验证码；存量账号登录后会被引导绑定手机号；密码登录在新设备上需要短信验证码，可信设备 30 天内免验证。验证码 6 位、5 分钟有效、一次性使用，按手机号/网络/设备限流；接口只返回掩码手机号，验证码与完整号码不写日志。短信供应商通过 `LAGENT_SMS_PROVIDER` 选择 `http` 或 `aliyun`，未配置时发送接口明确返回 503；`mock` 仅用于开发测试，生产默认禁用。本地单用户入口与桌面版不加载手机号验证。多实例部署必须配置同一 `LAGENT_PHONE_SECRET`。
+
+「设置 → 加密备份与诊断」可一键导出 AES-256-GCM 加密的 SQLite 快照（可选排除凭据密文），使用同一口令恢复；诊断包只含版本、运行环境、数据统计、策略与环境变量名，不含密钥值。定时备份由 `LAGENT_BACKUP_INTERVAL_HOURS`、`LAGENT_BACKUP_DIR`、`LAGENT_BACKUP_PASSPHRASE` 控制，口令不写入数据库。备份口令遗失后无法恢复，请与主密钥分开保管。
+
+同页的「作用域 MCP 令牌」支持绑定项目、只读/可写、工具白名单、调用与 Token 预算、并发上限、有效期与撤销；越权调用返回 403 并写入脱敏审计。成本中心可按项目/会话/执行器/天汇总 Token、缓存命中与费用，导出 CSV，并可扫描 `~/.claude/projects` 与 `~/.codex/sessions` 的历史会话用量（只读用量字段，不读取正文）。
+
 ## 验证
 
 ```powershell
@@ -201,7 +223,7 @@ npm.cmd run build
 
 浏览器验收脚本位于 `scripts/browser-check.mjs`，需本机 Edge 和 Playwright。可将 Playwright 模块绝对路径作为第一个参数传入，不影响日常启动。
 
-1.1.0 已通过 65 项自动化测试、生产构建、浏览器双账号验收，以及真正打包后的 `win-unpacked/Lagent.exe` 注册、双账号隔离、上传 CSV、协作/自动分析、报告和切换服务验收。规格与质量审查通过。Docker 引擎和公网服务器在当前环境不可用，容器部署与公网访问未实测。可选复验命令：
+1.2.0 已通过 763 项自动化测试、生产构建和安装包安装验证，并在公网服务器完成 Docker Compose 部署与 `/api/runtime` 版本校验。显卡与付费模型供应商未联测，安装包未配置代码签名。可选复验命令：
 
 ```powershell
 node scripts/desktop-smoke.mjs release/win-unpacked/Lagent.exe

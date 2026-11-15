@@ -5,10 +5,19 @@ export interface ModelCredential {
 }
 export interface CredentialInput { name: string; provider: string; baseUrl: string; protocol: ModelProtocol; apiKey?: string }
 export interface HubModelProfile {
-  id: string; name: string; credentialId: string; model: string; unavailable?: boolean;
-  capabilities: { efforts: string[]; tools: boolean };
+  id: string; name: string; credentialId?: string; poolId?: string; model: string; unavailable?: boolean;
+  capabilities: { efforts: string[]; tools: boolean; reason?: string };
 }
-export type ModelProfileInput = Pick<HubModelProfile, 'name' | 'credentialId' | 'model'>;
+export type ModelProfileInput = Pick<HubModelProfile, 'name' | 'model'> & { credentialId?: string; poolId?: string };
+export interface ProviderPoolMember {
+  credentialId: string; weight: number; dailyCalls: number; priority: number; costPer1k: number;
+  keyHint?: string; coolingUntil?: string; failures?: number; lastError?: string; usedToday?: number;
+}
+export interface ProviderPool {
+  id: string; name: string; provider: string; baseUrl: string; protocol: string;
+  strategy: 'priority' | 'round-robin' | 'least-failed' | 'cheapest'; maxAttempts: number; cooldownMs: number;
+  version: number; members: ProviderPoolMember[]; createdAt: string; updatedAt: string;
+}
 export interface WorkflowStageConfig { profileId: string | null; skillId: string; effort: string; maxTokens: number; timeoutMs: number; team?:{enabled:boolean}; subagents?: {id:string;profileId:string;name:string;role:string;skillId?:string;effort?:string;maxTokens?:number;timeoutMs?:number}[]; review?: { reviewerProfileIds: string[] } }
 export interface WorkflowConfig { version: 1; defaultProfileId: string | null; stages: Record<string, WorkflowStageConfig> }
 export interface WorkflowSkill {
@@ -17,7 +26,7 @@ export interface WorkflowSkill {
 }
 export type WorkflowSkillInput = Pick<WorkflowSkill, 'name' | 'description' | 'category' | 'enabled' | 'stageId' | 'content'>;
 export interface ModelHubState {
-  credentials: ModelCredential[]; profiles: HubModelProfile[]; workflow: WorkflowConfig; skills: WorkflowSkill[];
+  credentials: ModelCredential[]; profiles: HubModelProfile[]; pools: ProviderPool[]; workflow: WorkflowConfig; skills: WorkflowSkill[];
   vault: { enabled: boolean; available: boolean; reason: string | null; keyVersion: number };
 }
 export interface HubModelCatalog { models: { id: string; name?: string }[]; baseUrl: string; partial: boolean }

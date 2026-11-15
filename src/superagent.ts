@@ -85,6 +85,22 @@ export interface WorkPolicy {
   budgets?: { maxConcurrent: number; maxCallsPerTicket: number; maxRuntimeMs: number; maxTokensPerTicket: number };
   limits?: { browserHosts: string[]; githubRepos: string[]; acpWrites?: boolean; modelWrites?: boolean; extraRoots?: string[]; confirmDanger?: boolean };
 }
+export interface WorkProfileSettings { profileId?: string; model?: string; effort?: string; permission?: 'read' | 'workspace' | 'full' }
+export interface WorkProfileLibrary { skills: string[]; mcpServers: string[]; instructions: string[] }
+export interface WorkProfile {
+  id: string; name: string; description: string; settings: WorkProfileSettings;
+  policy: WorkPolicy | null; library: WorkProfileLibrary; createdAt: string; updatedAt: string;
+}
+export interface WorkProfileScope {
+  profileId: string; profile: WorkProfile | null; settings: WorkProfileSettings;
+  library: WorkProfileLibrary; appliedAt: string | null;
+}
+export interface WorkProfilesActive { global: WorkProfileScope | null; project: WorkProfileScope | null; effective: WorkProfileScope | null }
+export interface WorkMcpToken {
+  id: string; name: string; projectId: string | null; readOnly: boolean; tools: string[];
+  budgetTokens: number; maxCalls: number; maxConcurrency: number; calls: number; usedTokens: number;
+  expiresAt: string; createdAt: string; lastUsedAt: string | null; revokedAt: string | null;
+}
 export interface WorkInboxItem { ticketId: string; title: string; question: string; options: WorkAttentionOption[]; createdAt: string; kind?: string; accessMode?: string; accessPath?: string }
 export interface WorkPlanStep { index: number; ticketId: string; executorId: string; title: string; status?: string; dependsOn?: number[]; scope?: string[]; projectChatId?: string | null; preview?: WorkPreview | null; verify?: WorkVerifySpec | null; acceptance?: WorkAcceptance | null; contract?: WorkTaskContract | null }
 export interface WorkPlan {
@@ -212,12 +228,16 @@ export interface WorkRun {
 }
 export interface WorkBootstrap {
   capabilities: { work: boolean };
+  /** 执行器并发占用：工单显示「排队中」时用来解释是在等空位。 */
+  queue?: { maxConcurrent: number; running: number; queued: number; full: boolean };
   tickets: WorkTicket[];
   attention: WorkInboxItem[];
   datasets: WorkDataset[];
   agents: WorkAgent[];
   tools: WorkTool[];
   policy: WorkPolicy;
+  profiles?: WorkProfile[];
+  activeProfile?: WorkProfilesActive;
   plans?: WorkPlanSummary[];
   projects?: WorkProject[];
   /** 未绑定工作文件夹时，Agent 读写文件所在的目录。 */
@@ -255,6 +275,8 @@ export interface WorkUsageRow {
   calls: number;
   tokensIn: number;
   tokensOut: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   totalTokens: number;
   durationMs: number;
   costEstimate: number;
@@ -264,10 +286,13 @@ export interface WorkUsageReport {
   totals: WorkUsageRow;
   budget?: { maxTokensPerTicket: number; warningRatio: number; warnings: Array<{ ticketId: string; used: number; ratio: number }> } | null;
   byExecutor: Array<WorkUsageRow & { executorId: string }>;
+  byProject?: Array<WorkUsageRow & { projectId: string }>;
   byDay: Array<WorkUsageRow & { date: string }>;
   byTicket: Array<WorkUsageRow & { ticketId: string; executorId: string; ratio?: number; warning?: boolean }>;
+  history?: { count: number; scanned: { files: number; claudeFiles: number; codexFiles: number }; note: string };
+  alerts?: { cacheHitRate: number; topProject: (WorkUsageRow & { projectId: string }) | null; topTicket: (WorkUsageRow & { ticketId: string }) | null; today: (WorkUsageRow & { date: string }) | null };
 }
-export interface WorkTicketDetail { ticket: WorkTicket; assignments: WorkAssignment[]; reports: WorkReport[]; team: WorkTeam | null; project?: { id: string; name: string; path: string; gitBranch: string } | null; projectChat?: { id: string; title: string; executorId: string } | null; activity?: { kind: string; text: string; detail?: string; at?: string }[] }
+export interface WorkTicketDetail { ticket: WorkTicket; assignments: WorkAssignment[]; reports: WorkReport[]; team: WorkTeam | null; project?: { id: string; name: string; path: string; gitBranch: string } | null; projectChat?: { id: string; title: string; executorId: string } | null; activity?: { kind: string; text: string; detail?: string; at?: string; requestId?: string; decided?: 'allow' | 'deny' }[] }
 export interface WorkTraceSpan {
   kind: 'assignment' | 'report' | 'usage' | 'event' | string;
   id: string;
@@ -289,3 +314,39 @@ export interface WorkTrace {
   spans: WorkTraceSpan[];
   summary: { startedAt: string | null; endedAt: string | null; durationMs: number | null; assignments: number; reports: number; events: number; calls: number; tokens: number; cost: number };
 }
+
+// P1 能力：Library 同步、例行任务、团队房间、Key 池、MCP 客户端、IM 通知、实时观察。
+export interface WorkLibraryTarget { id: string; path: string; label: string; mode: 'managed' | 'json'; optIn?: boolean }
+export interface WorkLibraryPreviewRow { id: string; label: string; path: string; exists: boolean; changed: boolean; before: string; after: string; error?: string; redacted?: boolean }
+export interface WorkLibraryPreview { projectId: string; stamp: string; targets: WorkLibraryPreviewRow[] }
+export interface WorkLibrarySyncFile { target: string; path: string; changed: boolean; existed: boolean; backup?: string }
+export interface WorkLibrarySync { id: string; projectId: string; createdAt: string; changed: number; changedFiles: string[]; files: WorkLibrarySyncFile[]; rolledBackAt?: string; rolledBackFiles?: string[] }
+export type WorkRoutineKind = 'task' | 'daily-brief' | 'stall-followup';
+export type WorkRoutineSchedule = { kind: 'interval'; intervalMs: number } | { kind: 'daily'; at: string } | { kind: 'manual' } | { kind: 'webhook' } | { kind: 'git' } | { kind: 'file'; path: string; debounceMs?: number };
+export interface WorkRoutine {
+  id: string; name: string; enabled: boolean; kind: WorkRoutineKind; projectId: string; projectChatId: string;
+  executorId: string; schedule: WorkRoutineSchedule; promptTemplate: string; question: string;
+  mode: 'suggest' | 'auto'; stallMs: number; nextAt: string | null; lastRunAt: string | null;
+  lastTicketId: string | null; lastError: string; webhookConfigured: boolean; createdAt: string; updatedAt: string;
+}
+export interface WorkRoomStep { index: number; ticketId: string; executorId: string; title: string; status: string; dependsOn: number[]; attention: string; claimedBy: string }
+export interface WorkRoomMessage { id: string; kind: 'chat' | 'note' | 'system' | 'status' | 'report' | 'attention' | string; agent: string; at: string; text: string }
+export interface WorkRoomDecision { id: string; by: string; ticketId: string; decision: string; at: string }
+export interface WorkRoomArtifact { ticketId: string; executorId: string; title: string; summary: string; at: string; files: string[] }
+export interface WorkTeamRoom {
+  id: string; projectId: string | null; projectName: string; planId: string | null; title: string; goal: string;
+  lead: string; members: string[]; status: string; steps: WorkRoomStep[]; counts: Record<string, number>;
+  messages: WorkRoomMessage[]; decisions: WorkRoomDecision[]; artifacts: WorkRoomArtifact[];
+  claims: Record<string, string>; createdAt: string; updatedAt: string;
+}
+export interface ProviderPoolMember { credentialId: string; weight: number; dailyCalls: number; priority: number; costPer1k: number; keyHint?: string; coolingUntil?: string; failures?: number; lastError?: string; usedToday?: number }
+export interface ProviderPool {
+  id: string; name: string; provider: string; baseUrl: string; protocol: string;
+  strategy: 'priority' | 'round-robin' | 'least-failed' | 'cheapest'; maxAttempts: number; cooldownMs: number;
+  version: number; members: ProviderPoolMember[]; createdAt: string; updatedAt: string;
+}
+export interface WorkMcpServer { id: string; name: string; command: string; args: string[]; enabled: boolean; tools: string[]; envKeys: string[]; cwd: string }
+export interface WorkImChannel { id: string; name: string; kind: 'slack' | 'teams' | 'feishu' | 'wecom' | 'dingtalk' | 'generic'; enabled: boolean; events: string[]; webhookHost: string; createdAt: string }
+export interface WorkImConfig { kinds: WorkImChannel['kind'][]; baseUrl: string; channels: WorkImChannel[] }
+export interface WorkLiveSession { id: string; handle: number; process: string; title: string; ticketId: string; status: 'live' | 'paused' | 'takeover' | 'error'; pausedReason: string; lastError: string; intervalMs: number; frames: number; seq: number; startedAt: string; lastFrameAt: string | null; width: number; height: number }
+export interface WorkLiveFrame { id: string; seq: number; image: string; width: number; height: number; at: string; status: string }

@@ -1,11 +1,11 @@
 {
   "name": "lagent",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "main": "desktop/main.cjs",
   "author": "Lagent",
-  "description": "游戏团队的 AI 数据分析工作台",
+  "description": "面向个人与小团队的多 Agent 指挥台",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:ui": "vite --host 127.0.0.1",

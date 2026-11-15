@@ -26,7 +26,7 @@ type MobileBootstrap = {
 
 const DEVICE_KEY = 'lagent:mobile:device:v1';
 const BOOT_APPEARANCE_KEY = 'lagent:appearance:boot:v1';
-const statusNames: Record<string, string> = { ...STATUS_LABELS, accepted: '已接受' };
+const statusNames: Record<string, string> = { ...STATUS_LABELS, accepted: '已接受', budget_warning: '预算告警' };
 const time = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
 
 class MobileApiError extends Error { status: number; constructor(message: string, status: number) { super(message); this.status = status; } }
@@ -120,7 +120,7 @@ function useServerEvents(token: string, onEvent: () => void, onUnauthorized: () 
 export function MobileApp() {
   useEffect(() => {
     document.title = 'Lagent 指挥台';
-    return () => { document.title = 'Lagent · 数据分析工作台'; };
+    return () => { document.title = 'Lagent · 指挥台'; };
   }, []);
   const [capability, setCapability] = useState<'checking' | 'ready' | 'off'>('checking');
   useEffect(() => {
@@ -135,7 +135,7 @@ export function MobileApp() {
   if (capability === 'checking') return <main className="mob-pair"><p className="mob-loading"><RefreshCw size={16} className="mob-spin" />正在确认指挥服务…</p></main>;
   if (capability === 'off') return <main className="mob-pair">
     <header className="mob-brand"><span className="brand-dot" /><strong>Lagent</strong><small>PERSONAL AGENT</small></header>
-    <section className="mob-pair-card"><p className="mob-eyebrow">REMOTE CONTROL</p><h1>手机指挥尚未启用</h1><p>请在电脑端启用 Work 指挥服务后再打开本页。云端账号版默认提供此能力。</p><p className="mob-note"><ShieldCheck size={13} />本地开发可设置 <code>LAGENT_WORK_ENABLED=1</code>。</p></section>
+    <section className="mob-pair-card"><p className="mob-eyebrow">REMOTE CONTROL</p><h1>手机指挥尚未启用</h1><p>请在电脑端启用 Work 指挥服务后再打开本页。云端账号版默认提供此能力。</p><p className="mob-note"><ShieldCheck size={13} />本地服务默认启用；若被显式关闭，可设置 <code>LAGENT_WORK_ENABLED=1</code>。</p></section>
   </main>;
   if (!device) return <PairScreen onPaired={device => { saveDevice(device); setDevice(device); }} />;
   return <MobileHome device={device} onSignOut={() => { clearDevice(); setDevice(null); }} />;

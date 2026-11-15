@@ -3,6 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
 import { findClaudeCodeCli, findCodexBinary } from './executors/discover.js';
+import { resolveWorkbuddyExe } from './workbuddy-app.js';
 
 const VERSION_TIMEOUT_MS = 5000;
 const MAX_OUTPUT = 16 * 1024;
@@ -36,8 +37,8 @@ const PROVIDERS = Object.freeze([
   { id: 'comate', name: '文心快码 Comate（百度）', executorId: null, commands: ['comate', 'comate-cli'], versionArgs: ['--version'], authArgs: [], authKind: 'generic', desktopMatches: /comate|文心/i },
   { id: 'lingma', name: '通义灵码（阿里）', executorId: null, commands: ['lingma', 'lingma-cli'], versionArgs: ['--version'], authArgs: [], authKind: 'generic', desktopMatches: /lingma|通义/i },
   { id: 'codegeex', name: 'CodeGeeX（智谱）', executorId: null, commands: ['codegeex'], versionArgs: ['--version'], authArgs: [], authKind: 'generic', desktopMatches: /codegeex/i },
-  // WorkBuddy 目前以桌面客户端为主：有 CLI 就认命令，没有就按运行中的窗口识别。
-  { id: 'workbuddy', name: 'WorkBuddy', executorId: null, commands: ['workbuddy', 'work-buddy'], versionArgs: ['--version'], authArgs: [], authKind: 'generic', desktopMatches: /work\s*buddy/i }
+  // WorkBuddy 没有对外 CLI：识别安装位置，由 workbuddy 执行器通过调试端口派发任务。
+  { id: 'workbuddy', name: 'WorkBuddy', executorId: 'workbuddy', commands: [], versionArgs: [], authArgs: [], authKind: 'generic', desktopOnly: true, desktopMatches: /work\s*buddy/i }
 ]);
 
 const pathValue = env => env.PATH ?? env.Path ?? env.path ?? '';
@@ -251,7 +252,30 @@ export function createProviderRegistry({ env = process.env, spawnImpl = spawn, n
   let cache = null;
   let cacheAt = 0;
   let inflight = null;
+  function workbuddySnapshot(def, exe) {
+    return {
+      id: def.id,
+      name: def.name,
+      executorId: def.executorId,
+      kind: 'desktop',
+      command: exe,
+      installed: true,
+      version: null,
+      status: 'ready',
+      message: '已安装 WorkBuddy 桌面版；启用后可在新对话里直接派发任务，Lagent 会在需要时以调试端口启动它',
+      auth: { loggedIn: null, method: null, message: '由桌面应用管理' },
+      capabilities: ['desktop', 'chat', 'text-output']
+    };
+  }
   async function probe(def, desktops) {
+    // WorkBuddy 没有可执行 --version 的 CLI，直接按安装位置识别，避免探测时把桌面端拉起来。
+    if (def.id === 'workbuddy') {
+      const exe = resolveWorkbuddyExe(env);
+      if (exe) return workbuddySnapshot(def, exe);
+      const desktop = desktopFor(def, desktops);
+      if (desktop) return desktopSnapshot(def, desktop);
+      return normalizeSnapshot(def, null, null, null, null);
+    }
     const resolved = commandForProvider(def, env);
     if (!resolved) {
       const desktop = desktopFor(def, desktops);

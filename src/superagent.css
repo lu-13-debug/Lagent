@@ -6700,6 +6700,16 @@ html[data-theme="dark"] .sa-brand-mono {
   font-weight: 500;
 }
 
+.sa-queue-chip {
+  padding: 1px 7px;
+  border-radius: var(--sa-r-full);
+  background: var(--sa-neutral-soft);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-2xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .sa-verify-passed {
   background: var(--sa-success-soft);
   color: var(--sa-success);
@@ -7253,4 +7263,339 @@ html[data-theme="dark"] .sa-brand-mono {
 .sa-chip.is-local > svg {
   color: var(--sa-accent-ink, var(--sa-text));
   opacity: .8;
+}
+
+/* P1 协作与自动化面板 */
+.sa-ops-card { grid-column: 1 / -1; }
+.sa-ops-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0; }
+.sa-ops-tabs button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--sa-line); background: var(--sa-surface-2); color: var(--sa-text-2); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 12px; cursor: pointer; }
+.sa-ops-tabs button.is-on { border-color: var(--sa-accent-line, var(--sa-line-strong)); background: var(--sa-accent-soft, var(--sa-surface)); color: var(--sa-accent-ink, var(--sa-text)); }
+.sa-ops-project { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--sa-text-2); margin-bottom: 10px; }
+.sa-ops-project select { max-width: 260px; }
+.sa-ops-section { display: flex; flex-direction: column; gap: 12px; }
+.sa-ops-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 0; }
+.sa-ops-facts div { border: 1px solid var(--sa-line); border-radius: 10px; padding: 10px 12px; background: var(--sa-surface-2); }
+.sa-ops-facts dt { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--sa-text-3); margin-bottom: 4px; }
+.sa-ops-facts dd { margin: 0; font-size: 12px; color: var(--sa-text-2); line-height: 1.55; }
+.sa-ops-field, .sa-ops-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--sa-text-2); }
+.sa-ops-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.sa-ops-form .sa-ops-wide { grid-column: 1 / -1; }
+.sa-ops-field input, .sa-ops-form input, .sa-ops-form select, .sa-ops-form textarea, .sa-ops-actions input { border: 1px solid var(--sa-line); background: var(--sa-surface); color: var(--sa-text); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 12px; }
+.sa-ops-form textarea { resize: vertical; }
+.sa-ops-form select[multiple] { min-height: 68px; }
+.sa-ops-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sa-ops-actions > input { flex: 1 1 220px; }
+.sa-ops-preview { display: flex; flex-direction: column; gap: 6px; }
+.sa-ops-preview details { border: 1px solid var(--sa-line); border-radius: 10px; padding: 8px 10px; background: var(--sa-surface-2); }
+.sa-ops-preview summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; }
+.sa-ops-preview summary code { color: var(--sa-text-3); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.sa-ops-preview summary em { font-style: normal; font-size: 11px; color: var(--sa-text-3); }
+.sa-ops-preview summary em.is-changed { color: var(--sa-accent-ink, var(--sa-text)); }
+.sa-ops-preview summary em.is-error { color: var(--sa-danger, #c0392b); }
+.sa-ops-diff { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; margin-top: 8px; }
+.sa-ops-diff pre, .sa-room-messages, .sa-live-frame { max-height: 240px; overflow: auto; }
+.sa-ops-diff pre { margin: 4px 0 0; padding: 8px; border-radius: 8px; background: var(--sa-surface); border: 1px solid var(--sa-line); font-size: 11px; white-space: pre-wrap; }
+.sa-ops-list { display: flex; flex-direction: column; gap: 6px; }
+.sa-ops-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--sa-line); border-radius: 10px; background: var(--sa-surface-2); padding: 9px 12px; text-align: left; }
+.sa-ops-row-button { font: inherit; color: inherit; cursor: pointer; width: 100%; }
+.sa-ops-row-button.is-on { border-color: var(--sa-accent-line, var(--sa-line-strong)); background: var(--sa-accent-soft, var(--sa-surface)); }
+.sa-ops-row > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sa-ops-row strong { font-size: 12px; }
+.sa-ops-row span { font-size: 11px; color: var(--sa-text-3); overflow-wrap: anywhere; }
+.sa-ops-row-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-direction: row !important; }
+.sa-room { display: flex; flex-direction: column; gap: 10px; border-top: 1px dashed var(--sa-line); padding-top: 12px; }
+.sa-room-steps { display: flex; flex-direction: column; gap: 6px; }
+.sa-room-step { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.sa-room-step > span { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 999px; background: var(--sa-surface-2); border: 1px solid var(--sa-line); font-size: 11px; }
+.sa-room-step > div { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.sa-room-step em { font-style: normal; font-size: 11px; color: var(--sa-text-3); }
+.sa-room-messages { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--sa-line); border-radius: 10px; padding: 8px 10px; background: var(--sa-surface-2); }
+.sa-room-messages p { margin: 0; display: flex; gap: 8px; font-size: 12px; line-height: 1.5; }
+.sa-room-messages time { color: var(--sa-text-3); font-size: 11px; white-space: nowrap; }
+.sa-room-messages strong { white-space: nowrap; }
+.sa-room-messages span { overflow-wrap: anywhere; }
+.sa-live { display: flex; flex-direction: column; gap: 10px; border-top: 1px dashed var(--sa-line); padding-top: 12px; }
+.sa-live-frame { width: 100%; border-radius: 10px; border: 1px solid var(--sa-line); background: #000; }
+.sa-live-placeholder { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 140px; border: 1px dashed var(--sa-line); border-radius: 10px; color: var(--sa-text-3); font-size: 12px; }
+
+/* ==========================================================================
+   11. 多 Agent 思考面板（A 方案）
+   主控规划 → 分发 → 标签行切换 → 当前 Agent 的思考流。全部数据驱动：
+   多一个 Agent 只是标签行多一个 chip，布局不变。
+   ========================================================================== */
+.sa-tp {
+  margin-top: 14px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg);
+  background: var(--sa-surface);
+  box-shadow: var(--sa-shadow-sm);
+  overflow: hidden;
+}
+
+.sa-tp-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px 9px 14px;
+  border-bottom: 1px solid var(--sa-line);
+}
+
+.sa-tp.is-closed .sa-tp-head { border-bottom: 0; }
+.sa-tp-title { font-size: var(--sa-fs-sm); font-weight: 650; color: var(--sa-text); }
+.sa-tp-meta { font-size: var(--sa-fs-2xs); color: var(--sa-text-3); }
+.sa-tp-timer {
+  margin-left: auto;
+  font-family: var(--sa-font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sa-text-3);
+}
+
+.sa-tp-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--sa-r-xs);
+  background: transparent;
+  color: var(--sa-text-3);
+  cursor: pointer;
+  transition: transform var(--sa-base), background var(--sa-fast), color var(--sa-fast);
+}
+.sa-tp-icon:hover { background: var(--sa-surface-2); color: var(--sa-text); }
+.sa-tp.is-closed .sa-tp-head .sa-tp-icon { transform: rotate(-90deg); }
+
+/* 主控段：Lagent 自己的规划，收起后只剩一行 */
+.sa-tp-orch { border-bottom: 1px solid var(--sa-line); background: linear-gradient(180deg, var(--sa-surface-2), var(--sa-surface)); }
+.sa-tp-orch-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 14px; }
+.sa-tp-orch-head strong { font-size: var(--sa-fs-base); color: var(--sa-text); }
+.sa-tp-role {
+  padding: 1px 7px;
+  border: 1px solid var(--sa-accent-line);
+  border-radius: var(--sa-r-full);
+  background: var(--sa-accent-soft);
+  color: var(--sa-text-2);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.sa-tp-orch-body { display: flex; flex-direction: column; gap: 8px; padding: 0 14px 13px 44px; }
+.sa-tp-orch.is-collapsed .sa-tp-orch-body { display: none; }
+.sa-tp-orch.is-collapsed .sa-tp-orch-head .sa-tp-icon { transform: rotate(-90deg); }
+
+/* 分发卡：谁被派了活、各自现在什么状态 */
+.sa-tp-dispatch { border: 1px solid var(--sa-line); border-radius: var(--sa-r-md); background: var(--sa-surface); }
+.sa-tp-dispatch-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px dashed var(--sa-line);
+  color: var(--sa-text-2);
+  font-size: 11.5px;
+}
+.sa-tp-dispatch-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 14px; padding: 8px 10px; }
+.sa-tp-dispatch-row { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 2px 0; }
+.sa-tp-dispatch-name { font-size: 12px; color: var(--sa-text); white-space: nowrap; }
+.sa-tp-dispatch-detail { margin-left: auto; color: var(--sa-text-3); font-family: var(--sa-font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 标签行：换行而不是横向滚动 —— 横滚会把后面的 Agent 藏起来 */
+.sa-tp-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 9px 12px;
+  background: var(--sa-surface-2);
+  border-bottom: 1px solid var(--sa-line);
+}
+.sa-tp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px 0 5px;
+  border: 1px solid transparent;
+  border-radius: var(--sa-r-full);
+  background: transparent;
+  color: var(--sa-text-2);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--sa-fast), border-color var(--sa-fast), color var(--sa-fast);
+}
+.sa-tp-chip:hover { background: color-mix(in srgb, var(--sa-surface) 60%, transparent); color: var(--sa-text); }
+.sa-tp-chip.is-on { background: var(--sa-surface); border-color: var(--sa-line-strong); color: var(--sa-text); box-shadow: var(--sa-shadow-sm); }
+.sa-tp-chip-name { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sa-tp-chip-time { font-family: var(--sa-font-mono); font-size: 10.5px; color: var(--sa-text-3); }
+
+/* 正文：当前 Agent 的思考流 */
+.sa-tp-body { max-height: min(62vh, 660px); padding: 12px 14px 14px; overflow-y: auto; overscroll-behavior: contain; }
+.sa-tp-steps { display: flex; flex-direction: column; gap: 8px; }
+.sa-tp-thought { margin: 0; color: var(--sa-text); font-size: var(--sa-fs-base); line-height: 1.72; }
+.sa-tp-note { margin: 0; color: var(--sa-text-3); font-size: 11.5px; line-height: 1.6; }
+.sa-tp-pending { margin: 0; display: flex; align-items: center; gap: 8px; color: var(--sa-text-3); font-size: 12px; }
+.sa-tp-pending::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--sa-line-strong); animation: sa-tp-pulse 1.4s var(--sa-ease) infinite; }
+.sa-tp-error { margin: 0; display: flex; align-items: center; gap: 6px; color: var(--sa-danger); font-size: 12px; }
+.sa-tp-tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 3px 9px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-full);
+  background: var(--sa-surface-2);
+  color: var(--sa-text-2);
+  font-size: 11.5px;
+}
+.sa-tp-tool code { font-family: var(--sa-font-mono); font-size: 11px; color: var(--sa-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sa-tp-tool-detail { color: var(--sa-text-3); font-size: 11px; white-space: nowrap; }
+
+.sa-tp-permission {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 6px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface-2);
+}
+
+.sa-tp-permission > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--sa-text-2);
+}
+
+.sa-tp-permission-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.sa-tp-permission-main p {
+  margin: 0;
+  color: var(--sa-text);
+  font-size: var(--sa-fs-xs);
+}
+
+.sa-tp-permission-main span {
+  display: block;
+  margin-top: 2px;
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+}
+
+.sa-tp-permission-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+.sa-tp-permission-allow,
+.sa-tp-permission-deny {
+  padding: 3px 8px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-xs);
+  background: var(--sa-surface);
+  color: var(--sa-text-2);
+  font-size: var(--sa-fs-2xs);
+  cursor: pointer;
+}
+
+.sa-tp-permission-allow {
+  border-color: transparent;
+  background: var(--sa-success-soft);
+  color: var(--sa-success);
+}
+
+.sa-tp-permission-allow:disabled,
+.sa-tp-permission-deny:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.sa-tp-permission-state {
+  flex: none;
+  font-size: var(--sa-fs-2xs);
+  color: var(--sa-text-3);
+}
+
+.sa-tp-permission-state.is-allow { color: var(--sa-success); }
+.sa-tp-permission-state.is-deny { color: var(--sa-text-2); }
+
+.sa-live-permission {
+  padding: 6px 8px;
+  border-radius: var(--sa-r-sm);
+  background: var(--sa-surface-2);
+}
+
+.sa-live-permission-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.sa-live-permission-state {
+  display: inline-block;
+  margin-top: 3px;
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+}
+
+/* 结论块：完成的那一路把它的答案接在过程后面 */
+.sa-tp-output { margin-top: 12px; padding: 10px 12px; border-left: 2px solid var(--sa-success); border-radius: 0 var(--sa-r-sm) var(--sa-r-sm) 0; background: var(--sa-surface-2); }
+.sa-tp-output-head { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; color: var(--sa-success); font-size: 11px; font-weight: 600; }
+.sa-tp-output p { margin: 0; color: var(--sa-text); font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; }
+
+/* 状态位：排队圆点 / 思考中转圈 / 完成对勾 */
+.sa-tp-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--sa-line-strong); flex: 0 0 auto; }
+.sa-tp-ring {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border: 1.6px solid var(--sa-line-strong);
+  border-top-color: var(--sa-accent);
+  border-radius: 50%;
+  animation: sa-tp-spin .9s linear infinite;
+}
+.sa-tp-tick { display: inline-flex; color: var(--sa-success); flex: 0 0 auto; }
+
+.sa-tp-glyph {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  background: var(--sa-surface-3);
+  overflow: hidden;
+}
+.sa-tp-glyph img { width: 58%; height: 58%; object-fit: contain; filter: brightness(0) invert(1); }
+.sa-tp-glyph-text { color: #fff; font-size: 9.5px; font-style: normal; font-weight: 700; letter-spacing: .02em; }
+
+/* 结论清单：一行一个 Agent，Agent 再多也只是多几行 */
+.sa-tp-res { margin-top: 12px; border: 1px solid var(--sa-line); border-radius: var(--sa-r-md); background: var(--sa-surface); overflow: hidden; }
+.sa-tp-res-head { display: flex; align-items: baseline; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--sa-line); background: var(--sa-surface-2); }
+.sa-tp-res-head strong { font-size: 12px; color: var(--sa-text); }
+.sa-tp-res-head span { font-size: 11px; color: var(--sa-text-3); }
+.sa-tp-res-row { display: grid; grid-template-columns: 18px 84px 1fr auto auto; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--sa-line); }
+.sa-tp-res-row:first-of-type { border-top: 0; }
+.sa-tp-res-name { font-size: 12px; font-weight: 600; color: var(--sa-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sa-tp-res-text { min-width: 0; font-size: 11.5px; color: var(--sa-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sa-tp-res-row:not(.is-done) .sa-tp-res-text { color: var(--sa-text-3); }
+.sa-tp-res-actions { display: flex; align-items: center; gap: 8px; }
+.sa-tp-res-row:hover .sa-tp-res-link, .sa-tp-res-row:focus-within .sa-tp-res-link { color: var(--sa-text-2); }
+.sa-tp-link { padding: 0; border: 0; background: none; color: var(--sa-text-3); font-family: inherit; font-size: 11px; cursor: pointer; }
+.sa-tp-link:hover { color: var(--sa-accent); text-decoration: underline; }
+
+@keyframes sa-tp-spin { to { transform: rotate(360deg); } }
+@keyframes sa-tp-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+
+@media (max-width: 720px) {
+  .sa-tp-dispatch-rows { grid-template-columns: 1fr; }
+  .sa-tp-res-row { grid-template-columns: 18px 1fr auto; row-gap: 4px; }
+  .sa-tp-res-text { grid-column: 2 / -1; }
+  .sa-tp-res-actions { opacity: 1; }
+  .sa-tp-orch-body { padding-left: 14px; }
 }

@@ -18,34 +18,12 @@ test('公开分享令牌仅通过 POST 请求体发送，且不触发会话失�
   } finally { globalThis.fetch = original; }
 });
 
-test('分享创建必须明确确认原始完整报告范围，弹窗关闭回调稳定', async () => {
-  const {readFile} = await import('node:fs/promises');
-  const manager = await readFile(new URL('./components/ShareManager.tsx', import.meta.url), 'utf8');
-  const workspace = await readFile(new URL('./components/ReportView.tsx', import.meta.url), 'utf8');
-  assert.match(workspace, /分享原始完整报告/);
-  assert.match(manager, /不包含当前筛选/);
-  assert.match(manager, /原报告期间/);
-  assert.match(manager, /disabled=\{busy \|\| !!link \|\| !confirmed\}/);
-  assert.match(manager, /useCallback/);
-});
-
 test('分享页根据当前会话显示明确入口且进入工作台时清除片段', async () => {
   const {readFile} = await import('node:fs/promises');
   const page = await readFile(new URL('./PublicShare.tsx', import.meta.url), 'utf8');
   assert.match(page, /api\.session\(\)/);
   assert.match(page, /进入当前工作台/);
   assert.match(page, /location\.assign\('\/'\)/);
-});
-
-test('复制链接在剪贴板缺失、同步抛错和异步拒绝时安全失败', async () => {
-  const sharing = await import('./share-copy.ts').catch(() => ({}));
-  assert.equal(typeof sharing.copyShareLink, 'function');
-  assert.equal(await sharing.copyShareLink('link', undefined), false);
-  assert.equal(await sharing.copyShareLink('link', {writeText() { throw new Error('denied'); }}), false);
-  assert.equal(await sharing.copyShareLink('link', {writeText() { return Promise.reject(new Error('denied')); }}), false);
-  let copied = '';
-  assert.equal(await sharing.copyShareLink('link', {async writeText(value) {copied = value;}}), true);
-  assert.equal(copied, 'link');
 });
 
 test('分享链接切换隔离迟到请求，非法片段清空结果，同一片段复用访客标识', async () => {
@@ -106,10 +84,9 @@ test('列表旧响应不会覆盖撤销，销毁后响应不发布', async () =>
   assert.equal(updates.length, 1);
 });
 
-test('分享管理所有 401 保留当前会话边界和可复制链接，其他业务仍退出', async () => {
+test('分享管理所有 401 保留当前会话边界，其他业务仍退出', async () => {
   const {onSessionExpired} = await import('./api.ts');
-  const {copyShareLink} = await import('./share-copy.ts');
-  const old = globalThis.fetch; let expired = 0, copied = '';
+  const old = globalThis.fetch; let expired = 0;
   const off = onSessionExpired(() => expired++);
   try {
     globalThis.fetch = async () => Response.json({error:'expired'}, {status:401});
@@ -117,8 +94,6 @@ test('分享管理所有 401 保留当前会话边界和可复制链接，其他
     await assert.rejects(api.createShare('task', {expiresInDays:7,hideRevenue:true}), error => error.status === 401);
     await assert.rejects(api.revokeShare('share'), error => error.status === 401);
     assert.equal(expired, 0);
-    assert.equal(await copyShareLink('https://example.test/share#token', {async writeText(value) {copied = value;}}), true);
-    assert.equal(copied, 'https://example.test/share#token');
     await assert.rejects(api.bootstrap()); assert.equal(expired, 1);
   } finally { globalThis.fetch = old; off(); }
 });

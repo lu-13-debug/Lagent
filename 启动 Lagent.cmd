@@ -22,8 +22,12 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-rem 默认打开 Agent 指挥台；需要接入本机 CLI Agent 时，再额外设置 LAGENT_ALLOW_EXTERNAL_EXECUTORS=1。
+rem 接入本机/外部 CLI Agent（Claude Code、Codex、DSH…）时要开 LAGENT_ALLOW_EXTERNAL_EXECUTORS，
+rem 否则点「交叉复核」会被策略挡回 403。
+rem LAGENT_WORK_OUTBOX 让 Agent 超出并发上限时排队，而不是把第三路直接顶回「排队中」。
 set LAGENT_WORK_ENABLED=1
+set LAGENT_ALLOW_EXTERNAL_EXECUTORS=1
+set LAGENT_WORK_OUTBOX=1
 echo.
 echo 启动后请打开 http://127.0.0.1:3001
 echo 按 Ctrl+C 停止服务。

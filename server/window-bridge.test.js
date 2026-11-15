@@ -94,3 +94,20 @@ test('窗口桥拒绝坏 JSON、超时与非零退出', async () => {
   const hang = createWindowBridge({ spawnImpl: fakeSpawn('', { hang: true }).spawnImpl, scriptPath: 'C:\\bridge.ps1', timeoutMs: 20 });
   await assert.rejects(() => hang.listWindows(), { status: 504 });
 });
+
+test('窗口桥截图校验图像与进程', async () => {
+  const fake = fakeSpawn({ ok: true, process: 'Codex', title: 'Codex 会话', width: 800, height: 600, image: 'data:image/jpeg;base64,AAAA' });
+  const bridge = createWindowBridge({ spawnImpl: fake.spawnImpl, scriptPath: 'C:\bridge.ps1' });
+  const frame = await bridge.captureWindow(42, { process: 'Codex' });
+  assert.equal(frame.width, 800);
+  assert.equal(frame.title, 'Codex 会话');
+  assert.equal(frame.image, 'data:image/jpeg;base64,AAAA');
+  const args = fake.calls[0].args;
+  assert.ok(args.includes('-Command') && args.includes('capture'));
+  assert.ok(args.includes('-MaxOutput') && args.includes(String(512 * 1024)));
+  await assert.rejects(() => bridge.captureWindow(42, { process: 'ChatGPT' }), { status: 409 });
+  const invalid = fakeSpawn({ ok: true, process: 'Codex', width: 800, height: 600, image: 'javascript:alert(1)' });
+  const invalidBridge = createWindowBridge({ spawnImpl: invalid.spawnImpl, scriptPath: 'C:\bridge.ps1' });
+  await assert.rejects(() => invalidBridge.captureWindow(42, { process: 'Codex' }), { status: 502 });
+  await assert.rejects(() => bridge.captureWindow(0), { status: 400 });
+});

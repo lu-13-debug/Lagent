@@ -120,7 +120,7 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 
 ## 项目工作区（/api/work/projects、/api/work/chats）
 
-需 `LAGENT_WORK_ENABLED=1`；CLI 项目对话还需要 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1` 并在执行器策略中勾选对应执行器。所有写操作仍经工单审批，不新增绕过审批的入口。
+指挥台默认启用；显式设置 `LAGENT_WORK_ENABLED=0` 会关闭 `/api/work/*`。CLI 项目对话还需要 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1` 并在执行器策略中勾选对应执行器。所有写操作仍经工单审批，不新增绕过审批的入口。
 
 ### 本机 Agent 适配器（opencode / gemini / qwen / cursor-agent / dsh）
 
@@ -149,8 +149,17 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 | `kimi` | Kimi CLI（月之暗面） | `--print <prompt>` | 追加 `--yes` |
 
 - 参数模板可用 `LAGENT_CLI_ARGS_<ID>` 覆盖，值是 JSON 字符串数组，`{prompt}` 占位符会被替换（例如 `LAGENT_CLI_ARGS_KIMI=["-p","{prompt}"]`）；用户级环境变量覆盖失败时请检查是否为合法 JSON 数组。
-- Trae Agent、文心快码 Comate、通义灵码、CodeGeeX、WorkBuddy 目前只做识别（`executorId: null`）：本机装了 CLI 会显示版本与路径，没装则按运行中的桌面窗口匹配，提示用「窗口 · <进程名>」发送指令。要变成可调度执行器，需要在 `server/work/executors/local-agent.js` 补一档参数模板，并加入 `EXTERNAL_EXECUTORS` 与 `PROJECT_CHAT_EXECUTORS`。
-- `GET /api/work/bootstrap` 额外返回 `workspace`：未绑定工作文件夹的对话，Agent 就在这个目录里读写（本地模式默认是仓库根目录）。项目对话始终以项目路径为 cwd。
+- Trae Agent、文心快码 Comate、通义灵码、CodeGeeX 目前只做识别（`executorId: null`）：本机装了 CLI 会显示版本与路径，没装则按运行中的桌面窗口匹配，提示用「窗口 · <进程名>」发送指令。要变成可调度执行器，需要在 `server/work/executors/local-agent.js` 补一档参数模板，并加入 `EXTERNAL_EXECUTORS` 与 `PROJECT_CHAT_EXECUTORS`。
+
+### WorkBuddy 桌面端（workbuddy）
+
+WorkBuddy 没有对外 CLI，`workbuddy` 执行器改用 Chromium 调试协议驱动桌面端。它属于外部执行器：需要 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1`，并在 `policy.allowedExecutors` 中启用 `workbuddy`。
+
+- 启动时带 `--remote-debugging-port=9222`（端口可用 `LAGENT_WORKBUDDY_PORT` 修改）。若 WorkBuddy 未运行，执行器会按 `LAGENT_WORKBUDDY_EXE`、常见安装目录或开始菜单快捷方式找到 `WorkBuddy.exe` 并自动拉起（`LAGENT_WORKBUDDY_AUTOLAUNCH=0` 可关闭）。
+- 每个任务点「新建任务」开新会话，把提示词填进输入框并点击「发送」；以消息帧的 `data-status="complete"` 判定完成，从 `data-markdown-content` 提取回复写入 `artifacts.cli.summary`，因此会话、项目对话、报告与用量统计都复用 CLI 通道。
+- 若 WorkBuddy 已在运行但没有调试端口，执行器会明确报错并提示先退出重启，不会结束用户正在使用的进程；遇到权限确认弹窗会停下并提示人工处理。
+- 单机串行执行：同一时间只驱动一个 WorkBuddy 会话，任务默认 10 分钟超时（`LAGENT_WORKBUDDY_TIMEOUT_MS`）。
+- `GET /api/work/bootstrap` 额外返回 `workspace`：未绑定工作文件夹的对话，Agent 就在这个目录里读写（本地模式默认是仓库根目录）。项目对话始终以项目路径为 cwd。另返回 `queue:{maxConcurrent,running,queued,full}`，供界面解释「排队中」是在等并发空位。
 
 ### 内置模型 Agent（model）
 
@@ -194,9 +203,11 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 - `POST /api/work/projects/:id/dispatch {text,executorIds:[...],window?:{handle,process?,title?}}` → `201 {project,tickets}`。项目内多 Agent 并行分派：text 1–3000 字，executorIds 去重后 1–4 个，接受 `claude-code`、`codex`、`claude-acp`、`dsh-acp`、`codex-acp` 与 `window`。已存在同执行器的项目对话则复用，否则自动创建；每个执行器各生成一张工单（默认直接执行）。`window` 与其它执行器可以一起分派，但必须同时传 `window.handle`（正整数的窗口句柄）；窗口对话按 `handle` 复用，指令以 `submit:true` 发送到该窗口，`window.process`/`window.title` 只作定位提示，不作为会话标题。ACP 执行器的 `session/new` 以项目目录为 cwd，且只在项目工单内接受 `fs/read_text_file` 与 `fs/write_text_file`（路径限制在项目目录内，越界报错；`terminal/*` 仍一律拒绝），`artifacts.acp.cwd` 记录本次运行的目录。ACP 的文件写入受执行器策略 `limits.acpWrites`（默认 `true`）约束：关闭后项目工单仍以项目目录为 cwd，但只开放 `fs/read_text_file`，写文件与权限请求一律拒绝。
 - 工单新增只读投影：`preview?:{kind,action,risk:'low'|'medium'|'high',tier:'investigate'|'draft'|'autopilot',reversible,cwd?,paths?,hosts?}`、`verify?:{command,cwd?,expect?,timeoutMs?}`、`acceptance?:{status:'passed'|'failed',command,exitCode,output,at}`。`preview.action` 已脱敏，不含完整提示词、窗口文本或 argv。`risk:'high'`（窗口键入等）即使默认 `requireApproval:false` 也会先进入 `awaiting_review`。
 - `GET /api/work/tickets/:id` 的 `detail` 在工单属于项目时额外返回 `project:{id,name,path,gitBranch}` 与 `projectChat:{id,title,executorId}`，非项目工单不出现这两个字段。
+- `POST /api/work/tickets/:id/permissions/:requestId {decision:'allow'|'deny'}` → `{ticket}`。把界面对 ACP 文件权限请求的决定转给执行器；只有 `allow_once`/`allow_always` 类文件请求会进入等待，命令类仍直接拒绝。默认 30 秒无人处理会自动拒绝（`LAGENT_ACP_PERMISSION_TIMEOUT_MS` 可调）。
 - `POST /api/work/tickets/:id/verify` → `{ticket,acceptance}`。对已结束的工单执行 `verify` 白名单命令（`npm test`/`npm run test|build|lint|typecheck`/`pytest`/`go test`/`cargo test`/`dotnet test`/`node --test`/`git diff --check`），cwd 必须在项目目录内；命令在 Lagent 侧执行并留证。通过时 `ticket.acceptance.status='passed'`，失败时 `status='failed'` 且工单转 `blocked`。
 - `POST /api/work/plans {goal,steps,projectChatId?}`、`POST /api/work/plans/suggest {goal,executors,projectChatId?}`：带 `projectChatId` 时只允许该对话绑定的执行器，规划器输入附带 `{name,path,gitBranch}`，其它执行器步骤返回 400；计划与步骤工单都记录 `projectChatId`。
 - `POST /api/work/plans {goal,steps:[{executorId,text,dependsOn?,verify?}],projectId?,autoRun?}`：带 `projectId` 时每一步可指定不同 Agent。项目里已有该 Agent 的对话则复用，没有则自动创建；窗口 Agent 必须先在项目中绑定窗口对话，否则该步 400；执行器须属于 `claude-code`、`codex` 及其 ACP 变体与 `window`。规划器输入附带 `{name,path,gitBranch,chats:[{executorId,title,window}]}`。计划记录 `projectId`，每步工单记录各自的 `projectChatId`，`GET /api/work/plans/:id` 可读取 `plan.projectId` 与 `steps[].projectChatId`。
+- `GET /api/work/plans/:id/sheet` → `{plan,rows,brief,markdown}`。一次编排的交接单：逐步列出执行者、结论、验收命令与退出码、改动文件、tokens/费用，并附项目简报里的未解问题、下一步与接手先跑命令；`markdown` 可直接下载。
 - `GET /api/work/projects/:id/brief` → `{brief:ProjectBrief}`；`PUT /api/work/projects/:id/brief {goal?,summary?,keyPoints?,decisions?,constraints?,openQuestions?,nextSteps?,verifyCommands?}` → `{brief}`。按 projectId 存储；数组项 trim 去空去重，正文与条目有长度上限。`brief.sources` 记录每个字段最近一次写入来源（`ui|mcp|system|auto`），MCP 写入标为 `mcp`，界面可据此显示「外部 Agent 写入」。
 
 ### 协作任务（软件拆分 → 分派 → 组装）

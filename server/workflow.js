@@ -46,7 +46,7 @@ export const DOMAINS = [
   { id: 'adtech', name: '广告与营销', description: '投放、曝光、点击、转化、ROI 与渠道归因分析', enabled: false },
   { id: 'mobility', name: '出行与物流', description: '下单、履约、取消、复购与运力/渠道分析', enabled: false },
 ].map(domain => ({ ...domain, enabled: DOMAIN_PROFILES[domain.id]?.enabled ?? false }));
-export const PROJECT = { id: 'project-game', name: '星河远征', domain: 'game', description: '数据分析工作台 · 本地单用户项目' };
+export const PROJECT = { id: 'project-game', name: '星河远征', domain: 'game', description: '多 Agent 指挥台 · 本地单用户项目' };
 export const makeEvent = (type, title, detail, stepId) => ({ id: randomUUID(), type, title, detail, ...(stepId ? { stepId } : {}), createdAt: new Date().toISOString() });
 export const makeMessage = (role, content) => ({ id: randomUUID(), role, content, createdAt: new Date().toISOString() });
 export function createTask(input, dataset, model = '') {

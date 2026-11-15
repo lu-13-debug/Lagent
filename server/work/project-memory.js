@@ -23,6 +23,81 @@ const text = (value, max) => (typeof value === 'string' ? value.trim().slice(0, 
 const textList = (value, max, chars) =>
   Array.isArray(value) ? value.filter(item => typeof item === 'string' && item.trim()).slice(0, max).map(item => text(item, chars)) : [];
 
+// 没有向量库时的轻量语义近似：英文按词、中文按二元组切。
+// 比 includes 整句好得多——用户搜「登录失败」也能命中「token 校验导致登录 401」。
+const CJK_STOP = new Set([
+  '我们', '你们', '他们', '这个', '那个', '一个', '一些', '以及', '或者', '但是', '然后',
+  '如果', '因为', '所以', '可以', '需要', '进行', '已经', '还是', '就是', '不是', '没有',
+]);
+export function tokenizeQuery(query) {
+  const value = String(query || '').toLowerCase();
+  const tokens = new Set();
+  for (const match of value.matchAll(/[a-z0-9][a-z0-9_./:-]{1,}/g)) tokens.add(match[0]);
+  for (const match of value.matchAll(/[一-鿿]+/g)) {
+    const run = match[0];
+    if (run.length === 1) { tokens.add(run); continue; }
+    for (let index = 0; index < run.length - 1; index += 1) {
+      const pair = run.slice(index, index + 2);
+      if (!CJK_STOP.has(pair)) tokens.add(pair);
+    }
+  }
+  return [...tokens].slice(0, 24);
+}
+
+const normalizeScope = value => String(value || '')
+  .replaceAll('\\', '/')
+  .replace(/^\.?\//, '')
+  .replace(/\/\*\*$/, '')
+  .replace(/\/+$/, '')
+  .toLowerCase();
+
+/** 记忆条目的目录范围与任务范围是否相交（`server` 与 `server/work` 视为相交）。 */
+export function scopeMatches(entryScope, scopes = []) {
+  const target = normalizeScope(entryScope);
+  if (!target) return false;
+  return (Array.isArray(scopes) ? scopes : [scopes]).some(raw => {
+    const scope = normalizeScope(raw);
+    if (!scope) return false;
+    return target === scope || target.startsWith(`${scope}/`) || scope.startsWith(`${target}/`);
+  });
+}
+
+const recencyBoost = entry => {
+  const stamp = Date.parse(entry.updatedAt || entry.createdAt || '') || 0;
+  return Math.max(0, 1 - (Date.now() - stamp) / (90 * 86400000));
+};
+
+const SCORE_FIELDS = entry => [
+  [entry.title, 3],
+  [entry.scope, 2.5],
+  [(entry.files || []).join(' '), 2],
+  [(entry.tags || []).join(' '), 2],
+  [entry.summary, 1.5],
+  [(entry.improvements || []).join(' '), 1],
+  [(entry.openQuestions || []).join(' '), 1],
+];
+
+/** 返回 null 表示一个词都没命中，这条不参与排序。 */
+export function scoreMemoryEntry(entry, terms, { scopes = [] } = {}) {
+  const fields = SCORE_FIELDS(entry).map(([value, weight]) => [String(value || '').toLowerCase(), weight]);
+  let matched = 0;
+  let score = 0;
+  for (const term of terms) {
+    let hit = 0;
+    for (const [value, weight] of fields) {
+      if (!value.includes(term)) continue;
+      hit += weight * Math.min(4, value.split(term).length - 1);
+    }
+    if (hit > 0) { matched += 1; score += hit; }
+  }
+  if (terms.length && !matched) return null;
+  // 命中词越多越靠前，避免只命中一个高频词的长摘要压过精准条目。
+  score += matched * 2;
+  if (scopeMatches(entry.scope, scopes)) score += 4;
+  score += recencyBoost(entry);
+  return score;
+}
+
 const dayLabel = iso => {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '';
@@ -136,26 +211,27 @@ export function createProjectMemory(db, { now = () => new Date().toISOString() }
     return next;
   }
 
-  /** 按关键词/范围检索，返回最相关的前 N 条；不传关键词时按最近排序。 */
-  function search(projectId, { query = '', scope = '', limit = 20 } = {}) {
+  /**
+   * 按关键词/目录范围检索，返回最相关的前 N 条。
+   * - query 走分词打分（英文词 + 中文二元组），不再要求整句命中；
+   * - scopes 是当前任务要改的目录，命中的条目加分；不传时保持旧行为；
+   * - 不传关键词也不传 scopes 时按最近排序。
+   */
+  function search(projectId, { query = '', scope = '', scopes = [], limit = 20 } = {}) {
     if (typeof projectId !== 'string' || !projectId.trim()) return [];
-    const keyword = typeof query === 'string' ? query.trim().toLowerCase() : '';
     const scopeFilter = typeof scope === 'string' ? scope.trim().toLowerCase() : '';
+    const requestedScopes = (Array.isArray(scopes) ? scopes : [scopes]).filter(item => typeof item === 'string' && item.trim());
+    const terms = tokenizeQuery(query);
     const size = Math.min(Math.max(Number(limit) || 20, 1), MEMORY_LIMITS.maxEntries);
     const scored = [];
     for (const entry of db.list('project-memory')) {
       if (entry.projectId !== projectId) continue;
       if (scopeFilter && !String(entry.scope || '').toLowerCase().includes(scopeFilter)) continue;
-      let score = 0;
-      if (keyword) {
-        const haystack = [entry.title, entry.summary, entry.scope, ...(entry.files || []), ...(entry.openQuestions || []), ...(entry.tags || [])]
-          .filter(Boolean).join(' ').toLowerCase();
-        if (!haystack.includes(keyword)) continue;
-        score += haystack.split(keyword).length - 1;
-        if (String(entry.title || '').toLowerCase().includes(keyword)) score += 2;
-      }
-      const stamp = Date.parse(entry.updatedAt || entry.createdAt || '') || 0;
-      score += Math.max(0, 1 - (Date.now() - stamp) / (90 * 86400000));
+      if (!terms.length && requestedScopes.length && !scopeMatches(entry.scope, requestedScopes)) continue;
+      const score = terms.length || requestedScopes.length
+        ? scoreMemoryEntry(entry, terms, { scopes: requestedScopes })
+        : recencyBoost(entry);
+      if (score === null) continue;
       scored.push({ entry, score });
     }
     return scored
@@ -173,8 +249,12 @@ export function createProjectMemory(db, { now = () => new Date().toISOString() }
   }
 
   /** 最近若干条 + 跨会话还没解决的问题，拼成给模型/执行器看的一段话。 */
-  function digest(projectId, { limit = 6 } = {}) {
-    const rows = list(projectId, limit);
+  function digest(projectId, { limit = 6, goal = '', scopes = [] } = {}) {
+    const relevant = Boolean(String(goal || '').trim() || (Array.isArray(scopes) && scopes.length));
+    let rows = relevant ? search(projectId, { query: goal, scopes, limit }) : list(projectId, limit);
+    const relevantHit = relevant && rows.length > 0;
+    // 命中不到相关条目时退回最近记录：总比让执行器以为项目没有历史要好。
+    if (!rows.length) rows = list(projectId, limit);
     if (!rows.length) return '';
     const total = db.list('project-memory').filter(entry => entry.projectId === projectId).length;
     const lines = [];
@@ -187,11 +267,16 @@ export function createProjectMemory(db, { now = () => new Date().toISOString() }
       if (row.openQuestions.length) lines.push(`  待办：${row.openQuestions.join('；')}`);
       if (row.files.length) lines.push(`  改动文件：${row.files.slice(0, 6).join('、')}${row.files.length > 6 ? ` 等 ${row.files.length} 个` : ''}`);
     }
+    // 待办跟着选中的条目走：按任务检索时，不要把别的目录、别的任务的问题一起塞进来。
     const open = [];
-    for (const row of db.list('project-memory').filter(entry => entry.projectId === projectId)) {
+    const selected = new Set(rows.map(row => row.id));
+    for (const row of db.list('project-memory').filter(entry => entry.projectId === projectId && selected.has(entry.id))) {
       for (const question of row.openQuestions) if (!open.includes(question)) open.push(question);
     }
-    const body = [`项目记忆（最近 ${rows.length} 条 / 共 ${total} 条）`, '只记项目的关键改动：动了文件，或留下了结论；同一项目下的所有对话共享，单次对话的闲聊不写进来。', ...lines, ...(open.length ? ['还没解决的问题：', ...open.slice(0, 8).map(item => `- ${item}`)] : [])].join('\n');
+    const header = relevantHit
+      ? `项目记忆（与本任务相关的 ${rows.length} 条 / 共 ${total} 条）`
+      : `项目记忆（最近 ${rows.length} 条 / 共 ${total} 条）`;
+    const body = [header, '只记项目的关键改动：动了文件，或留下了结论；同一项目下的所有对话共享，单次对话的闲聊不写进来。', ...lines, ...(open.length ? ['还没解决的问题：', ...open.slice(0, 8).map(item => `- ${item}`)] : [])].join('\n');
     return body.length > MEMORY_LIMITS.digestChars ? `${body.slice(0, MEMORY_LIMITS.digestChars)}…` : body;
   }
 

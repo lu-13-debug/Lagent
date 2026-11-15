@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FolderGit2, GitBranch, Globe, ListChecks, Menu, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Trash2, Users, Wrench, X } from 'lucide-react';
+import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FileText, FolderGit2, GitBranch, Globe, ListChecks, Menu, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Trash2, Users, Wrench, X } from 'lucide-react';
 import { api } from '../api';
 import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
-import type { WorkAction, WorkBootstrap, WorkEffect, WorkInboxItem, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTaskAnalysis, WorkTeamTemplate, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
+import type { WorkAction, WorkBootstrap, WorkEffect, WorkInboxItem, WorkMcpToken, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTaskAnalysis, WorkTeamTemplate, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
 import { MemoryPanel } from './MemoryPanel';
+import { AgentConclusionList, AgentThinkingPanel } from './AgentThinkingPanel';
 import { ChatModelPicker, CliModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
 import { ProjectsPanel } from './ProjectsPanel';
+import { WorkOpsPanel } from './WorkOpsPanel';
 import { AppearanceSettings } from './AppearanceSettings';
+import { AccountModal } from './AccountModal';
 import { SettingsModal } from './ModelSettings';
 import { Logo, Modal, Toast } from './ui';
 import { STATUS_LABELS } from '../status';
@@ -37,12 +40,36 @@ const reportKindNames: Record<string, string> = { ready: '已就绪', failed: '�
 const proposalNames: Record<string, string> = { proposed: '待决策', needsApproval: '需确认', accepted: '已接受', rejected: '已拒绝' };
 const quickCommands = ['检查 GitHub 仓库状态', '浏览网页并总结', '运行终端命令'];
 const executorIds = ['terminal', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'browser', 'github', 'window'];
-const executorNames: Record<string, string> = { analysis: '数据分析', terminal: '受控终端', codex: 'Codex CLI', 'claude-code': 'Claude Code', 'claude-acp': 'Claude ACP', 'codex-acp': 'Codex ACP', 'dsh-acp': 'DSH ACP', opencode: 'OpenCode', gemini: 'Gemini CLI', qwen: 'Qwen Code', 'cursor-agent': 'Cursor Agent', dsh: 'DSH CLI', codebuddy: 'CodeBuddy', qoder: 'Qoder', iflow: 'iFlow', kimi: 'Kimi CLI', model: 'Lagent', browser: '浏览器', github: 'GitHub', window: '窗口 Agent' };
+const executorNames: Record<string, string> = { analysis: '数据分析', terminal: '受控终端', codex: 'Codex CLI', 'claude-code': 'Claude Code', 'claude-acp': 'Claude ACP', 'codex-acp': 'Codex ACP', 'dsh-acp': 'DSH ACP', opencode: 'OpenCode', gemini: 'Gemini CLI', qwen: 'Qwen Code', 'cursor-agent': 'Cursor Agent', dsh: 'DSH CLI', codebuddy: 'CodeBuddy', qoder: 'Qoder', iflow: 'iFlow', kimi: 'Kimi CLI', workbuddy: 'WorkBuddy', model: 'Lagent', browser: '浏览器', github: 'GitHub', window: '窗口 Agent' };
 // 可在对话/项目里直接派活的执行器（不含終端、浏览器、GitHub 这类内置工具）。
-const conversationExecutorIds = ['analysis', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi', 'model'];
+const conversationExecutorIds = ['analysis', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi', 'workbuddy', 'model'];
 // 项目工作文件夹里能建会话的执行器：数据分析是内置工具，需要在数据集上跑，不能进项目。
 const projectExecutorIds = ['window', ...conversationExecutorIds.filter(id => id !== 'analysis')];
 const terminalStatuses = ['completed', 'failed', 'blocked', 'cancelled'];
+// 各家 Agent 的品牌标：能拿到官方图形就用图形（simple-icons / gilbarbara logos / 官网 favicon），
+// 拿不到的退回「品牌色 + 缩写」。同一个产品的 ACP / 桌面版复用同一枚。
+// 放在模块级：思考面板在组件靠前的位置就要用到它，写在组件体内会被提前引用（TDZ）。
+const BRAND_MARKS: Record<string, { text: string; bg: string; icon?: string; mono?: boolean }> = {
+  codex: { text: 'CX', bg: '#101014', icon: 'openai.svg', mono: true },
+  'claude-code': { text: 'CL', bg: '#d97757', icon: 'anthropic.svg', mono: true },
+  opencode: { text: 'OC', bg: '#1b1b1f', icon: 'opencode.svg', mono: true },
+  dsh: { text: 'DS', bg: '#4d6bfe', icon: 'deepseek.svg' },
+  gemini: { text: 'GE', bg: '#4285f4', icon: 'gemini.svg', mono: true },
+  qwen: { text: 'QW', bg: '#6f42c1', icon: 'qwen.svg' },
+  'cursor-agent': { text: 'CU', bg: '#0f0f10', icon: 'cursor.svg', mono: true },
+  aider: { text: 'AI', bg: '#16a34a', icon: 'aider.svg' },
+  amp: { text: 'AM', bg: '#f97316', icon: 'amp.svg' },
+  codebuddy: { text: 'CB', bg: '#0052d9', icon: 'codebuddy.svg' },
+  qoder: { text: 'QD', bg: '#ff6a00', icon: 'qoder.png', mono: true },
+  iflow: { text: 'iF', bg: '#2563eb', icon: 'iflow.png' },
+  kimi: { text: 'KM', bg: '#111111', icon: 'kimi.png' },
+  'trae-agent': { text: 'TR', bg: '#1d4ed8', icon: 'trae.png' },
+  comate: { text: 'Co', bg: '#2932e1', icon: 'comate.png' },
+  lingma: { text: '通', bg: '#ff6a00', icon: 'lingma.png' },
+  codegeex: { text: 'GX', bg: '#3859ff', icon: 'codegeex.png' },
+  workbuddy: { text: 'WB', bg: '#0ea5a4', icon: 'workbuddy.svg' }
+};
+const brandOf = (id: string) => BRAND_MARKS[id.replace(/-(acp|desktop)$/, '')] || null;
 const time = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '–';
 const shortTime = (value?: string) => {
   if (!value) return '–';
@@ -85,7 +112,7 @@ function sliceBytes(text: string, max: number): string {
 }
 
 type CrossCheck = { id: string; prompt: string; agentIds: string[]; ticketIds: string[]; createdAt: string; synthesisTicketId?: string; synthesisAgentId?: string };
-type LiveStep = { kind: string; text: string; detail?: string; at?: string };
+type LiveStep = { kind: string; text: string; detail?: string; at?: string; requestId?: string; decided?: 'allow' | 'deny' };
 
 function loadCrossChecks(): CrossCheck[] {
   try {
@@ -147,7 +174,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   onSettingsSaved: (settings: Settings) => void; notify: (text: string, error?: boolean) => void;
 }) {
   const appearance = useAppearance();
-  // 主壳自己渲染提示条：App 的 Toast 只在分析工作台分支里挂载，超级 Agent 分支拿不到。
+  // 主壳自己渲染提示条，不依赖外层容器。
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
   const notify = useCallback((text: string, error = false) => { pushNotify(text, error); setToast({ text, error }); }, [pushNotify]);
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(null), 4200); return () => clearTimeout(timer); }, [toast]);
@@ -204,6 +231,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [handoffExecutor, setHandoffExecutor] = useState('');
   const [handoffText, setHandoffText] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [localSettings, setLocalSettings] = useState(settings);
   const eventRef = useRef<EventSource | null>(null);
@@ -216,6 +244,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [runDetail, setRunDetail] = useState<WorkRun | null>(null);
   const [effects, setEffects] = useState<WorkEffect[]>([]);
   const [usage, setUsage] = useState<WorkUsageReport | null>(null);
+  const [usageHistory, setUsageHistory] = useState(false);
   const [roster, setRoster] = useState<WorkRosterEntry[]>([]);
   const [teamTemplates, setTeamTemplates] = useState<WorkTeamTemplate[]>([]);
   const [trace, setTrace] = useState<WorkTrace | null>(null);
@@ -303,7 +332,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     catch (cause) { notify((cause as Error).message, true); }
   };
   const loadUsage = async () => {
-    try { setUsage(await api.workUsage({ days: 30 })); }
+    try { setUsage(await api.workUsage({ days: 30, includeHistory: usageHistory })); }
     catch (cause) { notify((cause as Error).message, true); }
   };
   const createTeamTemplate = async () => {
@@ -547,6 +576,149 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     try { setMcpToken(await api.mcpToken()); }
     catch (cause) { notify((cause as Error).message, true); }
     finally { setMcpBusy(false); }
+  };
+  // —— 工作区配置档：保存当前策略与对话设置，一键在「省钱 / 质量 / 只读审计」之间切换。——
+  const [profileName, setProfileName] = useState('');
+  const [profileSkills, setProfileSkills] = useState('');
+  const [profileMcpServers, setProfileMcpServers] = useState('');
+  const [profileInstructions, setProfileInstructions] = useState('');
+  const [profileBusy, setProfileBusy] = useState('');
+  const listOf = (value: string) => value.split(/[,，\n]/).map(item => item.trim()).filter(Boolean);
+  const saveProfile = async () => {
+    if (!profileName.trim() || profileBusy) return;
+    setProfileBusy('save');
+    try {
+      await api.workSaveProfile({
+        name: profileName.trim(),
+        settings: { ...composerModel, permission: composerPermission },
+        policy: policy || work?.policy || undefined,
+        library: { skills: listOf(profileSkills), mcpServers: listOf(profileMcpServers), instructions: listOf(profileInstructions) }
+      });
+      setProfileName(''); setProfileSkills(''); setProfileMcpServers(''); setProfileInstructions('');
+      await refresh();
+      notify('配置档已保存。');
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setProfileBusy(''); }
+  };
+  const applyProfile = async (id: string) => {
+    if (profileBusy) return;
+    setProfileBusy(id);
+    try {
+      const result = await api.workApplyProfile(id);
+      setPolicy(result.policy);
+      await refresh();
+      notify('配置档已应用；之后的新会话会使用这套工作方式。');
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setProfileBusy(''); }
+  };
+  const deleteProfile = async (id: string) => {
+    if (profileBusy) return;
+    setProfileBusy(id);
+    try { await api.workDeleteProfile(id); await refresh(); notify('配置档已删除。'); }
+    catch (cause) { notify((cause as Error).message, true); }
+    finally { setProfileBusy(''); }
+  };
+  const resetProfile = async () => {
+    if (profileBusy) return;
+    setProfileBusy('reset');
+    try { const result = await api.workResetProfile(); setPolicy(result.policy); await refresh(); notify('已恢复默认工作方式。'); }
+    catch (cause) { notify((cause as Error).message, true); }
+    finally { setProfileBusy(''); }
+  };
+  // —— 加密备份 / 恢复 / 诊断包 ——
+  const [backupPassphrase, setBackupPassphrase] = useState('');
+  const [backupIncludeCredentials, setBackupIncludeCredentials] = useState(true);
+  const [backupBusy, setBackupBusy] = useState('');
+  const [backupFile, setBackupFile] = useState<File | null>(null);
+  const [backupLog, setBackupLog] = useState<Array<{ kind: string; result: string; bytes?: number; at: string }>>([]);
+  const loadBackupStatus = async () => {
+    try { setBackupLog((await api.workBackupStatus()).backups); }
+    catch { /* 旧版本没有备份接口时保持空列表。 */ }
+  };
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url; anchor.download = filename; anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const exportBackup = async () => {
+    if (backupBusy) return;
+    if (backupPassphrase.length < 8) { notify('备份口令至少 8 个字符。', true); return; }
+    setBackupBusy('export');
+    try {
+      const blob = await api.workBackupExport(backupPassphrase, backupIncludeCredentials);
+      downloadBlob(blob, `lagent-backup-${new Date().toISOString().slice(0, 10)}.lagentbackup`);
+      await loadBackupStatus();
+      notify('加密备份已导出，请妥善保存口令。');
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setBackupBusy(''); }
+  };
+  const restoreBackup = async () => {
+    if (backupBusy) return;
+    if (!backupFile) { notify('请先选择备份文件。', true); return; }
+    if (backupPassphrase.length < 8) { notify('请输入导出时使用的备份口令。', true); return; }
+    if (!window.confirm('恢复会用备份内容替换当前工作区数据。请先导出当前数据，确认后继续。')) return;
+    setBackupBusy('restore');
+    try {
+      await api.workBackupRestore(backupFile, backupPassphrase);
+      await loadBackupStatus();
+      notify('恢复完成。建议重启 Lagent 服务，让内存中的策略与执行器状态重新加载。');
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setBackupBusy(''); }
+  };
+  const exportDiagnostics = async () => {
+    if (backupBusy) return;
+    setBackupBusy('diagnostics');
+    try {
+      const result = await api.workDiagnostics();
+      downloadBlob(new Blob([JSON.stringify(result.diagnostics, null, 2)], { type: 'application/json' }), `lagent-diagnostics-${new Date().toISOString().slice(0, 10)}.json`);
+      notify('诊断包已导出；其中不包含密钥和手机号完整值。');
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setBackupBusy(''); }
+  };
+  // —— 作用域 MCP 令牌：绑定项目、只读、工具白名单、预算与有效期 ——
+  const [scopedTokens, setScopedTokens] = useState<WorkMcpToken[]>([]);
+  const [scopedTokenRow, setScopedTokenRow] = useState<{ token: string; endpoint: string; record: WorkMcpToken } | null>(null);
+  const [scopedBusy, setScopedBusy] = useState('');
+  const [scopedForm, setScopedForm] = useState({ name: '外部 Agent', projectId: '', readOnly: true, ttlDays: 7, budgetTokens: 0, maxCalls: 0, maxConcurrency: 4, tools: '' });
+  const loadScopedTokens = async () => {
+    try { setScopedTokens((await api.workMcpTokens()).tokens); }
+    catch { /* 旧版本或未启用 Work 时保持空列表。 */ }
+  };
+  useEffect(() => {
+    if (view !== 'settings') return;
+    void loadScopedTokens(); void loadBackupStatus();
+  }, [view]);
+  const createScopedToken = async () => {
+    if (scopedBusy) return;
+    setScopedBusy('create');
+    try {
+      const result = await api.workCreateMcpToken({
+        name: scopedForm.name.trim() || '外部 Agent',
+        ...(scopedForm.projectId ? { projectId: scopedForm.projectId } : {}),
+        readOnly: scopedForm.readOnly,
+        ttlDays: scopedForm.ttlDays,
+        budgetTokens: scopedForm.budgetTokens,
+        maxCalls: scopedForm.maxCalls,
+        maxConcurrency: scopedForm.maxConcurrency,
+        tools: scopedForm.tools.split(',').map(item => item.trim()).filter(Boolean)
+      });
+      setScopedTokenRow({ token: result.token, endpoint: result.endpoint, record: result.record });
+      await loadScopedTokens();
+      notify('作用域令牌已生成，明文只显示一次。');
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setScopedBusy(''); }
+  };
+  const revokeScopedToken = async (id: string) => {
+    if (scopedBusy) return;
+    setScopedBusy(id);
+    try { await api.workRevokeMcpToken(id); await loadScopedTokens(); notify('令牌已撤销。'); }
+    catch (cause) { notify((cause as Error).message, true); }
+    finally { setScopedBusy(''); }
+  };
+  const exportUsageCsv = async () => {
+    try { downloadBlob(await api.workUsageCsv({ includeHistory: usageHistory }), `lagent-usage-${new Date().toISOString().slice(0, 10)}.csv`); }
+    catch (cause) { notify((cause as Error).message, true); }
   };
   const [datasetId, setDatasetId] = useState('');
   const [attentionDatasets, setAttentionDatasets] = useState<Record<string, string>>({});
@@ -1211,6 +1383,20 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     try { await api.cancelWorkPlan(id); await refresh(); notify('计划已取消。'); }
     catch (cause) { notify((cause as Error).message, true); }
   };
+  const [sheetBusy, setSheetBusy] = useState(false);
+  // 交接单：一次编排的「谁做了什么 / 验收过没过 / 下一步」压成一页 Markdown，直接下载。
+  const exportPlanSheet = async (id: string) => {
+    setSheetBusy(true);
+    try {
+      const sheet = await api.workPlanSheet(id);
+      downloadBlob(new Blob([sheet.markdown], { type: 'text/markdown;charset=utf-8' }), `lagent-handoff-${id.slice(0, 8)}.md`);
+      notify('交接单已导出');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '导出交接单失败', true);
+    } finally {
+      setSheetBusy(false);
+    }
+  };
   const openPlan = async (id: string) => {
     try { setPlanDetail((await api.workPlan(id)).plan); }
     catch (cause) { notify((cause as Error).message, true); }
@@ -1300,6 +1486,39 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const completedGroupAgents = activeGroup ? activeGroup.agentIds.filter((id, index) => !id.startsWith('win:') && groupDetails[activeGroup.ticketIds[index]]?.ticket.status === 'completed') : [];
   const awaitingGroupAgents = activeGroup ? activeGroup.agentIds.filter((id, index) => groupDetails[activeGroup.ticketIds[index]]?.ticket.status === 'awaiting_review') : [];
   const synthesisDetail = activeGroup?.synthesisTicketId ? groupDetails[activeGroup.synthesisTicketId] : null;
+  // 复核组里每一路的过程与结论：SSE 推来的实时 activity 优先，刷新后从工单详情里补回来。
+  const groupRows = useMemo(() => {
+    if (!activeGroup) return [];
+    return activeGroup.agentIds.map((id, index) => {
+      const ticketId = activeGroup.ticketIds[index];
+      const detail = groupDetails[ticketId];
+      const status = detail?.ticket.status || 'waiting';
+      const steps = (liveActivity[ticketId] || detail?.activity || []).filter(step => step.kind !== 'result').map(step => ({ ...step, ticketId }));
+      // 排队过的工单 createdAt 早于真正开工时间：优先取这次尝试的 startedAt，没有再用第一条活动兜底。
+      const attempt = detail?.assignments?.[detail.assignments.length - 1];
+      const firstAt = steps.find(step => step.at)?.at;
+      return {
+        id,
+        ticketId,
+        status,
+        steps,
+        output: reportText(detail).slice(0, 4000),
+        startedAt: attempt?.startedAt || firstAt || detail?.ticket.createdAt,
+        endedAt: terminalStatuses.includes(status) ? (attempt?.endedAt || detail?.ticket.updatedAt || steps.at(-1)?.at) : undefined
+      };
+    });
+  }, [activeGroup, groupDetails, liveActivity]);
+  // ACP 的权限请求：界面只给「允许一次 / 拒绝」，超时由执行器自动拒绝。
+  const decidePermission = async (ticketId: string, requestId: string, decision: 'allow' | 'deny') => {
+    try {
+      await api.workPermissionDecision(ticketId, requestId, decision);
+      notify(decision === 'allow' ? '已允许这次操作。' : '已拒绝这次操作。');
+      if (activeGroupId) void loadGroupDetails(groupTicketIds);
+      else void loadActiveTicket(ticketId);
+    } catch (cause) {
+      notify((cause as Error).message, true);
+    }
+  };
   const approveGroup = async () => {
     if (!activeGroup) return;
     const ids = activeGroup.ticketIds.filter(id => groupDetails[id]?.ticket.status === 'awaiting_review');
@@ -1475,21 +1694,40 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       <div className="sa-thread-inner">
         {activeGroup ? <>
           <div className="sa-bubble-user">{activeGroup.prompt}</div>
-          <div className="sa-xc-note"><Users size={14} /><span>{activeGroup.agentIds.length} 个 Agent 并行独立作答，互不共享上下文；完成后可比较结论并汇总。</span></div>
-          <div className="sa-xc-grid">{activeGroup.agentIds.map((id, index) => {
-            const groupTicketId = activeGroup.ticketIds[index];
-            const groupDetail = groupDetails[groupTicketId];
-            const status = groupDetail?.ticket.status || 'waiting';
-            const text = reportText(groupDetail);
-            return <article className={`sa-xc-card ${terminalStatuses.includes(status) ? 'is-done' : ''}`} key={groupTicketId}>
-              <div className="sa-xc-head"><span className="sa-agent-avatar"><Bot size={16} /></span><div className="sa-agent-name"><strong>{agentLabel(id)}</strong><span>{groupTicketId.slice(0, 8)}</span></div><Status status={status} /></div>
-              {text ? <pre className="sa-xc-output">{text.slice(0, 6000)}</pre> : <p className="sa-inline-note">{terminalStatuses.includes(status) ? '没有文本输出，查看详情了解原因。' : status === 'awaiting_review' ? '等待你确认后开始执行。' : 'Agent 正在思考…'}</p>}
-              <div className="sa-run-actions">
-                {status === 'awaiting_review' && <button type="button" className="sa-button sa-primary" onClick={() => void act(groupTicketId, 'approve')}><Check size={13} />确认执行</button>}
-                <button type="button" className="sa-link" onClick={() => void open(groupTicketId)}>查看工单详情</button>
-              </div>
-            </article>;
-          })}</div>
+          <AgentThinkingPanel
+            orchestrator={{
+              name: 'Lagent',
+              role: '主控 · 任务规划',
+              startedAt: activeGroup.createdAt,
+              endedAt: groupRows.some(row => row.status === 'waiting' || row.status === 'queued') ? undefined : activeGroup.createdAt,
+              steps: [{ kind: 'thought', text: `收到工单：「${activeGroup.prompt}」。复核模式下我不自己答，把同一个问题分给 ${activeGroup.agentIds.length} 路并行作答，互相看不到对方的答案；回来后我逐条比较，只保留互相印证的结论。` }],
+              dispatch: groupRows.map(row => ({ id: row.id, name: agentLabel(row.id), brand: brandOf(row.id), status: row.status, startedAt: row.startedAt, endedAt: row.endedAt })),
+              summary: '几路结论互相印证才留用；分歧之处回到原始数据再查一遍。'
+            }}
+            agents={groupRows.map(row => ({
+              id: row.id,
+              name: agentLabel(row.id),
+              brand: brandOf(row.id),
+              status: row.status,
+              startedAt: row.startedAt,
+              endedAt: row.endedAt,
+              steps: row.steps,
+              output: row.status === 'completed' ? row.output : ''
+            }))}
+            onPermission={decidePermission}
+          />
+          <AgentConclusionList
+            rows={groupRows.map(row => ({
+              id: row.id,
+              ticketId: row.ticketId,
+              name: agentLabel(row.id),
+              brand: brandOf(row.id),
+              status: row.status,
+              summary: row.output.replace(/\s+/g, ' ').slice(0, 160)
+            }))}
+            onOpen={ticketId => void open(ticketId)}
+            onApprove={ticketId => void act(ticketId, 'approve')}
+          />
         {awaitingGroupAgents.length > 0 && <div className="sa-xc-summary">
           <div><strong>{awaitingGroupAgents.length} 个 Agent 等待确认</strong><span>确认后指令会作为只读提示词并行发送。</span></div>
           <button type="button" className="sa-button sa-primary" onClick={() => void approveGroup()}><Check size={14} />全部确认</button>
@@ -1505,7 +1743,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             <button type="button" className="sa-link" onClick={() => void open(synthesisDetail.ticket.id)}>查看汇总工单</button>
           </section>}
         </> : activeTicket ? <>
-          <div className="sa-chat-meta"><span>{executorNames[activeTicket.executor] || activeTicket.executor}</span><Status status={activeTicket.status} />{activeTicket.preview?.risk === 'high' && <span className="sa-risk sa-risk-high">高风险</span>}{activeTicket.verify && <span className={`sa-verify-chip sa-verify-${activeTicket.acceptance?.status || 'pending'}`}>{activeTicket.acceptance?.status === 'passed' ? '验收通过' : activeTicket.acceptance?.status === 'failed' ? '验收失败' : '待验收'}</span>}<time>{time(activeTicket.updatedAt)}</time>{activeTicket.planId && <button type="button" className="sa-link" onClick={() => void openPlan(activeTicket.planId!)}>计划第 {(activeTicket.planStep ?? 0) + 1}/{activeTicket.planTotal ?? 0} 步</button>}</div>
+          <div className="sa-chat-meta"><span>{executorNames[activeTicket.executor] || activeTicket.executor}</span><Status status={activeTicket.status} />{activeTicket.status === 'queued' && work?.queue && <span className="sa-queue-chip" title="执行器并发已满，前面的工单结束后会自动开始">并发 {work.queue.running}/{work.queue.maxConcurrent} · 等待空位</span>}{activeTicket.preview?.risk === 'high' && <span className="sa-risk sa-risk-high">高风险</span>}{activeTicket.verify && <span className={`sa-verify-chip sa-verify-${activeTicket.acceptance?.status || 'pending'}`}>{activeTicket.acceptance?.status === 'passed' ? '验收通过' : activeTicket.acceptance?.status === 'failed' ? '验收失败' : '待验收'}</span>}<time>{time(activeTicket.updatedAt)}</time>{activeTicket.planId && <button type="button" className="sa-link" onClick={() => void openPlan(activeTicket.planId!)}>计划第 {(activeTicket.planStep ?? 0) + 1}/{activeTicket.planTotal ?? 0} 步</button>}</div>
           <div className="sa-bubble-user">{activeTicket.title}</div>
           {activeAttention && <div className="sa-thread-attention">{renderAttention([activeAttention])}</div>}
           <section className="sa-agent-run">
@@ -1515,6 +1753,20 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
               return <li key={report.id}><span className={`sa-activity-icon sa-activity-${report.kind}`}><Icon size={13} /></span><div><p>{report.summary || report.kind}</p><time>{time(report.createdAt)}</time></div></li>;
             })}</ol> : <p className="sa-inline-note">{terminalStatuses.includes(activeTicket.status) ? '这条工单没有执行记录。' : 'Agent 正在思考并准备执行…'}</p>}
             {liveSteps.length > 0 && <ol className="sa-live-steps" aria-live="polite" aria-label="执行过程">{liveSteps.map((step, index) => {
+              if (step.kind === 'permission') {
+                const decided = step.decided === 'allow' || step.decided === 'deny' ? step.decided : null;
+                return <li key={`${index}-${step.at || ''}`} className={`sa-live-step sa-live-permission${decided ? ' is-decided' : ''}`}>
+                  <span className="sa-live-icon"><ShieldCheck size={12} /></span>
+                  <div><p>{step.text}</p>{step.detail && <span className="sa-live-detail">{step.detail}</span>}
+                    {decided
+                      ? <span className="sa-live-permission-state">{decided === 'allow' ? '已允许' : '已拒绝'}</span>
+                      : <span className="sa-live-permission-actions">
+                        <button type="button" className="sa-button sa-primary" disabled={!step.requestId} onClick={() => step.requestId && void decidePermission(activeTicket.id, step.requestId, 'allow')}>允许一次</button>
+                        <button type="button" className="sa-button" disabled={!step.requestId} onClick={() => step.requestId && void decidePermission(activeTicket.id, step.requestId, 'deny')}>拒绝</button>
+                      </span>}
+                  </div>
+                </li>;
+              }
               const Icon = step.kind === 'tool' ? Wrench : step.kind === 'observation' ? Terminal : step.kind === 'error' ? AlertTriangle : Check;
               return <li key={`${index}-${step.at || ''}`} className={`sa-live-step sa-live-${step.kind}`}>
                 <span className="sa-live-icon"><Icon size={12} /></span>
@@ -1641,29 +1893,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     : '';
   const providerIcon = (id: string) => /desktop|dsh/.test(id) ? <AppWindow size={18} /> : /acp/.test(id) ? <Bot size={18} /> : <Terminal size={18} />;
   const providerKind = (provider: { id: string; kind?: string }) => provider.kind === 'desktop' ? '桌面版' : provider.id.endsWith('-acp') ? 'ACP' : 'CLI';
-  // 各家 Agent 的品牌标：能拿到官方图形就用图形（simple-icons / gilbarbara logos / 官网 favicon），
-  // 拿不到的退回「品牌色 + 缩写」。同一个产品的 ACP / 桌面版复用同一枚。
-  const BRAND_MARKS: Record<string, { text: string; bg: string; icon?: string; mono?: boolean }> = {
-    codex: { text: 'CX', bg: '#101014', icon: 'openai.svg', mono: true },
-    'claude-code': { text: 'CL', bg: '#d97757', icon: 'anthropic.svg', mono: true },
-    opencode: { text: 'OC', bg: '#1b1b1f', icon: 'opencode.svg', mono: true },
-    dsh: { text: 'DS', bg: '#4d6bfe', icon: 'deepseek.svg' },
-    gemini: { text: 'GE', bg: '#4285f4', icon: 'gemini.svg', mono: true },
-    qwen: { text: 'QW', bg: '#6f42c1', icon: 'qwen.svg' },
-    'cursor-agent': { text: 'CU', bg: '#0f0f10', icon: 'cursor.svg', mono: true },
-    aider: { text: 'AI', bg: '#16a34a', icon: 'aider.svg' },
-    amp: { text: 'AM', bg: '#f97316', icon: 'amp.svg' },
-    codebuddy: { text: 'CB', bg: '#0052d9', icon: 'codebuddy.svg' },
-    qoder: { text: 'QD', bg: '#ff6a00', icon: 'qoder.png', mono: true },
-    iflow: { text: 'iF', bg: '#2563eb', icon: 'iflow.png' },
-    kimi: { text: 'KM', bg: '#111111', icon: 'kimi.png' },
-    'trae-agent': { text: 'TR', bg: '#1d4ed8', icon: 'trae.png' },
-    comate: { text: 'Co', bg: '#2932e1', icon: 'comate.png' },
-    lingma: { text: '通', bg: '#ff6a00', icon: 'lingma.png' },
-    codegeex: { text: 'GX', bg: '#3859ff', icon: 'codegeex.png' },
-    workbuddy: { text: 'WB', bg: '#0ea5a4', icon: 'workbuddy.svg' }
-  };
-  const brandOf = (id: string) => BRAND_MARKS[id.replace(/-(acp|desktop)$/, '')] || null;
   const enabledExecutors = policy?.allowedExecutors || work?.policy?.allowedExecutors || [];
   const sortedProviders = [...providers].sort((left, right) => Number(right.installed) - Number(left.installed));
   const installedProviders = sortedProviders.filter(provider => provider.installed);
@@ -1770,7 +1999,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     </article>;
   })}{!tools.length && <p className="sa-empty">工具状态载入中。</p>}</div></section>;
 
-  const settingsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">SETTINGS</p><h1>设置</h1><p>主题、模型与执行权限。</p></div></header><div className="sa-settings-grid"><article className="sa-card"><h2>外观与模型</h2><p>主题与显示密度，以及 Agent 使用的默认模型和凭据。</p><div className="sa-settings-actions"><button className="sa-button" onClick={() => setAppearanceOpen(true)}><SunMoon size={15} />显示设置</button><button className="sa-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} />模型与 API</button></div></article><article className="sa-card sa-policy-card"><h2>执行器与权限</h2><p>与「Agent」页的开关同步，这里可批量调整并设置预算；外部执行器还需 <code>LAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code>。</p>
+  const settingsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">SETTINGS</p><h1>设置</h1><p>主题、模型与执行权限。</p></div></header><div className="sa-settings-grid"><article className="sa-card"><h2>外观与模型</h2><p>主题与显示密度，以及 Agent 使用的默认模型和凭据。</p><div className="sa-settings-actions"><button className="sa-button" onClick={() => setAppearanceOpen(true)}><SunMoon size={15} />显示设置</button><button className="sa-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} />模型与 API</button></div></article>{runtime.mode === 'cloud' && <article className="sa-card"><h2><ShieldCheck size={16} />账号与安全</h2><p>修改密码、绑定手机号，或退出当前账号。</p><div className="sa-settings-actions"><button className="sa-button" onClick={() => setAccountOpen(true)}><ShieldCheck size={15} />账号与安全</button></div></article>}<article className="sa-card sa-policy-card"><h2>执行器与权限</h2><p>与「Agent」页的开关同步，这里可批量调整并设置预算；外部执行器还需 <code>LAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code>。</p>
     {policy ? <><div className="sa-policy-executors">{executorIds.map(id => <label key={id}><input type="checkbox" checked={(policy.allowedExecutors || []).includes(id)} onChange={() => toggleExecutor(id)} />{executorNames[id]}</label>)}</div>
       <div className="sa-permissions" role="radiogroup" aria-label="权限模式">{[{ id: 'read', name: '仅查看', desc: '只能读文件、跑只读命令，不改任何东西。' }, { id: 'workspace', name: '仅工作区内修改', desc: '项目目录里直接改；目录之外、递归删除、非白名单命令会弹窗问你。' }, { id: 'full', name: '完全权限', desc: '不再逐次确认；系统目录、.git、.ssh、密钥仍然拒绝。' }].map(option => <button key={option.id} type="button" role="radio" aria-checked={(policy.permission || 'workspace') === option.id} className={`sa-permission${(policy.permission || 'workspace') === option.id ? ' is-on' : ''}`} onClick={() => setPolicy(previous => previous ? { ...previous, permission: option.id as 'read' | 'workspace' | 'full' } : previous)}><strong>{option.name}</strong><em>{option.desc}</em></button>)}</div>
       {(policy.permission || 'workspace') === 'workspace' && <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.confirmDanger !== false} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), confirmDanger: event.target.checked } } : previous)} /><span>危险操作再确认<em>递归删除、白名单外的命令，即使目录已授权也会再弹一次窗。</em></span></label>}
@@ -1787,6 +2016,32 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         <label>浏览器主机<input value={(policy.limits?.browserHosts || []).join(', ')} placeholder="example.com" onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), browserHosts: event.target.value.split(',').map(item => item.trim()).filter(Boolean) } } : previous)} /></label>
         <label>GitHub 仓库<input value={(policy.limits?.githubRepos || []).join(', ')} placeholder="owner/repo" onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), githubRepos: event.target.value.split(',').map(item => item.trim()).filter(Boolean) } } : previous)} /></label>
       </div><div className="sa-policy-actions"><button className="sa-button sa-primary" disabled={policySaving} onClick={() => void savePolicy()}>{policySaving ? '保存中…' : '保存策略'}</button><span className="sa-tag-ok"><ShieldCheck size={14} />{`当前：${policy.permission === 'read' ? '仅查看' : policy.permission === 'full' ? '完全权限' : '仅工作区内修改'}`}</span></div></> : <p className="sa-empty">策略载入中…</p>}
+  </article><article className="sa-card"><h2><ListChecks size={16} />工作区配置档</h2><p>把模型、思考强度、权限、预算、允许的执行器与 Library 存成命名快照；一键切换，也能恢复默认。</p>
+    {work?.activeProfile?.effective ? <p className="sa-inline-note sa-tag-ok"><ShieldCheck size={13} />当前配置档：{work.activeProfile.effective.profile?.name || '已删除的配置档'} · {work.activeProfile.effective.settings.permission === 'read' ? '仅查看' : work.activeProfile.effective.settings.permission === 'full' ? '完全权限' : '仅工作区内修改'}</p> : <p className="sa-inline-note">当前使用默认工作方式。</p>}
+    <div className="sa-code-note"><input value={profileName} placeholder="名称，例如：省钱模式 / 质量优先 / 只读审计" onChange={event => setProfileName(event.target.value)} /><input value={profileSkills} placeholder="Skills，逗号分隔（登记名称，会随任务上下文注入）" onChange={event => setProfileSkills(event.target.value)} /><input value={profileMcpServers} placeholder="MCP Servers，逗号分隔（登记名称）" onChange={event => setProfileMcpServers(event.target.value)} /><input value={profileInstructions} placeholder="工作约定，逗号分隔（会注入执行者；可写 [codex] 前缀只给某个 Agent）" onChange={event => setProfileInstructions(event.target.value)} /><button className="sa-button" disabled={!profileName.trim() || Boolean(profileBusy)} onClick={() => void saveProfile()}>{profileBusy === 'save' ? '保存中…' : '保存当前设置为配置档'}</button></div>
+    {(work?.profiles || []).length > 0 ? <ul className="sa-mobile-devices">{work?.profiles?.map(profile => <li key={profile.id}><div><strong>{profile.name}</strong><span>{profile.settings.model || profile.settings.profileId || '默认模型'} · {profile.settings.effort || '默认强度'} · {profile.settings.permission === 'read' ? '仅查看' : profile.settings.permission === 'full' ? '完全权限' : '工作区内修改'}</span></div><span><button className="sa-link" disabled={Boolean(profileBusy)} onClick={() => void applyProfile(profile.id)}>{profileBusy === profile.id ? '应用中…' : '应用'}</button> <button className="sa-link" disabled={Boolean(profileBusy)} onClick={() => void deleteProfile(profile.id)}>删除</button></span></li>)}</ul> : <p className="sa-inline-note">还没有配置档。先调整上面的权限与模型，再保存成一套。</p>}
+    <button className="sa-link" disabled={Boolean(profileBusy)} onClick={() => void resetProfile()}>恢复默认工作方式</button>
+  </article><article className="sa-card"><h2><Database size={16} />加密备份与诊断</h2><p>导出项目、记忆、策略、配置档与凭据（可选），口令加密；换机后可恢复。诊断包只含版本、配置与健康信息，不含密钥和完整手机号。</p>
+    <label className="field">备份口令<input type="password" value={backupPassphrase} onChange={event => setBackupPassphrase(event.target.value)} placeholder="至少 8 个字符，恢复时还要用它" autoComplete="new-password" /></label>
+    <label className="sa-policy-toggle"><input type="checkbox" checked={backupIncludeCredentials} onChange={event => setBackupIncludeCredentials(event.target.checked)} /><span>包含模型凭据<em>凭据本身仍是工作区主密钥加密后的密文；换机恢复后需要相同主密钥才能使用。</em></span></label>
+    <div className="sa-settings-actions"><button className="sa-button" disabled={Boolean(backupBusy)} onClick={() => void exportBackup()}>{backupBusy === 'export' ? '导出中…' : '导出加密备份'}</button><button className="sa-button" disabled={Boolean(backupBusy)} onClick={() => void exportDiagnostics()}>{backupBusy === 'diagnostics' ? '打包中…' : '导出诊断包'}</button></div>
+    <div className="sa-code-note"><input type="file" accept=".lagentbackup,application/octet-stream" onChange={event => setBackupFile(event.target.files?.[0] || null)} /><button className="sa-button" disabled={!backupFile || !backupPassphrase || Boolean(backupBusy)} onClick={() => void restoreBackup()}>{backupBusy === 'restore' ? '恢复中…' : '从备份恢复'}</button></div>
+    {backupLog.length > 0 && <p className="sa-inline-note">最近备份记录：{time(backupLog[0].at)} · {backupLog[0].kind} · {backupLog[0].result}{typeof backupLog[0].bytes === 'number' ? ` · ${Math.round(backupLog[0].bytes / 1024)} KB` : ''}</p>}
+    <p className="sa-inline-note"><ShieldCheck size={13} />定时备份可用 <code>LAGENT_BACKUP_INTERVAL_HOURS</code>、<code>LAGENT_BACKUP_DIR</code>、<code>LAGENT_BACKUP_PASSPHRASE</code> 配置。</p>
+  </article><article className="sa-card"><h2><Terminal size={16} />作用域 MCP 令牌</h2><p>给 Claude Code、Codex 等外部 Agent 一个只读、只限某项目、带有效期与预算的令牌；越权调用返回 403 并写入审计。</p>
+    <div className="sa-policy-budgets">
+      <label>名称<input value={scopedForm.name} onChange={event => setScopedForm(previous => ({ ...previous, name: event.target.value }))} /></label>
+      <label>绑定项目<select value={scopedForm.projectId} onChange={event => setScopedForm(previous => ({ ...previous, projectId: event.target.value }))}><option value="">全部项目（可写令牌慎用）</option>{(work?.projects || projects || []).map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+      <label>有效期（天）<input type="number" min={1} max={365} value={scopedForm.ttlDays} onChange={event => setScopedForm(previous => ({ ...previous, ttlDays: Number(event.target.value) }))} /></label>
+      <label>Token 预算<input type="number" min={0} value={scopedForm.budgetTokens} placeholder="0 表示不限" onChange={event => setScopedForm(previous => ({ ...previous, budgetTokens: Number(event.target.value) }))} /></label>
+      <label>调用上限<input type="number" min={0} value={scopedForm.maxCalls} placeholder="0 表示不限" onChange={event => setScopedForm(previous => ({ ...previous, maxCalls: Number(event.target.value) }))} /></label>
+      <label>并发上限<input type="number" min={1} max={16} value={scopedForm.maxConcurrency} onChange={event => setScopedForm(previous => ({ ...previous, maxConcurrency: Number(event.target.value) }))} /></label>
+      <label>工具白名单<input value={scopedForm.tools} placeholder="留空=按只读规则；可填 work_get_ticket,..." onChange={event => setScopedForm(previous => ({ ...previous, tools: event.target.value }))} /></label>
+    </div>
+    <label className="sa-policy-toggle"><input type="checkbox" checked={scopedForm.readOnly} onChange={event => setScopedForm(previous => ({ ...previous, readOnly: event.target.checked }))} /><span>只读令牌<em>只读令牌只能读取工单、报告、项目记忆与验收结果。</em></span></label>
+    <button className="sa-button" disabled={Boolean(scopedBusy)} onClick={() => void createScopedToken()}>{scopedBusy === 'create' ? '生成中…' : '生成作用域令牌'}</button>
+    {scopedTokenRow && <div className="sa-mcp-token"><div><span>端点</span><code>{location.origin}{scopedTokenRow.endpoint}</code></div><div><span>Bearer 令牌</span><code>{scopedTokenRow.token}</code></div><p className="sa-inline-note"><ShieldCheck size={13} />明文只显示一次；有效至 {time(scopedTokenRow.record.expiresAt)}。</p></div>}
+    {scopedTokens.length > 0 ? <ul className="sa-mobile-devices">{scopedTokens.map(token => <li key={token.id}><div><strong>{token.name}{token.revokedAt ? '（已撤销）' : ''}</strong><span>{token.readOnly ? '只读' : '可写'} · {token.projectId ? '绑定项目' : '全部项目'} · 调用 {token.calls}{token.maxCalls ? `/${token.maxCalls}` : ''} · Token {token.usedTokens.toLocaleString()}{token.budgetTokens ? `/${token.budgetTokens.toLocaleString()}` : ''} · 有效至 {time(token.expiresAt)}</span></div>{!token.revokedAt && <button className="sa-link" disabled={Boolean(scopedBusy)} onClick={() => void revokeScopedToken(token.id)}>撤销</button>}</li>)}</ul> : <p className="sa-inline-note">还没有作用域令牌。</p>}
   </article><article className="sa-card sa-mobile-card"><h2><Smartphone size={16} />手机指挥</h2><p>{runtime.mode === 'cloud' ? <>在手机浏览器打开 <code>{location.origin}/m</code>，输入一次性配对码即可远程查看、审批和下达指令。</> : <>本地服务只监听 <code>127.0.0.1</code>，手机无法直接访问。请使用云端账号版，或通过 HTTPS 反向代理暴露服务后打开 <code>/m</code>。</>}</p>
     {mobilePair && <div className="sa-mobile-code" role="status"><strong>{mobilePair.code}</strong><span>{mobilePairSeconds > 0 ? `${mobilePairSeconds} 秒后过期` : '已过期，请重新生成'}</span></div>}
     <button className="sa-button" disabled={mobileBusy === 'pair'} onClick={() => void createMobilePair()}>{mobileBusy === 'pair' ? <RefreshCw size={15} className="sa-spin" /> : <Smartphone size={15} />}{mobilePair ? '重新生成配对码' : '生成配对码'}</button>
@@ -1795,7 +2050,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   </article><article className="sa-card sa-mobile-card"><h2><Terminal size={16} />MCP 外部 Agent</h2><p>让 Claude Code、Codex 或其他 MCP Agent 通过 <code>{location.origin}/api/mcp</code> 反向读取工单与报告、查看执行器、创建计划、发送指令和审批。</p>
     {mcpToken ? <div className="sa-mcp-token"><div><span>端点</span><code>{location.origin}{mcpToken.endpoint}</code></div><div><span>Bearer 令牌</span><code>{mcpToken.token}</code></div><p className="sa-inline-note"><ShieldCheck size={13} />令牌只显示一次，请现在复制；有效至{time(mcpToken.expiresAt)}。</p></div> : <button className="sa-button" disabled={mcpBusy} onClick={() => void createMcpToken()}>{mcpBusy ? <RefreshCw size={15} className="sa-spin" /> : <Terminal size={15} />}{mcpBusy ? '生成中…' : '生成 MCP 令牌'}</button>}
     <div className="sa-code-note"><span>Claude Code 示例</span><code>claude mcp add --transport http lagent {location.origin}/api/mcp --header "Authorization: Bearer &lt;令牌&gt;"</code></div>
-  </article></div></section>;
+  </article><WorkOpsPanel projects={projects || work?.projects || []} executors={allowedExecutors.filter(id => projectExecutorIds.includes(id) && id !== 'window')} windows={windows} notify={notify} /></div></section>;
 
   const runsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">RUNS</p><h1>运行</h1><p>深度编排的实时状态、步骤与产物。</p></div></header>
     {selectedRunId && runDetail ? <div className="sa-run-detail">
@@ -1818,11 +2073,15 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       </article>) : <p className="sa-empty">还没有运行。在指挥台发起一次「深度编排」即可看到。</p>}</div>
       <div className="sa-run-usage">{usage ? <>
         <h3>近 30 天用量</h3>
-        <div className="sa-usage-totals"><span><strong>{usage.totals.calls}</strong>次调用</span><span><strong>{usage.totals.totalTokens.toLocaleString()}</strong>tokens</span><span><strong>${usage.totals.costEstimate.toFixed(4)}</strong>预估</span></div>
+        <div className="sa-usage-totals"><span><strong>{usage.totals.calls}</strong>次调用</span><span><strong>{usage.totals.totalTokens.toLocaleString()}</strong>tokens</span><span><strong>${usage.totals.costEstimate.toFixed(4)}</strong>预估</span>{usage.alerts && <span><strong>{Math.round(usage.alerts.cacheHitRate * 100)}%</strong>缓存命中</span>}</div>
         {usage.budget && <p className={`sa-inline-note ${usage.budget.warnings.length ? 'sa-stalled-note' : ''}`}>单工单 Token 预算 {usage.budget.maxTokensPerTicket.toLocaleString()} · {usage.budget.warnings.length ? `${usage.budget.warnings.length} 个工单已用 ≥80%` : '暂无接近上限的工单'}</p>}
-        {usage.byExecutor.length > 0 && <div className="sa-usage-by">{usage.byExecutor.slice(0, 5).map(row => <span key={row.executorId}>{executorNames[row.executorId] || row.executorId} · {row.totalTokens.toLocaleString()} tokens</span>)}</div>}
+        {usage.alerts?.topProject && <p className="sa-inline-note">最贵的项目：{projects?.find(project => project.id === usage.alerts?.topProject?.projectId)?.name || (usage.alerts.topProject.projectId || '未绑定项目')} · {usage.alerts.topProject.totalTokens.toLocaleString()} tokens</p>}
+        {usage.byProject && usage.byProject.length > 0 && <div className="sa-usage-days"><h4>按项目</h4>{usage.byProject.slice(0, 5).map(row => <p key={row.projectId || 'none'}>{projects?.find(project => project.id === row.projectId)?.name || (row.projectId || '未绑定项目')} · {row.calls} 次 · {row.totalTokens.toLocaleString()} tokens</p>)}</div>}
+        {usage.byExecutor.length > 0 && <div className="sa-usage-by">{usage.byExecutor.slice(0, 5).map(row => <span key={row.executorId}>{executorNames[row.executorId] || row.executorId} · {row.totalTokens.toLocaleString()} tokens{row.cacheReadTokens ? ` · 缓存 ${row.cacheReadTokens.toLocaleString()}` : ''}</span>)}</div>}
         {usage.byTicket.length > 0 && <div className="sa-usage-days"><h4>最贵的工单</h4>{usage.byTicket.slice(0, 5).map(row => <p key={row.ticketId}><code>{row.ticketId.slice(0, 8)}</code> · {executorNames[row.executorId] || row.executorId} · {row.totalTokens.toLocaleString()} tokens{row.warning ? ' · 接近预算' : ''}</p>)}</div>}
         {usage.byDay.length > 0 && <div className="sa-usage-days"><h4>按天</h4>{usage.byDay.slice(0, 7).map(row => <p key={row.date}><time>{row.date}</time> · {row.calls} 次 · {row.totalTokens.toLocaleString()} tokens</p>)}</div>}
+        {usage.history && usage.history.count > 0 && <p className="sa-inline-note">已合并 {usage.history.count} 条历史会话记录（扫描 {usage.history.scanned.files} 个文件）。{usage.history.note}</p>}
+        <div className="sa-settings-actions"><label className="sa-inline-note"><input type="checkbox" checked={usageHistory} onChange={event => setUsageHistory(event.target.checked)} />包含 ~/.claude 与 ~/.codex 历史会话</label><button type="button" className="sa-button" onClick={() => void loadUsage()}>刷新用量</button><button type="button" className="sa-button" onClick={() => void exportUsageCsv()}>导出 CSV</button></div>
       </> : <button type="button" className="sa-button" onClick={() => void loadUsage()}>加载用量</button>}</div>
     </>}
   </section>;
@@ -2000,9 +2259,12 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         <div><strong>{step.title}</strong><span>{step.executorId}{step.dependsOn?.length ? ` · 依赖 ${step.dependsOn.map(item => item + 1).join('、')}` : ' · 可并行'}</span></div>
         <Status status={step.status || 'pending'} />
       </div>)}</div>
+      <div className="sa-detail-actions">
+        <button type="button" className="sa-button" disabled={sheetBusy} onClick={() => void exportPlanSheet(planDetail.id)}><FileText size={14} />{sheetBusy ? '生成中…' : '导出交接单'}</button>
+      </div>
     </Modal>}
     {detail && <Modal title={detail.ticket.title} subtitle={`${statusNames[detail.ticket.status] || detail.ticket.status} · ${detail.ticket.executor}`} close={() => setDetail(null)}>
-      <div className="sa-detail"><p className="sa-detail-summary">{detail.ticket.summary || '暂无摘要。'}</p>{detail.ticket.stalled && <p className="sa-inline-note sa-stalled-note"><Clock size={13} />执行器长时间没有心跳，可能已经卡死；可以停止后重试。</p>}{detail.project && <p className="sa-detail-project"><FolderGit2 size={14} /><strong>{detail.project.name}</strong>{detail.projectChat && <span>{executorNames[detail.projectChat.executorId] || detail.projectChat.executorId}{detail.projectChat.title && detail.projectChat.title !== detail.project.name ? ` · ${detail.projectChat.title}` : ''}</span>}<button type="button" className="sa-link" onClick={() => { setDetail(null); openFolder(detail.project!.id); }}>打开项目<ChevronRight size={13} /></button></p>}{detail.ticket.planId && <p className="sa-inline-note">多步计划第 {(detail.ticket.planStep ?? 0) + 1}/{detail.ticket.planTotal ?? 0} 步</p>}{detail.ticket.preview?.action && <div className="sa-preview">
+      <div className="sa-detail"><p className="sa-detail-summary">{detail.ticket.summary || '暂无摘要。'}</p>{detail.ticket.status === 'queued' && work?.queue && <p className="sa-inline-note">排队中：当前并发 {work.queue.running}/{work.queue.maxConcurrent}，前面的任务结束后会自动开始。</p>}{detail.ticket.stalled && <p className="sa-inline-note sa-stalled-note"><Clock size={13} />执行器长时间没有心跳，可能已经卡死；可以停止后重试。</p>}{detail.project && <p className="sa-detail-project"><FolderGit2 size={14} /><strong>{detail.project.name}</strong>{detail.projectChat && <span>{executorNames[detail.projectChat.executorId] || detail.projectChat.executorId}{detail.projectChat.title && detail.projectChat.title !== detail.project.name ? ` · ${detail.projectChat.title}` : ''}</span>}<button type="button" className="sa-link" onClick={() => { setDetail(null); openFolder(detail.project!.id); }}>打开项目<ChevronRight size={13} /></button></p>}{detail.ticket.planId && <p className="sa-inline-note">多步计划第 {(detail.ticket.planStep ?? 0) + 1}/{detail.ticket.planTotal ?? 0} 步</p>}{detail.ticket.preview?.action && <div className="sa-preview">
           <span className={`sa-risk sa-risk-${detail.ticket.preview.risk || 'medium'}`}>{detail.ticket.preview.risk === 'high' ? '高风险' : detail.ticket.preview.risk === 'low' ? '低风险' : '需留意'}</span>
           <code>{detail.ticket.preview.action}</code>
           {detail.ticket.preview.cwd && <span className="sa-preview-path">{detail.ticket.preview.cwd}</span>}
@@ -2058,6 +2320,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     {planOpen && <PlanBuilder agents={agents} allowedExecutors={allowedExecutors} datasets={datasets} windows={windows} initialGoal={command} close={() => setPlanOpen(false)} onCreated={plan => { setPlanOpen(false); setCommand(''); notify('多步计划已创建。'); void refresh().then(() => { const first = plan.steps[0]?.ticketId; if (first) viewTicket(first); }); }} />}
     {appearanceOpen && <AppearanceSettings close={() => setAppearanceOpen(false)} />}
     {settingsOpen && <SettingsModal settings={localSettings} close={() => setSettingsOpen(false)} onSaved={next => { setLocalSettings(next); onSettingsSaved(next); }} notify={notify} />}
+    {accountOpen && <AccountModal close={() => setAccountOpen(false)} />}
     {paletteOpen && <div className="sa-palette-shade" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setPaletteOpen(false); }}>
       <div className="sa-palette" role="dialog" aria-modal="true" aria-label="命令面板">
         <div className="sa-palette-input"><Search size={15} /><input autoFocus value={paletteQuery} placeholder="搜索会话、工作文件夹、页面，或直接执行动作" aria-label="命令面板搜索"

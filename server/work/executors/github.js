@@ -1,4 +1,5 @@
 import { workError } from '../domain.js';
+import { APP_VERSION } from '../../version.js';
 
 const API_BASE = 'https://api.github.com';
 const statusError = (message, status = 400) => Object.assign(workError(message, status), { status });
@@ -129,7 +130,7 @@ function requestHeaders(token, accept = 'application/vnd.github+json') {
     Accept: accept,
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'Lagent/1.1.0'
+    'User-Agent': 'Lagent/' + APP_VERSION
   };
 }
 

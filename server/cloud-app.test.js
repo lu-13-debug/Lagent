@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { APP_VERSION } from './version.js';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { request } from 'node:http';
@@ -149,7 +150,7 @@ test('OpenCode Go requires an explicit cloud allowlist and keeps credentials ses
 test('cloud runtime, password hashing, opaque secure cookie and duplicate identity validation', async t => {
   const s = await setup(t, { production: true });
   const anon = s.client();
-  assert.deepEqual(await anon.api('/api/runtime'), { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: '1.1.0', modelHosts: ['api.deepseek.com', 'api.anthropic.com', 'api.openai.com'], capabilities: { taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, modelHub: true, reportPdf: true, agentTrace: true, memory: true, modelUsage: true, reportSharing: true }, status: 200, setCookie: null });
+  assert.deepEqual(await anon.api('/api/runtime'), { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: APP_VERSION, modelHosts: ['api.deepseek.com', 'api.anthropic.com', 'api.openai.com'], capabilities: { taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, modelHub: true, reportPdf: true, agentTrace: true, memory: true, modelUsage: true, superagent: true, reportSharing: true }, status: 200, setCookie: null });
   assert.equal((await anon.api('/api/bootstrap')).status, 401);
   assert.equal((await anon.api('/api/auth/session')).user, null);
   const r = await anon.api('/api/auth/register', 'POST', { username: 'Alice_01', displayName: '阿丽丝', password });

@@ -15,6 +15,8 @@ import { localAgentExecutors } from './work/executors/local-agent.js';
 import { browserExecutor } from './work/executors/browser.js';
 import { githubExecutor } from './work/executors/github.js';
 import { modelExecutor } from './work/executors/model.js';
+import { workbuddyExecutor } from './work/executors/workbuddy.js';
+import { loadMcpServers } from './work/mcp-client.js';
 import { registerMemory } from './memory-api.js';
 import express from 'express';
 import multer from 'multer';
@@ -22,6 +24,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { Store } from './store.js';
+import { APP_VERSION } from './version.js';
 import { normalizeCompleteness } from './completeness.js';
 import { normalizeTimezone, timezoneMinutes, timezoneCaption } from './timezone.js';
 import { DATASET_LIMITS, generateDemo, parseFiles, publicDataset } from './datasets.js';
@@ -118,7 +121,7 @@ export function createApp(options = {}) {
   };
   app.locals.store = store;
   app.locals.explorer = explorer;
-  app.locals.isBusy = () => explorer.size > 0 || monitor.size > 0 || activeAsync > 0 || workflow.running.size > 0 || store.list('task').some(t => ['running', 'awaiting_approval'].includes(t.status));
+  app.locals.isBusy = () => explorer.size > 0 || monitor.size > 0 || activeAsync > 0 || workflow.running.size > 0 || store.list('task').some(t => ['running', 'awaiting_approval'].includes(t.status)) || Boolean(app.locals.workBusy?.());
   let closed = false;
   app.locals.close = () => { if (closed) return; closed = true; closeWork?.(); if (ownsMobileGateway) mobileGateway?.close(); explorer.close(); monitor.close(); workflow.close(); key = ''; store.close(); };
   function ensureDemo() {
@@ -211,25 +214,29 @@ export function createApp(options = {}) {
         return stage?modelHub.context(stage):null;
       },
       // 会话级模型：允许这一步用指定的模型配置，而不是全局默认模型。
-      contextFor:profileId=>modelHub.contextForProfile(profileId),
+      contextFor:(profileId,effort)=>modelHub.contextForProfile(profileId,effort),
       // 项目现状（最近改动 + 记忆摘要）：让内置 Agent 先看「别人改了什么」，
       // 而不是每次都把整个文件重读一遍。
       projectState:workspace=>{
         try{return projectStateOf(workspace);}catch{return '';}
       },
+      // 内置模型可以直接调用项目配置的 MCP 工具；未配置或显式关闭时返回空列表。
+      mcpServers:workspace=>process.env.LAGENT_MCP_CLIENT==='0'?[]:loadMcpServers({store,ownerId:options.userId||'local',workspace,env:process.env}),
       fetchImpl:options.fetchImpl||fetch,
     });
     const mobileOwnerId=options.userId||'local';
     const windowBridge=options.cloud?null:(options.windowBridge??createWindowBridge());
     const providerRegistry=options.providerRegistry??createProviderRegistry(windowBridge?{desktopProbe:()=>windowBridge.listWindows()}:{});
     const window=windowBridge?windowExecutor({store,bridge:windowBridge,...(process.env.LAGENT_WINDOW_WAIT_MS?{maxWaitMs:Number(process.env.LAGENT_WINDOW_WAIT_MS)}:{})}):null;
-    const executors=createExecutorRegistry([analysis,terminal,codex,claudeCode,...localAgents,browser,github,modelAgent,...(window?[window]:[]),...acp]);
+    // WorkBuddy 桌面端：通过 Chromium 调试端口派发任务并读取回复，没有可用的 CLI。
+    const workbuddy=options.cloud?null:workbuddyExecutor({store});
+    const executors=createExecutorRegistry([analysis,terminal,codex,claudeCode,...localAgents,browser,github,modelAgent,...(window?[window]:[]),...(workbuddy?[workbuddy]:[]),...acp]);
     mobileGateway=options.mobileGateway||new MobileGateway({dataDir:path.join(storeDir,'mobile'),now:options.now});
     ownsMobileGateway=!options.mobileGateway;
     registerMobilePairingRoutes(app,mobileGateway,{desktopOwner:options.mobileDesktopOwner||(()=>mobileOwnerId)});
-    closeWork=registerWork(app,store,executors,{isSessionValid:options.isSessionValid,onConnect:options.onTaskEventConnect,mobileGateway,mobileOwnerId,onMobileEventConnect:options.onMobileEventConnect,workspace:workCwd,brain:workBrain,planner:options.workPlanner??(async input=>{try{return await modelHub.suggestWorkPlan(input);}catch(error){try{return await agentPlanner(input);}catch(fallbackError){throw fallbackError?.message?Object.assign(error,{message:`${error.message}；本机 Agent 也无法拆解：${fallbackError.message}`}):error;}}}),windowBridge,providerRegistry,allowFilesystemBrowser:!options.cloud});
+    closeWork=registerWork(app,store,executors,{isSessionValid:options.isSessionValid,onConnect:options.onTaskEventConnect,mobileGateway,mobileOwnerId,onMobileEventConnect:options.onMobileEventConnect,workspace:workCwd,brain:workBrain,planner:options.workPlanner??(async input=>{try{return await modelHub.suggestWorkPlan(input);}catch(error){try{return await agentPlanner(input);}catch(fallbackError){throw fallbackError?.message?Object.assign(error,{message:`${error.message}；本机 Agent 也无法拆解：${fallbackError.message}`}):error;}}}),windowBridge,providerRegistry,ownerId:options.userId||'local',allowFilesystemBrowser:!options.cloud,mcpTokenIndex:options.mcpTokenIndex});
   }
-  app.get('/api/runtime', (_req, res) => res.json({ mode: 'local', authRequired: false, serviceName: 'Lagent', version: '1.1.0', capabilities: taskCapabilities(enableWork) }));
+  app.get('/api/runtime', (_req, res) => res.json({ mode: 'local', authRequired: false, serviceName: 'Lagent', version: APP_VERSION, capabilities: taskCapabilities(enableWork) }));
   app.get('/api/model-usage', (req, res) => {
     const days = req.query.days ?? '30';
     if (typeof days !== 'string' || !['7', '30', '90', 'all'].includes(days)) return res.status(400).json({ error: '用量范围仅支持7、30、90或all' });
@@ -237,7 +244,7 @@ export function createApp(options = {}) {
   });
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/metric-catalog', (req, res) => res.json({ metrics: getMetricCatalog(selectedDomain(req.query.domain)) }));
-  app.get('/api/bootstrap', (req, res) => res.json({ project: { ...PROJECT, ...(options.cloud ? { description: '数据分析工作台 · 云端个人工作空间' } : {}) }, tasks: store.list('task').map(taskView), datasets: store.list('dataset').map(publicDataset), ...store.walletSnapshot(), skills: SKILLS, domains: DOMAINS, settings: publicSettings(req) }));
+  app.get('/api/bootstrap', (req, res) => res.json({ project: { ...PROJECT, ...(options.cloud ? { description: '多 Agent 指挥台 · 云端个人工作空间' } : {}) }, tasks: store.list('task').map(taskView), datasets: store.list('dataset').map(publicDataset), ...store.walletSnapshot(), skills: SKILLS, domains: DOMAINS, settings: publicSettings(req) }));
   const checkDatasetLimit = () => { if (store.list('dataset').length >= (options.maxDatasets ?? Infinity)) throw statusError('每个账号最多保存 20 份数据，请先删除不再使用的数据', 429); };
   app.post('/api/datasets/demo', (_req, res) => {
     checkDatasetLimit();

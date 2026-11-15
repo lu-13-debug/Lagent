@@ -22,6 +22,7 @@ export const DEFAULT_WINDOW_PROCESSES = Object.freeze([
 export const MAX_SEND_TEXT = 8000;
 export const MAX_READ_TEXT = 20000;
 export const MAX_OUTPUT_BYTES = 64 * 1024;
+export const MAX_FRAME_BYTES = 512 * 1024;
 const MAX_WINDOWS = 50;
 const MAX_STDERR_BYTES = 4096;
 const DEFAULT_TIMEOUT_MS = 12000;
@@ -44,6 +45,8 @@ const ERROR_DEFINITIONS = Object.freeze({
   invalid_result: { status: 502, message: '窗口桥返回结果无效' },
   read_failed: { status: 502, message: '窗口文本读取失败' },
   send_failed: { status: 502, message: '窗口文本发送失败' },
+  capture_failed: { status: 502, message: '窗口截图失败' },
+  frame_too_large: { status: 502, message: '窗口截图体积超过限制' },
   bridge_failed: { status: 502, message: '窗口操作失败' },
   operation_failed: { status: 502, message: '窗口操作失败' },
   spawn_failed: { status: 503, message: '无法启动窗口桥' }
@@ -161,7 +164,9 @@ function runPowerShell({
   spawnImpl,
   scriptPath,
   timeoutMs,
-  allowedProcesses
+  allowedProcesses,
+  maxOutput = MAX_OUTPUT_BYTES,
+  quality
 }) {
   return new Promise((resolve, reject) => {
     const args = [
@@ -185,7 +190,8 @@ function runPowerShell({
     args.push('-Allow', allowedProcesses.join('|'));
     args.push('-MaxText', String(MAX_SEND_TEXT));
     args.push('-MaxRead', String(MAX_READ_TEXT));
-    args.push('-MaxOutput', String(MAX_OUTPUT_BYTES));
+    args.push('-MaxOutput', String(maxOutput));
+    if (quality !== undefined) args.push('-Quality', String(quality));
     args.push('-TimeoutMs', String(Math.max(1000, Math.trunc(timeoutMs))));
 
     let child;
@@ -230,7 +236,7 @@ function runPowerShell({
       if (settled) return;
       const buffer = toBuffer(chunk);
       stdoutBytes += buffer.length;
-      if (stdoutBytes > MAX_OUTPUT_BYTES) {
+      if (stdoutBytes > maxOutput) {
         stop();
         finish(new WindowBridgeError('output_too_large'));
         return;
@@ -286,8 +292,10 @@ export function createWindowBridge({
     expectProcess: options.expectProcess,
     spawnImpl,
     scriptPath,
-    timeoutMs: budget,
-    allowedProcesses: allow
+    timeoutMs: options.timeoutMs || budget,
+    allowedProcesses: allow,
+    maxOutput: options.maxOutput,
+    quality: options.quality
   });
 
   async function listWindows() {
@@ -385,7 +393,33 @@ export function createWindowBridge({
     return { ok: true, process: reported, submitted: payload.submitted === true, handle: usedHandle, relocated: usedHandle !== id };
   }
 
-  return { listWindows, readWindow, sendToWindow };
+  async function captureWindow(handle, { process: processName, quality = 55 } = {}) {
+    const id = normalizeHandle(handle);
+    const expectProcess = normalizeExpectProcess(processName);
+    assertProcessAllowed(expectProcess, allow);
+    const level = Math.max(10, Math.min(90, Math.trunc(Number(quality) || 55)));
+    const payload = await call('capture', {
+      handle: id,
+      expectProcess,
+      maxOutput: MAX_FRAME_BYTES,
+      quality: level,
+      timeoutMs: 20000
+    });
+    if (payload?.ok !== true) throw failureFromPayload(payload) || new WindowBridgeError('invalid_result');
+    if (typeof payload.image !== 'string' || !/^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(payload.image)) {
+      throw new WindowBridgeError('invalid_result');
+    }
+    if (Buffer.byteLength(payload.image, 'utf8') > MAX_FRAME_BYTES) throw new WindowBridgeError('frame_too_large');
+    const width = Number(payload.width);
+    const height = Number(payload.height);
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1) throw new WindowBridgeError('invalid_result');
+    const reported = cleanText(payload.process, 80);
+    if (expectProcess && reported && reported.toLowerCase() !== expectProcess.toLowerCase()) throw new WindowBridgeError('process_mismatch');
+    if (reported) assertProcessAllowed(reported, allow);
+    return { image: payload.image, width, height, process: reported, title: cleanText(payload.title, 200) };
+  }
+
+  return { listWindows, readWindow, sendToWindow, captureWindow };
 }
 
 const defaultBridge = createWindowBridge();
@@ -408,5 +442,6 @@ export default {
   createWindowBridge,
   listWindows,
   readWindow,
-  sendToWindow
+  sendToWindow,
+  captureWindow: (handle, options) => defaultBridge.captureWindow(handle, options)
 };

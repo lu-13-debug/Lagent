@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { CredentialVault, vaultError } from './credential-vault.js';
+import { createProviderPool } from './provider-pool.js';
 import { chat, validateSettings } from './gateway.js';
 import { listModels } from './model-catalog.js';
 import { modelCapabilities, validateEffort } from './model-protocol.js';
@@ -67,6 +68,7 @@ const PLAN_SYSTEM_PROMPT = '你是 Lagent 的任务规划器。把用户目标�
 export function registerModelHub(app, { store, ownerId = 'local', masterKey, assertModelSettings, fetchImpl = fetch }) {
   ownerId = String(ownerId);
   const vault = new CredentialVault({ store, ownerId, masterKey });
+  const pool = createProviderPool({ store, vault, ownerId, fetchImpl });
   const profileKey = `model-hub-profiles-v1:${ownerId}`, skillKey = `model-hub-skills-v1:${ownerId}`, workflowKey = `model-hub-workflow-v1:${ownerId}`;
   const storedProfiles = () => store.config(profileKey) || [];
   const privateSkills = () => store.config(skillKey) || [];
@@ -78,13 +80,38 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     return profile;
   };
   const settingsFor = (credential, model) => ({ provider: credential.provider, baseUrl: credential.baseUrl, protocol: credential.protocol, model });
+  // 配置档可以绑定单条凭据，也可以绑定 Key 池；池对外只暴露凭据 ID 与 Key 尾号。
+  const bindingFor = profile => {
+    if (profile?.poolId) {
+      const row = pool.get(profile.poolId);
+      return { provider: row.provider, baseUrl: row.baseUrl, protocol: row.protocol, poolId: row.id, pool: row };
+    }
+    const credential = vault.get(profile.credentialId);
+    return { provider: credential.provider, baseUrl: credential.baseUrl, protocol: credential.protocol, credentialId: credential.id, credential };
+  };
+  const settingsForBinding = (binding, model) => ({ provider: binding.provider, baseUrl: binding.baseUrl, protocol: binding.protocol, model });
   const assertSettings = settings => { try { assertModelSettings?.(settings); } catch (error) { throw vaultError(error.message, error.status || 400); } };
   const profiles = () => storedProfiles().map(profile => {
-    let credential; try { credential = vault.get(profile.credentialId); } catch { /* 删除凭据保留配置名称，便于用户重新关联。 */ }
-    return { ...profile, capabilities: credential ? modelCapabilities(settingsFor(credential, profile.model)) : { efforts: ['default'], tools: false, reason: '引用的凭据已删除，请重新关联。' }, ...(!credential ? { unavailable: true } : {}) };
+    let binding; try { binding = bindingFor(profile); } catch { /* 删除凭据/池后保留配置名称，便于用户重新关联。 */ }
+    return { ...profile, capabilities: binding ? modelCapabilities(settingsForBinding(binding, profile.model)) : { efforts: ['default'], tools: false, reason: '引用的凭据或 Key 池已删除，请重新关联。' }, ...(!binding ? { unavailable: true } : {}) };
   });
-  const publicState = () => ({ credentials: vault.list(), profiles: profiles(), workflow: workflow(), skills: skills(), vault: vault.status() });
+  const publicState = () => ({ credentials: vault.list(), profiles: profiles(), pools: pool.list(), workflow: workflow(), skills: skills(), vault: vault.status() });
   const validateConfig = input => validateWorkflow(input, { profiles: profiles(), skills: skills(), previous: workflow() });
+  // 把配置档绑定冻结成快照：单凭据记录 ID+版本，Key 池记录池版本与每个成员的凭据版本。
+  const captureBinding = binding => {
+    if (binding.poolId) {
+      const row = pool.get(binding.poolId);
+      const members = row.members.map(member => {
+        const credential = vault.get(member.credentialId);
+        vault.decrypt(credential.id, credential.version);
+        return { credentialId: credential.id, credentialVersion: credential.version };
+      });
+      return { poolId: row.id, poolVersion: row.version, poolMembers: members };
+    }
+    const credential = vault.get(binding.credentialId);
+    vault.decrypt(credential.id, credential.version);
+    return { credentialId: credential.id, credentialVersion: credential.version };
+  };
   const captureWorkflow = () => {
     const config = validateConfig(workflow());
     if (!config.defaultProfileId) throw vaultError('请先选择工作流默认模型');
@@ -96,24 +123,26 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
         stages[stageId] = { ...stage, stageId, ownerId, engine: 'pdf', profileId: null, settings: null, skill: frozenSkill };
         continue;
       }
-      const profile = profileById(stage.profileId ?? config.defaultProfileId), credential = vault.get(profile.credentialId);
-      const settings = { ...settingsFor(credential, profile.model), effort: stage.effort };
+      const profile = profileById(stage.profileId ?? config.defaultProfileId), binding = bindingFor(profile);
+      const settings = { ...settingsForBinding(binding, profile.model), effort: stage.effort };
       assertSettings(settings); validateEffort(settings);
-      // 提前验证密钥可用，但只把ID与版本引用写入快照。
-      vault.decrypt(credential.id, credential.version);
-      stages[stageId] = { ...stage, stageId, ownerId, profileId: profile.id, profileVersion: profile.version, profileName: profile.name, credentialId: credential.id, credentialVersion: credential.version, settings, skill: frozenSkill };
+      // 提前验证密钥可用，但只把 ID/版本引用写入快照。
+      const captured = captureBinding(binding);
+      stages[stageId] = { ...stage, stageId, ownerId, profileId: profile.id, profileVersion: profile.version, profileName: profile.name, ...captured, settings, skill: frozenSkill };
       if (stage.subagents?.length) stages[stageId].subagents = stage.subagents.map(child => {
-        const profile = profileById(child.profileId), secret = vault.get(profile.credentialId);
-        const settings = { ...settingsFor(secret, profile.model), effort: child.effort ?? stage.effort };
-        assertSettings(settings); validateEffort(settings); vault.decrypt(secret.id, secret.version);
-        return {...child,effort:child.effort ?? stage.effort,skill:structuredClone(child.skillId ? skills().find(s=>s.id===child.skillId) : frozenSkill),ownerId,model:profile.model,profileName:profile.name,credentialId:secret.id,credentialVersion:secret.version,settings,maxTokens:child.maxTokens || stage.maxTokens,timeoutMs:child.timeoutMs || Math.min(stage.timeoutMs,300000)};
+        const profile = profileById(child.profileId), binding = bindingFor(profile);
+        const settings = { ...settingsForBinding(binding, profile.model), effort: child.effort ?? stage.effort };
+        assertSettings(settings); validateEffort(settings);
+        const captured = captureBinding(binding);
+        return {...child,effort:child.effort ?? stage.effort,skill:structuredClone(child.skillId ? skills().find(s=>s.id===child.skillId) : frozenSkill),ownerId,model:profile.model,profileName:profile.name,...captured,settings,maxTokens:child.maxTokens || stage.maxTokens,timeoutMs:child.timeoutMs || Math.min(stage.timeoutMs,300000)};
       });
       if (stageId === 'insights' && stage.review?.reviewerProfileIds.length) {
         stages[stageId].reviewers = stage.review.reviewerProfileIds.map(id => {
-          const reviewer = profileById(id), secret = vault.get(reviewer.credentialId);
-          const reviewerSettings = { ...settingsFor(secret, reviewer.model), effort: stage.effort };
-          assertSettings(reviewerSettings); validateEffort(reviewerSettings); vault.decrypt(secret.id, secret.version);
-          return { ownerId, profileId: reviewer.id, profileName: reviewer.name, model: reviewer.model, credentialId: secret.id, credentialVersion: secret.version, settings: reviewerSettings, maxTokens: stage.maxTokens, timeoutMs: stage.timeoutMs };
+          const reviewer = profileById(id), binding = bindingFor(reviewer);
+          const reviewerSettings = { ...settingsForBinding(binding, reviewer.model), effort: stage.effort };
+          assertSettings(reviewerSettings); validateEffort(reviewerSettings);
+          const captured = captureBinding(binding);
+          return { ownerId, profileId: reviewer.id, profileName: reviewer.name, model: reviewer.model, ...captured, settings: reviewerSettings, maxTokens: stage.maxTokens, timeoutMs: stage.timeoutMs };
         });
       }
     }
@@ -136,6 +165,8 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     const reply = await chat({
       settings: modelContext.settings,
       key: modelContext.key,
+      pool: modelContext.pool,
+      poolId: modelContext.poolId,
       maxTokens: 1600,
       timeoutMs: Math.min(modelContext.timeoutMs, 60000),
       messages: [{ role: 'system', content: PLAN_SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify({ goal: goalText, executors: plannerExecutors, datasets: datasetList, windows: windowList, project: project && typeof project === 'object' ? { name: typeof project.name === 'string' ? project.name.slice(0, 80) : '', path: typeof project.path === 'string' ? project.path.slice(0, 300) : '', gitBranch: typeof project.gitBranch === 'string' ? project.gitBranch.slice(0, 80) : '', memory: typeof project.memory === 'string' ? project.memory.slice(0, 1600) : '' } : null }) }],
@@ -161,6 +192,30 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
   };
   const context = stage => {
     if (!object(stage) || stage.ownerId !== ownerId || !object(stage.settings) || !STAGE_DEFINITIONS.some(([id]) => id === stage.stageId && id !== 'pdf')) throw vaultError('阶段模型快照无效或不属于当前账号', 403);
+    if (stage.poolId) {
+      const row = pool.get(stage.poolId);
+      if ((row.version || 1) !== (stage.poolVersion || 1)) throw vaultError('Key 池已变更，请重新创建任务', 409);
+      const keys = [];
+      for (const member of stage.poolMembers || []) {
+        const credential = vault.get(member.credentialId);
+        if (credential.version !== member.credentialVersion) throw vaultError('Key 池中的凭据已变更，请重新创建任务', 409);
+        if (credential.baseUrl !== stage.settings.baseUrl || credential.protocol !== stage.settings.protocol) throw vaultError('凭据与阶段接口绑定不匹配', 409);
+        keys.push(vault.decrypt(credential.id, credential.version));
+      }
+      if (!keys.length) throw vaultError('Key 池快照为空，请重新创建任务', 409);
+      assertSettings(stage.settings); validateEffort(stage.settings);
+      return {
+        settings: structuredClone(stage.settings),
+        // key 仅用于日志脱敏的兼容字段；真正请求由 pool 逐 Key 选择。
+        key: keys[0],
+        pool,
+        poolId: row.id,
+        redact: value => keys.reduce((text, key) => text.split(key).join('[已隐藏凭据]'), String(value ?? '')),
+        maxTokens: stage.maxTokens,
+        timeoutMs: stage.timeoutMs,
+        fetchImpl
+      };
+    }
     const credential = vault.get(stage.credentialId);
     if (credential.version !== stage.credentialVersion) throw vaultError('凭据版本已变更，请重新创建任务', 409);
     if (credential.baseUrl !== stage.settings.baseUrl || credential.protocol !== stage.settings.protocol) throw vaultError('凭据与阶段接口绑定不匹配', 409);
@@ -171,19 +226,31 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
   // 思考强度也随会话走：不支持该档位的模型会当场报错，而不是静默降级成默认档。
   const contextForProfile = (profileId, effort = 'default') => {
     const profile = profileById(field(profileId, '模型配置ID', 100));
-    const credential = vault.get(profile.credentialId);
+    const binding = bindingFor(profile);
     const config = workflow();
     const stage = config.stages.plan || {};
-    const settings = { ...settingsFor(credential, profile.model), effort: normalizeEffort(effort) };
+    const settings = { ...settingsForBinding(binding, profile.model), effort: normalizeEffort(effort) };
     assertSettings(settings);
     // 未在能力表里确认过的档位也允许尝试：执行器在供应商明确拒绝时会退回默认档重试，
     // 并在结果里标注「已按默认档执行」，所以这里只拦明显非法的取值。
     if (!['default', 'low', 'medium', 'high', 'xhigh', 'max'].includes(settings.effort)) {
       throw vaultError('思考强度取值无效');
     }
+    if (binding.poolId) {
+      return {
+        settings,
+        pool,
+        poolId: binding.poolId,
+        maxTokens: Number.isSafeInteger(stage.maxTokens) ? stage.maxTokens : 8192,
+        timeoutMs: Number.isSafeInteger(stage.timeoutMs) ? Math.min(stage.timeoutMs, 300000) : 300000,
+        fetchImpl,
+        profileId: profile.id,
+        profileName: profile.name
+      };
+    }
     return {
       settings,
-      key: vault.decrypt(credential.id, credential.version),
+      key: vault.decrypt(binding.credentialId),
       maxTokens: Number.isSafeInteger(stage.maxTokens) ? stage.maxTokens : 8192,
       timeoutMs: Number.isSafeInteger(stage.timeoutMs) ? Math.min(stage.timeoutMs, 300000) : 300000,
       fetchImpl,
@@ -197,6 +264,21 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     return handler(req, res);
   };
   app.get('/api/model-hub', (_req, res) => res.json(publicState()));
+  // Key 池管理：成员只引用已有凭据；池的接口地址/协议必须与所有成员一致。
+  app.get('/api/provider-pools', (_req, res) => res.json({ pools: pool.list() }));
+  app.post('/api/provider-pools', route((req, res) => res.json({ pool: pool.save({ ...(req.body || {}) }) })));
+  app.put('/api/provider-pools/:id', route((req, res) => res.json({ pool: pool.save({ ...(req.body || {}), id: req.params.id }) })));
+  app.delete('/api/provider-pools/:id', route((req, res) => res.json(pool.remove(req.params.id))));
+  app.get('/api/provider-pools/:id/explain', route((req, res) => res.json({ routing: pool.explain(req.params.id) })));
+  app.post('/api/provider-pools/:id/test', route(async (req, res) => {
+    const row = pool.get(req.params.id);
+    const profile = storedProfiles().find(item => item.poolId === row.id);
+    if (!profile) throw vaultError('请先为该 Key 池创建模型配置', 400);
+    const checked = validateSettings({ provider: row.provider, baseUrl: row.baseUrl, protocol: row.protocol, model: profile.model });
+    assertSettings(checked);
+    await chat({ settings: { ...checked }, pool, poolId: row.id, maxTokens: 1024, timeoutMs: 30000, connectionTest: true, messages: [{ role: 'user', content: 'Reply with OK.' }], fetchImpl });
+    res.json({ ok: true, message: 'Key 池连接成功；如首个 Key 失败，已自动切换到下一个。' });
+  }));
   app.post('/api/model-credentials', route((req, res) => {
     // 主机策略在保存之前执行，禁用主机不能获得可使用的持久凭据。
     let candidate; try { candidate = validateSettings({ ...(req.body || {}), model: 'credential-validation' }); } catch (error) { throw vaultError(error.message); }
@@ -210,12 +292,21 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
   app.delete('/api/model-credentials/:id', route((req, res) => { vault.delete(req.params.id); res.json({ ok: true }); }));
   const saveProfile = (input, previous) => {
     const name = field(input.name ?? previous?.name, '模型配置名称', 80);
-    const credentialId = field(input.credentialId ?? previous?.credentialId, '凭据ID', 100);
-    const credential = vault.get(credentialId);
+    const poolId = typeof input.poolId === 'string' ? input.poolId.trim() : (input.poolId === null ? '' : (previous?.poolId || ''));
+    let credentialId = '';
+    let binding;
+    if (poolId) {
+      const row = pool.get(poolId);
+      binding = { provider: row.provider, baseUrl: row.baseUrl, protocol: row.protocol, poolId: row.id };
+    } else {
+      credentialId = field(input.credentialId ?? previous?.credentialId, '凭据ID', 100);
+      const credential = vault.get(credentialId);
+      binding = { provider: credential.provider, baseUrl: credential.baseUrl, protocol: credential.protocol, credentialId };
+    }
     const model = field(input.model ?? previous?.model, '模型ID', 200);
-    let checked; try { checked = validateSettings({ ...settingsFor(credential, model), provider: credential.provider }); } catch (error) { throw vaultError(error.message); }
+    let checked; try { checked = validateSettings({ ...settingsForBinding(binding, model), provider: binding.provider }); } catch (error) { throw vaultError(error.message); }
     assertSettings(checked);
-    const profile = { id: previous?.id ?? randomUUID(), name, credentialId, model: checked.model, version: (previous?.version || 0) + 1 };
+    const profile = { id: previous?.id ?? randomUUID(), name, ...(poolId ? { poolId } : { credentialId }), model: checked.model, version: (previous?.version || 0) + 1 };
     store.config(profileKey, [...storedProfiles().filter(item => item.id !== profile.id), profile]);
     // 第一个模型配置自动成为默认模型：否则用户得再进「规划设置」手动选一次，
     // 而这正是内置模型 Agent 一直显示「未就绪」的常见原因。
@@ -238,10 +329,20 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     store.config(workflowKey, config); res.json({ ok: true });
   }));
   app.post('/api/model-profiles/:id/test', route(async (req, res) => {
-    const profile = profileById(req.params.id), credential = vault.get(profile.credentialId), settings = settingsFor(credential, profile.model);
+    const profile = profileById(req.params.id), binding = bindingFor(profile), settings = settingsForBinding(binding, profile.model);
     assertSettings(settings);
-    await chat({ settings, key: vault.decrypt(credential.id), maxTokens: 1024, timeoutMs: 30000, connectionTest: true, messages: [{ role: 'user', content: 'Reply with OK.' }], fetchImpl });
-    res.json({ ok: true, message: '连接成功，所选模型已返回有效响应。' });
+    await chat({
+      settings,
+      key: binding.poolId ? undefined : vault.decrypt(binding.credentialId),
+      pool: binding.poolId ? pool : undefined,
+      poolId: binding.poolId,
+      maxTokens: 1024,
+      timeoutMs: 30000,
+      connectionTest: true,
+      messages: [{ role: 'user', content: 'Reply with OK.' }],
+      fetchImpl
+    });
+    res.json({ ok: true, message: binding.poolId ? '连接成功；Key 池已按策略选择可用 Key。' : '连接成功，所选模型已返回有效响应。' });
   }));
   app.post('/api/model-credentials/:id/models', route(async (req, res) => {
     const credential = vault.get(req.params.id), settings = settingsFor(credential, 'catalog');

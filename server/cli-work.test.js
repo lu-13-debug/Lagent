@@ -157,6 +157,6 @@ test('E2 Work CLI approval freezes input and projects sanitized report/SSE', asy
     num_turns: 1,
     duration_ms: 20
   });
-  assert.deepEqual(new Set(events.map(event => event.type)), new Set(['ticket', 'assignment', 'report']));
+  assert.deepEqual(new Set(events.map(event => event.type)), new Set(['ticket', 'assignment', 'activity', 'report']));
   assert.doesNotMatch(JSON.stringify({ codexDetail, claudeDetail, events }), /FROZEN_|TAMPERED_|must-not-leak|OPENAI_API_KEY|ANTHROPIC_API_KEY/);
 });

@@ -154,7 +154,10 @@ test('settings never expose or persist key and cross-site mutation is denied', a
   assert.equal(JSON.stringify(result).includes(secret), false);
   assert.equal((await api('/api/settings', 'PUT', { provider: 'x', baseUrl: 'http://example.com/v1', model: 'x' })).status, 400);
   assert.equal((await api('/api/datasets/demo', 'POST', {}, { origin: 'https://evil.example' })).status, 403);
-  for (const file of await readdir(dir)) assert.equal((await readFile(path.join(dir, file))).includes(Buffer.from(secret)), false);
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    assert.equal((await readFile(path.join(dir, entry.name))).includes(Buffer.from(secret)), false);
+  }
   result = await api('/api/settings', 'PUT', { provider: '兼容服务', baseUrl: 'http://127.0.0.1:9876/v1', model: 'local', clearKey: true });
   assert.equal(result.settings.hasKey, false);
 });
@@ -396,8 +399,9 @@ test('AI task snapshots initial endpoint, model and key despite later settings c
   const done = await waitFor(api, c.task.id, 'completed');
   assert.equal(done.task.model, 'old-model');
   assert.deepEqual(requests, [{ url: 'https://old.example.test/v1/chat/completions', model: 'old-model', authorization: 'Bearer snapshot-old-key' }]);
-  for (const file of await readdir(dir)) {
-    const contents = await readFile(path.join(dir, file));
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const contents = await readFile(path.join(dir, entry.name));
     assert.equal(contents.includes(Buffer.from('snapshot-old-key')), false);
     assert.equal(contents.includes(Buffer.from('snapshot-new-key')), false);
   }

@@ -1,8 +1,17 @@
+import express from 'express';
+import path from 'node:path';
 import { createWorkEngine } from './engine.js';
+import { createBackupService } from './backup.js';
+import { scanHistoricalUsage } from './session-usage.js';
 import { workEvents } from './effects.js';
 import { mergeRuns, planToRun, taggedRun } from './run-projection.js';
 import { registerMobileWorkRoutes } from '../mobile-gateway.js';
 import { registerMcpRoutes } from './mcp.js';
+import { createMcpTokenService } from './mcp-tokens.js';
+import { createRoutineService, ROUTINE_KINDS } from './routines.js';
+import { createMcpBridge, loadMcpServers, normalizeMcpServers } from './mcp-client.js';
+import { createImNotifier } from './im-notify.js';
+import { createLiveService, SENSITIVE_TITLE } from './live-session.js';
 
 // 执行器（特别是模型 Agent）需要知道「这个工作目录属于哪个项目、最近改了什么」。
 // 执行器比引擎先创建，所以这里按 workspace 登记引擎，事后反查。
@@ -23,13 +32,18 @@ export function projectStateOf(workspace) {
   }
 }
 
-export function registerWork(app,store,executor,{isSessionValid,onConnect,mobileGateway,mobileOwnerId,onMobileEventConnect,planner,windowBridge,providerRegistry,workspace,brain,allowFilesystemBrowser=false}={}) {
+export function registerWork(app,store,executor,{isSessionValid,onConnect,mobileGateway,mobileOwnerId,onMobileEventConnect,planner,windowBridge,providerRegistry,workspace,brain,ownerId='local',allowFilesystemBrowser=false,mcpTokenIndex=null}={}) {
   const events=workEvents({ store });
+  let imNotifier=null;
   const publish=event=>{
     events.publish(event);
     if(mobileGateway)mobileGateway.publish(mobileOwnerId,event);
+    if(imNotifier&&(event.type==='ticket'||event.type==='usage-alert'))imNotifier.onEvent(event).catch(()=>{});
   };
   const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain,outboxEnabled:process.env.LAGENT_WORK_OUTBOX==='1'});
+  // cloud-app 的空闲回收要靠它判断「这个 workspace 里还有没有活」，否则长任务会被当成空闲关掉。
+  app.locals.workBusy = () => engine.hasActiveWork();
+  imNotifier=createImNotifier({store,engine,ownerId,env:process.env});
   enginesByWorkspace.set(typeof workspace==='string'?workspace:'', engine);
   fallbackEngine = engine;
   app.get('/api/work/bootstrap',(_req,res)=>res.json(engine.bootstrap()));
@@ -46,6 +60,33 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/projects/:id/teamwork',(req,res)=>res.status(201).json(engine.teamworkStart(req.params.id,req.body)));
   app.get('/api/work/projects/:id/teamworks',(req,res)=>res.json({teamworks:engine.teamworkList(req.params.id)}));
   app.get('/api/work/teamworks/:id',(req,res)=>res.json({teamwork:engine.teamworkGet(req.params.id)}));
+  // 团队房间：聚合计划步骤、工单状态、报告、消息、认领与决定日志。
+  app.get('/api/work/projects/:id/rooms',(req,res)=>res.json({rooms:engine.listTeamRooms(req.params.id)}));
+  app.post('/api/work/projects/:id/rooms',(req,res)=>res.status(201).json({room:engine.createTeamRoom({...req.body,projectId:req.params.id})}));
+  app.get('/api/work/rooms/:id',(req,res)=>res.json({room:engine.getTeamRoom(req.params.id)}));
+  app.patch('/api/work/rooms/:id',(req,res)=>res.json({room:engine.updateTeamRoom(req.params.id,req.body)}));
+  app.delete('/api/work/rooms/:id',(req,res)=>res.json(engine.deleteTeamRoom(req.params.id)));
+  app.post('/api/work/rooms/:id/messages',(req,res)=>res.status(201).json(engine.postTeamRoomMessage(req.params.id,req.body)));
+  app.post('/api/work/rooms/:id/claims',(req,res)=>res.json({room:engine.claimTeamRoomTicket(req.params.id,req.body)}));
+  app.post('/api/work/rooms/:id/decisions',(req,res)=>res.status(201).json(engine.decideTeamRoom(req.params.id,req.body)));
+  // IM 通知：Webhook 只用于推送，审批必须走带签名的链接；GET 只展示确认页，不执行动作。
+  const actionPage=(title,body)=>`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="font-family:system-ui;max-width:520px;margin:10vh auto;padding:0 20px;line-height:1.6"><h2>${title}</h2>${body}</body>`;
+  const escapeHtml=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  app.get('/api/work/im/config',(_req,res)=>res.json(imNotifier.list()));
+  app.post('/api/work/im/channels',(req,res)=>res.status(201).json(imNotifier.saveChannel(req.body)));
+  app.patch('/api/work/im/channels/:id',(req,res)=>res.json(imNotifier.saveChannel({...req.body,id:req.params.id})));
+  app.delete('/api/work/im/channels/:id',(req,res)=>res.json(imNotifier.removeChannel(req.params.id)));
+  app.post('/api/work/im/channels/:id/test',async(req,res)=>res.json(await imNotifier.testChannel(req.params.id)));
+  app.get('/api/work/im/actions/:token',(req,res)=>{
+    const verified=imNotifier.verifyAction(req.params.token);
+    const label=verified.action==='approve'?'批准':'拒绝';
+    res.type('html').send(actionPage('确认远程审批',`<p>将对工单 <code>${escapeHtml(verified.ticketId)}</code> 执行「${label}」。</p><form method="post"><button type="submit" style="padding:10px 20px;font-size:16px">确认${label}</button></form><p style="color:#666">链接仅可使用一次，过期或不匹配时会被拒绝。</p>`));
+  });
+  app.post('/api/work/im/actions/:token',(req,res)=>{
+    const result=imNotifier.executeAction(req.params.token);
+    if(String(req.headers.accept||'').includes('text/html'))return res.type('html').send(actionPage('审批已提交',`<p>工单 <code>${escapeHtml(result.ticket.id)}</code> 已执行「${escapeHtml(result.action)}」，当前状态：${escapeHtml(result.ticket.status)}。</p>`));
+    res.json(result);
+  });
   app.post('/api/work/teamworks/:id/assemble',(req,res)=>res.json(engine.teamworkAssemble(req.params.id)));
   app.post('/api/work/teamworks/:id/retry',(req,res)=>res.status(201).json(engine.teamworkRetry(req.params.id,req.body?.partId)));
   app.delete('/api/work/chats/:id',(req,res)=>res.json(engine.deleteProjectChat(req.params.id)));
@@ -60,17 +101,94 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.get('/api/work/projects/:id/brief',(req,res)=>res.json({brief:engine.projectBrief(req.params.id)}));
   app.put('/api/work/projects/:id/brief',(req,res)=>res.json({brief:engine.saveProjectBrief(req.params.id,req.body)}));
   app.get('/api/work/projects/:id/brief.md',(req,res)=>res.json(engine.projectBriefMarkdown(req.params.id)));
+  // Library 同步：先预览托管块差异，确认后写文件并备份，可随时回滚。
+  app.get('/api/work/projects/:id/library/preview',(req,res)=>{
+    const targets=typeof req.query?.targets==='string'&&req.query.targets.trim()?req.query.targets.split(',').map(item=>item.trim()).filter(Boolean):undefined;
+    res.json(engine.libraryPreview(req.params.id,{targets,mcpUrl:req.query?.mcpUrl}));
+  });
+  app.post('/api/work/projects/:id/library/apply',(req,res)=>res.json(engine.libraryApply(req.params.id,req.body||{})));
+  app.get('/api/work/projects/:id/library/syncs',(req,res)=>res.json({syncs:engine.librarySyncs(req.params.id)}));
+  app.post('/api/work/projects/:id/library/rollback',(req,res)=>res.json(engine.libraryRollback(req.params.id,req.body?.syncId)));
   app.get('/api/work/projects/:id/changes',(req,res)=>res.json({changes:engine.projectChanges(req.params.id)}));
   app.post('/api/work/projects/:id/changes',(req,res)=>res.status(201).json({change:engine.recordProjectChange(req.params.id,req.body)}));
   app.delete('/api/work/projects/:id/changes/:changeId',(req,res)=>res.json(engine.deleteProjectChange(req.params.id,req.params.changeId)));
   app.get('/api/work/projects/:id/memory',(req,res)=>res.json(engine.projectMemoryDigest(req.params.id,{query:req.query?.query,scope:req.query?.scope,limit:Number(req.query?.limit)||undefined})));
   app.delete('/api/work/projects/:id/memory/:memoryId',(req,res)=>res.json(engine.deleteProjectMemory(req.params.id,req.params.memoryId)));
+  // 例行任务：默认只创建建议工单；Webhook 令牌只在创建/轮换时返回一次，数据库只存哈希。
+  const routines=createRoutineService({store,engine,env:process.env});
+  app.get('/api/work/routines',(_req,res)=>res.json({routines:routines.list(),kinds:[...ROUTINE_KINDS]}));
+  app.post('/api/work/routines',(req,res)=>res.status(201).json(routines.save(req.body)));
+  app.patch('/api/work/routines/:id',(req,res)=>res.json(routines.save({...req.body,id:req.params.id})));
+  app.delete('/api/work/routines/:id',(req,res)=>res.json(routines.remove(req.params.id)));
+  app.post('/api/work/routines/:id/run',(req,res)=>res.json(routines.runNow(req.params.id,{manual:true})));
+  app.post('/api/work/hooks/:token',(req,res)=>res.json(routines.triggerWebhook(req.params.token,req.body)));
+  // 实时观察：仅内存保留最近一帧，敏感标题自动暂停；接管后停止截图。
+  const live=createLiveService({
+    // 画面帧只给桌面端事件流；手机端不需要，也不能把 base64 图片写进通知通道。
+    emit:event=>events.publish(event),
+    env:process.env,
+    capture:windowBridge?.captureWindow
+      ? input=>windowBridge.captureWindow(input.handle,{process:input.process})
+      : async()=>{throw Object.assign(new Error('当前环境不支持实时观察（需要桌面窗口桥）'),{status:409});}
+  });
+  app.get('/api/work/live',(_req,res)=>res.json({sessions:live.list(),sensitivePattern:SENSITIVE_TITLE.source}));
+  app.post('/api/work/live',async(req,res)=>res.status(201).json({session:await live.start(req.body||{})}));
+  app.get('/api/work/live/:id',(req,res)=>res.json({session:live.get(req.params.id)}));
+  app.get('/api/work/live/:id/frame',(req,res)=>res.json({frame:live.frame(req.params.id)}));
+  app.post('/api/work/live/:id/pause',(req,res)=>res.json({session:live.pause(req.params.id,req.body?.reason)}));
+  app.post('/api/work/live/:id/resume',(req,res)=>res.json({session:live.resume(req.params.id)}));
+  app.post('/api/work/live/:id/takeover',(req,res)=>res.json({session:live.takeover(req.params.id)}));
+  app.post('/api/work/live/:id/stop',(req,res)=>res.json(live.stop(req.params.id)));
+  // MCP 客户端配置：只保存显式添加的服务器；env 值写库但不回显，只返回键名。
+  const mcpConfigKey=`mcp-servers-v1:${ownerId}`;
+  const mcpRows=()=>store.config(mcpConfigKey)||[];
+  const publicMcp=row=>({id:row.id,name:row.name,command:row.command,args:row.args||[],enabled:row.enabled!==false,tools:row.tools||[],envKeys:Object.keys(row.env||{}),cwd:row.cwd||''});
+  app.get('/api/work/mcp/servers',(_req,res)=>res.json({servers:mcpRows().map(publicMcp),projectConfig:process.env.LAGENT_MCP_PROJECT_CONFIG==='1'}));
+  app.post('/api/work/mcp/servers',(req,res)=>{
+    const body=req.body||{};
+    const [row]=normalizeMcpServers([{...body,id:body.name}],{workspace:workspace||undefined,env:process.env});
+    if(!row)throw Object.assign(new Error('MCP 服务器配置无效：需要名称、允许的命令（node/npx/python/uvx 等）和参数'),{status:400});
+    const next={...(body.env&&typeof body.env==='object'?{env:row.env}:{}),id:row.id,name:row.name,command:row.command,args:row.args,enabled:row.enabled,tools:row.tools||[],...(row.cwd?{cwd:row.cwd}:{})};
+    const rows=mcpRows().filter(item=>item.id!==next.id);
+    if(rows.length>=10)throw Object.assign(new Error('最多配置 10 个 MCP 服务器'),{status:429});
+    store.config(mcpConfigKey,[...rows,next]);
+    res.status(201).json({server:publicMcp(next)});
+  });
+  app.delete('/api/work/mcp/servers/:id',(req,res)=>{
+    const rows=mcpRows();
+    if(!rows.some(row=>row.id===req.params.id))throw Object.assign(new Error('MCP 服务器不存在'),{status:404});
+    store.config(mcpConfigKey,rows.filter(row=>row.id!==req.params.id));
+    res.json({ok:true,id:req.params.id});
+  });
+  app.post('/api/work/mcp/test',async(req,res)=>{
+    const input=req.body||{};
+    let configs;
+    if(typeof input.name==='string'&&input.name.trim()){
+      // 测试未保存的草稿：与保存走同一套白名单与路径校验。
+      const [row]=normalizeMcpServers([{...input,id:input.name}],{workspace:workspace||undefined,env:process.env});
+      if(!row)throw Object.assign(new Error('MCP 服务器配置无效：需要名称、允许的命令（node/npx/python/uvx 等）和参数'),{status:400});
+      configs=[row];
+    }else{
+      configs=loadMcpServers({store,ownerId,workspace:workspace||undefined,env:process.env});
+    }
+    if(!configs.length)return res.json({ok:true,servers:[],tools:0,schemas:[],message:'尚未配置 MCP 服务器'});
+    const bridge=createMcpBridge({servers:configs});
+    try{const result=await bridge.connect();res.json({ok:result.health.every(row=>row.ok),servers:result.health,tools:result.tools,schemas:bridge.schemas().map(row=>row.function.name)});}
+    finally{await bridge.close().catch(()=>{});}
+  });
   app.get('/api/work/policy',(_req,res)=>res.json({policy:engine.policy()}));
   app.get('/api/work/agents/roster',(_req,res)=>res.json({agents:engine.agentRoster()}));
   app.get('/api/work/team-templates',(req,res)=>res.json({templates:engine.listTeamTemplates(req.query?.projectId)}));
   app.post('/api/work/team-templates',(req,res)=>res.status(201).json({template:engine.saveTeamTemplate(req.body)}));
   app.delete('/api/work/team-templates/:id',(req,res)=>res.json(engine.deleteTeamTemplate(req.params.id)));
   app.put('/api/work/policy',(req,res)=>res.json({policy:engine.updatePolicy(req.body)}));
+  // 配置档：模型 + 思考强度 + 权限 + 预算 + 执行器 + Library 的命名快照。
+  app.get('/api/work/profiles',(req,res)=>res.json({profiles:engine.listProfiles(),active:engine.profilesActive(req.query?.projectId)}));
+  app.post('/api/work/profiles',(req,res)=>res.status(201).json({profile:engine.saveProfile(req.body)}));
+  app.patch('/api/work/profiles/:id',(req,res)=>res.json({profile:engine.updateProfile(req.params.id,req.body)}));
+  app.delete('/api/work/profiles/:id',(req,res)=>res.json(engine.deleteProfile(req.params.id)));
+  app.post('/api/work/profiles/:id/apply',(req,res)=>res.json(engine.applyProfile(req.params.id,req.body)));
+  app.post('/api/work/profiles/reset',(req,res)=>res.json(engine.resetProfile(req.body)));
   app.post('/api/work/plans',(req,res)=>res.status(201).json({plan:engine.plan(req.body)}));
   app.post('/api/work/plans/suggest',async(req,res)=>res.json(await engine.suggestPlan(req.body)));
   app.post('/api/work/commander',async(req,res)=>res.status(201).json(await engine.commander(req.body)));
@@ -80,6 +198,7 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/collaborate',async(req,res)=>res.status(201).json(await engine.collaborate(req.body)));
   app.get('/api/work/commander/:id/report',(req,res)=>res.json(engine.commanderReport(req.params.id)));
   app.get('/api/work/plans/:id',(req,res)=>res.json({plan:engine.getPlan(req.params.id)}));
+  app.get('/api/work/plans/:id/sheet',(req,res)=>res.json(engine.planSheet(req.params.id)));
   app.post('/api/work/plans/:id/cancel',(req,res)=>res.json({plan:engine.cancelPlan(req.params.id)}));
   app.post('/api/work/command',(req,res)=>res.status(201).json({ticket:engine.command(req.body)}));
   app.get('/api/work/tickets/:id',(req,res)=>res.json(engine.detail(req.params.id)));
@@ -166,6 +285,7 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     const started = await orchestrator();
     return { run: await started.resume(req.params.id) };
   }));
+  app.post('/api/work/tickets/:id/permissions/:requestId',(req,res)=>res.json({ticket:engine.permissionDecision(req.params.id,req.params.requestId,req.body?.decision)}));
   app.post('/api/work/tickets/:id/actions',(req,res)=>{
     if(req.body?.action==='handoff'){
       const result=engine.handoff(req.params.id,req.body?.input);
@@ -180,7 +300,56 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/tickets/:id/team/:nodeId/review',(req,res)=>res.json({team:engine.reviewTeamNode(req.params.id,req.params.nodeId,req.body?.decision)}));
   app.post('/api/work/tickets/:id/team/:nodeId/proposals/:proposalId',(req,res)=>res.json({team:engine.decideTeamProposal(req.params.id,req.params.nodeId,req.params.proposalId,req.body?.decision)}));
   app.get('/api/work/events',(req,res)=>{onConnect?.(req,res);events.connect(req,res,isSessionValid);});
-  app.get('/api/work/usage',(req,res)=>res.json(engine.usageSummary({projectId:req.query?.projectId,executorId:req.query?.executorId,from:req.query?.from,to:req.query?.to,days:req.query?.days==='all'?'all':Number(req.query?.days)||30})));
+  const usageHistory=include=>include?scanHistoricalUsage({home:process.env.LAGENT_HOME||undefined}):{entries:[],scanned:{files:0,claudeFiles:0,codexFiles:0},note:''};
+  app.get('/api/work/usage',(req,res)=>{
+    const includeHistory=req.query?.includeHistory==='1';
+    const history=usageHistory(includeHistory);
+    const report=engine.usageSummary({projectId:req.query?.projectId,executorId:req.query?.executorId,from:req.query?.from,to:req.query?.to,days:req.query?.days==='all'?'all':Number(req.query?.days)||30,extraRows:history.entries});
+    res.json({...report,history:{count:history.entries.length,scanned:history.scanned,note:history.note}});
+  });
+  // CSV 导出：按原始用量行导出，方便团队在表格里按项目/执行器/天透视。
+  app.get('/api/work/usage.csv',(req,res)=>{
+    const includeHistory=req.query?.includeHistory==='1';
+    const day=value=>new Date(Date.parse(value)+8*3600000).toISOString().slice(0,10);
+    const from=req.query?.from||null,to=req.query?.to||null;
+    const projects=new Map(engine.listProjects().map(project=>[project.id,project.name]));
+    const rows=[...store.list('work-usage'),...usageHistory(includeHistory).entries]
+      .filter(row=>(!req.query?.projectId||row.projectId===req.query.projectId)&&(!req.query?.executorId||row.executorId===req.query.executorId))
+      .filter(row=>{const date=row.recordedAt?day(row.recordedAt):'';return (!from||date>=from)&&(!to||date<=to);})
+      .sort((left,right)=>String(right.recordedAt).localeCompare(String(left.recordedAt)))
+      .slice(0,50000);
+    const escape=value=>{const text=String(value??'');return /[",\n]/.test(text)?`"${text.replace(/"/g,'""')}"`:text;};
+    const lines=[['日期','项目','项目名称','执行器','模型','来源','调用','输入Token','输出Token','缓存读取','缓存写入','合计Token','耗时毫秒','费用估算USD']];
+    for(const row of rows)lines.push([row.recordedAt?day(row.recordedAt):'',row.projectId||'',projects.get(row.projectId)||'',row.executorId||'',row.model||'',row.source||'ticket',row.calls||0,row.tokensIn||0,row.tokensOut||0,row.cacheReadTokens||0,row.cacheWriteTokens||0,row.totalTokens||0,row.durationMs||0,Number(row.costEstimate||0).toFixed(6)]);
+    res.setHeader('Content-Disposition',`attachment; filename="lagent-usage-${new Date().toISOString().slice(0,10)}.csv"`);
+    // 显式 BOM：Excel 直接打开时按 UTF-8 识别中文表头。
+    res.type('text/csv; charset=utf-8').send(`﻿${lines.map(line=>line.map(escape).join(',')).join('\n')}`);
+  });
+  // 加密备份、恢复与脱敏诊断包。备份文件只包含当前工作区的 SQLite 快照，
+  // 凭据本身仍是工作区主密钥加密后的密文。
+  const backup=createBackupService({store,engine,dataDir:path.dirname(store.dbPath)});
+  app.post('/api/work/backup/export',async(req,res)=>{
+    const result=await backup.exportBundle({passphrase:req.body?.passphrase,includeCredentials:req.body?.includeCredentials!==false});
+    res.setHeader('Content-Disposition',`attachment; filename="${result.filename}"`);
+    res.type('application/octet-stream').send(result.bytes);
+  });
+  app.post('/api/work/backup/restore',express.raw({type:['application/octet-stream','application/zip','binary/octet-stream'],limit:'512mb'}),async(req,res)=>{
+    if(!Buffer.isBuffer(req.body)||!req.body.length)throw Object.assign(new Error('请上传备份文件'),{status:400});
+    // 前端会把口令 URL 编码后放进请求头，避免非 ASCII 字符被 HTTP 头拒绝。
+    let passphrase=req.get('x-backup-passphrase')||'';
+    try{passphrase=decodeURIComponent(passphrase);}catch{/* 兼容旧的未编码请求头。 */}
+    res.json(await backup.restoreBundle(req.body,{passphrase}));
+  });
+  app.get('/api/work/backup/status',(_req,res)=>res.json({backups:backup.listBackups()}));
+  app.get('/api/work/diagnostics',(_req,res)=>res.json({diagnostics:backup.diagnostics()}));
+  const stopBackups=backup.startScheduledBackups({
+    hours:process.env.LAGENT_BACKUP_INTERVAL_HOURS,
+    targetDir:process.env.LAGENT_BACKUP_DIR,
+    passphrase:process.env.LAGENT_BACKUP_PASSPHRASE,
+    keep:Number(process.env.LAGENT_BACKUP_KEEP)||14
+  });
+  // 测试或按需部署可以关闭调度，仍可手动运行。
+  const stopRoutines=process.env.LAGENT_WORK_ROUTINES==='0'?()=>{}:routines.start();
   app.get('/api/work/effects',(req,res)=>res.json({effects:engine.listEffects({ticketId:req.query?.ticketId,kind:req.query?.kind,status:req.query?.status,limit:Number(req.query?.limit)||200})}));
   app.post('/api/work/effects/:id/retry',(req,res)=>{try{res.json({effect:engine.retryEffect(req.params.id)});}catch(error){res.status(error?.status||500).json({error:error?.message||'重试失败'});}});
   if(providerRegistry)app.get('/api/work/providers',async(req,res)=>res.json({providers:await providerRegistry.snapshots({force:req.query?.refresh==='1'})}));
@@ -202,7 +371,10 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     });
   }
   if(mobileGateway)registerMobileWorkRoutes(app,mobileGateway,{engine,ownerId:mobileOwnerId,onConnect:onMobileEventConnect});
-  if(mobileGateway)registerMcpRoutes(app,{engine,gateway:mobileGateway,ownerId:mobileOwnerId,windowBridge});
+  if(mobileGateway){
+    const mcpTokens=createMcpTokenService({store,engine,onIssue:mcpTokenIndex?.onIssue,onRevoke:mcpTokenIndex?.onRevoke});
+    registerMcpRoutes(app,{engine,gateway:mobileGateway,ownerId:mobileOwnerId,windowBridge,mcpTokens});
+  }
   engine.recover();
-  return ()=>{engine.close();events.close();enginesByWorkspace.delete(typeof workspace==='string'?workspace:'');};
+  return ()=>{live.close();stopRoutines();stopBackups();engine.close();events.close();enginesByWorkspace.delete(typeof workspace==='string'?workspace:'');};
 }

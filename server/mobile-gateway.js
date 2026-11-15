@@ -22,7 +22,7 @@ const integer = value => Number.isSafeInteger(value) ? value : undefined;
 const primitive = value => value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string' ? value : undefined;
 const object = value => value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 const bounded = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max ? value : undefined;
-const notificationStatuses = new Set(['awaiting_review', 'completed', 'failed', 'blocked', 'cancelled']);
+const notificationStatuses = new Set(['awaiting_review', 'completed', 'failed', 'blocked', 'cancelled', 'budget_warning']);
 
 function cleanDeviceName(value) {
   const source = typeof value === 'string' ? value : '移动设备';
@@ -494,7 +494,7 @@ export class MobileGateway {
   }
 
   recordNotification(ownerId, event) {
-    if (typeof ownerId !== 'string' || !ownerId || ownerId.length > 128 || event?.type !== 'ticket') return null;
+    if (typeof ownerId !== 'string' || !ownerId || ownerId.length > 128 || !['ticket', 'usage-alert'].includes(event?.type)) return null;
     const payload = object(event.payload);
     if (!payload || !notificationStatuses.has(payload.status)) return null;
     const eventId = bounded(event.id, 100);

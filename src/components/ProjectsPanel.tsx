@@ -45,11 +45,12 @@ const EXECUTOR_LABELS: Record<string, string> = {
   qoder: 'Qoder',
   iflow: 'iFlow',
   kimi: 'Kimi CLI',
+  workbuddy: 'WorkBuddy',
   window: '窗口 Agent'
 };
 
 // 分派优先级：先 CLI（能改文件、能续接会话），再 ACP，最后其它本机 Agent。
-const DISPATCH_ORDER = ['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi'];
+const DISPATCH_ORDER = ['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi', 'workbuddy'];
 
 // 编排运行的状态文案；步骤状态复用执行器的那套，避免多一套词。
 const PERMISSION_LABELS: Record<'read' | 'workspace' | 'full', string> = {

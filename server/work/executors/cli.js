@@ -196,7 +196,11 @@ export function createCliExecutor({
   environment = process.env,
   validateInput,
   buildArgs,
-  parseOutput
+  parseOutput,
+  streamActivity,
+  // 只吐纯文本的 CLI（例如 dsh --profile headless）没有结构化事件，
+  // 关掉这个开关时它们的过程流会是空的；打开后把 stdout 当作「它正在说什么」逐段记下来。
+  streamText = false
 }) {
   if (typeof id !== 'string' || !id || typeof name !== 'string' || !name) throw new TypeError('CLI 执行器需要 id 和 name');
   if (!store || typeof cwd !== 'string' || !cwd) throw new TypeError(`${id} 执行器需要 store 和 cwd`);
@@ -213,8 +217,57 @@ export function createCliExecutor({
 
   const emptyController = () => ({
     done: false, stdout: [], stderr: [], outputBytes: 0, stdoutBytes: 0, stderrBytes: 0,
-    truncated: false, timedOut: false, startedAt: Date.now(), timer: null, child: null
+    truncated: false, timedOut: false, startedAt: Date.now(), timer: null, child: null,
+    lineBuffer: '', streamDirty: false, flusher: null
   });
+
+  // CLI 的 stdout 是 JSON Lines，关掉进程才解析一次的话，界面上十几分钟只看到「还在执行」。
+  // 这里逐行喂给执行器自己的 streamActivity，把思考与工具调用即时写成 activity。
+  function recordActivity(task, controller, entry) {
+    if (!entry || typeof entry.text !== 'string') return;
+    const kind = entry.kind || 'note';
+    // 流式分片（思考 delta、纯文本 chunk）不该铺成几十条碎片：同类的上一段还在就往后接。
+    const list = Array.isArray(task.activity) ? task.activity : [];
+    const last = list[list.length - 1];
+    if (entry.append === true && last && last.kind === kind && last.text.length < 800) {
+      last.text = sanitizeText(`${last.text}${entry.text}`, 4000);
+      last.at = new Date().toISOString();
+      task.updatedAt = last.at;
+      controller.streamDirty = true;
+      return;
+    }
+    const text = sanitizeText(entry.text, 4000).trim();
+    if (!text) return;
+    if (last && last.kind === kind && last.text === text) return;
+    const detail = typeof entry.detail === 'string' ? sanitizeText(entry.detail, 2000) : '';
+    task.activity = [...list, { at: new Date().toISOString(), kind, text, ...(detail ? { detail } : {}) }].slice(-60);
+    task.updatedAt = new Date().toISOString();
+    controller.streamDirty = true;
+  }
+
+  function trackStream(task, controller, chunk) {
+    if (typeof streamActivity !== 'function') {
+      // 纯文本 CLI：整段 stdout 就是它此刻在说的话，追加到同一条里，进度就是「越写越长」。
+      if (streamText) recordActivity(task, controller, { kind: 'note', text: Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk), append: true });
+      return;
+    }
+    controller.lineBuffer = `${controller.lineBuffer || ''}${Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)}`;
+    // 单行异常超长（例如把整个文件打进一行）时别让缓冲无限涨。
+    if (controller.lineBuffer.length > 1_000_000) controller.lineBuffer = controller.lineBuffer.slice(-200_000);
+    let newline;
+    while ((newline = controller.lineBuffer.indexOf('\n')) >= 0) {
+      const line = controller.lineBuffer.slice(0, newline).trim();
+      controller.lineBuffer = controller.lineBuffer.slice(newline + 1);
+      if (!line) continue;
+      let event;
+      try { event = JSON.parse(line); } catch { continue; }
+      if (!event || typeof event !== 'object' || Array.isArray(event)) continue;
+      let entries;
+      try { entries = streamActivity(event); } catch { entries = null; }
+      if (!entries) continue;
+      for (const entry of Array.isArray(entries) ? entries : [entries]) recordActivity(task, controller, entry);
+    }
+  }
 
   const addOutput = (controller, target, chunk, label) => {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
@@ -255,6 +308,7 @@ export function createCliExecutor({
     controller.done = true;
     clearTimeout(controller.timer);
     if (controller.ticker) clearInterval(controller.ticker);
+    if (controller.flusher) clearInterval(controller.flusher);
     controllers.delete(task.id);
     const stdout = Buffer.concat(controller.stdout).toString('utf8');
     const stderr = Buffer.concat(controller.stderr).toString('utf8');
@@ -338,7 +392,16 @@ export function createCliExecutor({
       persist(task);
     }, 60_000);
     if (typeof controller.ticker.unref === 'function') controller.ticker.unref();
-    child.stdout?.on('data', chunk => addOutput(controller, controller.stdout, chunk, 'stdout'));
+    controller.flusher = setInterval(() => {
+      if (controller.done || !controller.streamDirty) return;
+      controller.streamDirty = false;
+      persist(task);
+    }, 500);
+    if (typeof controller.flusher.unref === 'function') controller.flusher.unref();
+    child.stdout?.on('data', chunk => {
+      addOutput(controller, controller.stdout, chunk, 'stdout');
+      trackStream(task, controller, chunk);
+    });
     child.stderr?.on('data', chunk => addOutput(controller, controller.stderr, chunk, 'stderr'));
     child.once('error', error => finalize(task, controller, { error }));
     child.once('close', (code, signal) => finalize(task, controller, { code, signal }));
@@ -376,6 +439,8 @@ export function createCliExecutor({
       const stamp = new Date().toISOString();
       const task = {
         id: assignment.id,
+        // 工单 id 记在任务上，进程重启后历史工单才读得回过程流（engine.taskFor 靠它核对归属）。
+        ticketId: ticket.id,
         workAssignmentId: assignment.id,
         executorId: id,
         goal: ticket.command,

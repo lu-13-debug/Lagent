@@ -1,4 +1,5 @@
-import { spawn } from 'node:child_process';
+﻿import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -43,6 +44,8 @@ export function createAcpExecutor({
   args = [],
   environment = process.env,
   timeoutMs = Number(process.env.LAGENT_CLI_TIMEOUT_MS) || 1_800_000,
+  // 交互授权最多等人 30 秒；无人值守时自动拒绝，避免整个任务挂死。
+  permissionTimeoutMs = Number(process.env.LAGENT_ACP_PERMISSION_TIMEOUT_MS) || 30_000,
   spawnImpl,
   capabilities = ['acp', 'agent', 'chat']
 } = {}) {
@@ -55,6 +58,7 @@ export function createAcpExecutor({
   function removeController(idValue) {
     const controller = controllers.get(idValue);
     if (!controller) return;
+    for (const pending of controller.permissions?.values?.() || []) clearTimeout(pending.timer);
     controllers.delete(idValue);
     try { controller.child?.kill?.(); } catch { /* ignore */ }
   }
@@ -62,11 +66,11 @@ export function createAcpExecutor({
   function start(ticket, assignment, input) {
     if (!available) throw workError('ACP Agent 未安装或不在 PATH', 503);
     const request = normalizeInput(input?.executorInput ?? input);
-    const task = { id: assignment.id, status: 'running', startedAt: new Date().toISOString(), acp: { agent: id } };
+    const task = { id: assignment.id, ticketId: ticket.id, status: 'running', startedAt: new Date().toISOString(), acp: { agent: id } };
     tasks.set(task.id, task);
     store.put('task', task);
 
-    const controller = { child: null, done: false, buffer: '', nextId: 1, pending: new Map(), updates: [], sessionId: null, timer: null };
+    const controller = { child: null, done: false, buffer: '', nextId: 1, pending: new Map(), permissions: new Map(), updates: [], sessionId: null, timer: null };
     controllers.set(task.id, controller);
     controller.child = (spawnImpl || spawnCommand)(resolved.command, [...(resolved.args || []), ...args], resolved.shell);
     const child = controller.child;
@@ -118,11 +122,56 @@ export function createAcpExecutor({
         return true;
       }
       if (message.method === 'session/request_permission') {
-        // 只允许「文件类」授权：带 terminal 的权限请求继续拒绝，避免无人值守时跑命令。
+        // 只开放「文件类」授权：带 terminal 的权限请求继续拒绝，避免无人值守时跑命令。
         const options = Array.isArray(params.options) ? params.options : [];
         const allowsCommand = JSON.stringify(params).includes('terminal');
-        const allowed = allowFiles && !allowsCommand ? options.find(option => option.kind === 'allow_once' || option.kind === 'allow_always') : null;
-        send({ jsonrpc: '2.0', id: message.id, result: allowed ? { outcome: { outcome: 'selected', optionId: allowed.optionId } } : { outcome: { outcome: 'cancelled' } } });
+        const allowOption = allowFiles && !allowsCommand ? options.find(option => option.kind === 'allow_once' || option.kind === 'allow_always') : null;
+        if (!allowOption) {
+          send({ jsonrpc: '2.0', id: message.id, result: { outcome: { outcome: 'cancelled' } } });
+          return true;
+        }
+        const requestId = randomUUID();
+        const title = String(params.toolCall?.title || '请求访问项目文件').slice(0, 120);
+        const target = String(params.toolCall?.locations?.[0]?.path || params.toolCall?.rawInput?.path || '').slice(0, 200);
+        const text = target && !title.includes(target) ? `${title}：${target}` : title;
+        const seconds = Math.max(1, Math.round(permissionTimeoutMs / 1000));
+        const row = {
+          at: new Date().toISOString(),
+          kind: 'permission',
+          text: text.slice(0, 600),
+          detail: `允许一次只对这次操作生效；${seconds} 秒内未处理会自动拒绝。`,
+          requestId
+        };
+        task.activity = [...(Array.isArray(task.activity) ? task.activity : []), row].slice(-60);
+        task.updatedAt = row.at;
+        store.put('task', task);
+        const respond = (allowed, reason) => {
+          const pending = controller.permissions.get(requestId);
+          if (!pending) return false;
+          controller.permissions.delete(requestId);
+          clearTimeout(pending.timer);
+          const current = tasks.get(task.id) || task;
+          const rows = Array.isArray(current.activity) ? current.activity : [];
+          const entry = rows.find(item => item.requestId === requestId);
+          if (entry) {
+            entry.decided = allowed ? 'allow' : 'deny';
+            entry.detail = allowed ? '已允许这一次操作。' : reason === 'timeout' ? '超时未处理，已自动拒绝。' : '已拒绝这次操作。';
+            // 时间戳也换一下：引擎按「条数 + 最后一条时间」判断要不要推 SSE。
+            entry.at = new Date().toISOString();
+          }
+          current.updatedAt = new Date().toISOString();
+          tasks.set(current.id, current);
+          store.put('task', current);
+          send({
+            jsonrpc: '2.0',
+            id: message.id,
+            result: allowed ? { outcome: { outcome: 'selected', optionId: allowOption.optionId } } : { outcome: { outcome: 'cancelled' } }
+          });
+          return true;
+        };
+        const timer = setTimeout(() => respond(false, 'timeout'), permissionTimeoutMs);
+        timer.unref?.();
+        controller.permissions.set(requestId, { respond, timer });
         return true;
       }
       if (message.method?.startsWith('terminal/')) {
@@ -130,6 +179,30 @@ export function createAcpExecutor({
         return true;
       }
       return false;
+    };
+    // ACP 的思考块和工具调用以前整段丢掉，界面只能看到「在做什么」的最终文本。
+    // 这里逐条写进 activity，界面就能像看模型 Agent 一样看到它现在在想什么。
+    const record = entry => {
+      // 思考是分片来的，直接 trim 会把英文单词之间的空格吃掉（拼出来变成 Theuser asks）；
+      // 追加型条目只去 ANSI，保留原始空白。
+      const raw = String(entry?.text ?? '').replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+      const text = entry?.append === true ? raw : raw.trim();
+      if (!text || (text.trim() === '' && entry?.append !== true)) return;
+      const kind = entry.kind || 'note';
+      const list = Array.isArray(task.activity) ? task.activity : [];
+      const last = list[list.length - 1];
+      // 思考是逐字流下来的，半句话一条会让面板变成一堆碎片；同类相邻的就往后接。
+      if (entry.append === true && last && last.kind === kind && last.text.length < 800) {
+        last.text = `${last.text}${text}`.slice(0, 4000);
+        last.at = new Date().toISOString();
+        task.updatedAt = last.at;
+        store.put('task', task);
+        return;
+      }
+      if (last && last.kind === kind && last.text === text.slice(0, 600)) return;
+      task.activity = [...list, { at: new Date().toISOString(), kind, text: text.slice(0, 600) }].slice(-60);
+      task.updatedAt = new Date().toISOString();
+      store.put('task', task);
     };
     const handleLine = line => {
       let message;
@@ -147,8 +220,32 @@ export function createAcpExecutor({
       }
       if (message.method === 'session/update') {
         const update = message.params?.update || {};
-        const text = update.content?.type === 'text' ? update.content.text : update.type === 'agent_message_chunk' ? update.content?.text : '';
-        if (typeof text === 'string' && text) controller.updates.push(text);
+        const kind = String(update.sessionUpdate || update.type || '');
+        // 思考块：不同实现分别用 sessionUpdate 或 content.type 标记，两种都认。
+        if (kind === 'agent_thought_chunk' || update.content?.type === 'thinking') {
+          record({ kind: 'thought', text: update.content?.thinking || update.content?.text || '', append: true });
+          return;
+        }
+        if (kind === 'tool_call' || kind === 'tool_call_update') {
+          const title = update.title || update.toolName || update.content?.title || '';
+          const status = String(update.status || '');
+          // 没有名字的工具调用只是一条「调用了工具」的噪声，记「完成」也没信息量，跳过。
+          if (title) {
+            if (status === 'completed' || status === 'failed') record({ kind: status === 'failed' ? 'error' : 'observation', text: `${title} ${status === 'failed' ? '失败' : '完成'}` });
+            else record({ kind: 'tool', text: title });
+          }
+          return;
+        }
+        if (kind === 'plan' && Array.isArray(update.entries) && update.entries.length) {
+          record({ kind: 'note', text: `计划更新：${update.entries.length} 步` });
+          return;
+        }
+        const text = update.content?.type === 'text' ? update.content.text : kind === 'agent_message_chunk' ? update.content?.text : '';
+        if (typeof text === 'string' && text) {
+          controller.updates.push(text);
+          // 正文也是分片流下来的：同样合并，否则结论会被拆成「name:」「`lagent` version:」这样一串碎片。
+          record({ kind: 'note', text, append: true });
+        }
       }
     };
     child.stdout?.on('data', chunk => {
@@ -178,8 +275,8 @@ export function createAcpExecutor({
         controller.sessionId = session.sessionId;
         const result = await requestRpc('session/prompt', { sessionId: controller.sessionId, prompt: [{ type: 'text', text: request.prompt }] });
         finish('completed', {
-          report: { id: `acp-${assignment.id}`, summary: controller.updates.join('\n').slice(0, 4000) || 'ACP Agent 已完成', stopReason: result?.stopReason || null },
-          artifacts: { acp: { agent: id, stopReason: result?.stopReason || null, cwd: request.workspace || cwd, text: controller.updates.join('\n').slice(-8000) } }
+          report: { id: `acp-${assignment.id}`, summary: controller.updates.join('').slice(0, 4000) || 'ACP Agent 已完成', stopReason: result?.stopReason || null },
+          artifacts: { acp: { agent: id, stopReason: result?.stopReason || null, cwd: request.workspace || cwd, text: controller.updates.join('').slice(-8000) } }
         });
       } catch (error) {
         finish('failed', { error: String(error?.message || 'ACP 执行失败').slice(0, 300) });
@@ -194,6 +291,14 @@ export function createAcpExecutor({
     defaultInput: text => normalizeInput({ prompt: text }),
     start,
     get: idValue => idValue && (tasks.get(idValue) || store.get('task', idValue)),
+    // 界面上的「允许一次 / 拒绝」通过引擎转到这里；找不到请求说明已超时或任务已结束。
+    resolvePermission(task, requestId, decision) {
+      if (decision !== 'allow' && decision !== 'deny') return false;
+      const idValue = typeof task === 'string' ? task : task?.id;
+      const pending = controllers.get(idValue)?.permissions?.get(requestId);
+      if (!pending) return false;
+      return pending.respond(decision === 'allow');
+    },
     stop(task) {
       const controller = controllers.get(task?.id);
       if (controller?.sessionId) {
@@ -223,7 +328,8 @@ export function acpExecutors({ store, cwd, environment = process.env } = {}) {
   return definitions.map(definition => {
     const override = environment[definition.envKey];
     const candidates = override ? [override, ...definition.commands] : definition.commands;
-    const command = candidates.find(candidate => resolveLocalCommand(candidate, environment));
-    return command ? { definition, command } : null;
-  }).filter(Boolean).map(({ definition, command }) => createAcpExecutor({ id: definition.id, name: definition.name, command, store, cwd, environment }));
+    // 探测不到也注册：界面要能显示「未安装」，而不是让它从列表里静默消失。
+    const command = candidates.find(candidate => resolveLocalCommand(candidate, environment)) || null;
+    return createAcpExecutor({ id: definition.id, name: definition.name, command, store, cwd, environment });
+  });
 }

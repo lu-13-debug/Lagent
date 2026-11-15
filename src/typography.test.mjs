@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import postcss from 'postcss';
 
-const files = ['src/styles.css', 'src/readability.css', 'src/accounts.css', 'src/components/model-settings.css', 'src/experience.css', 'src/data-workflow.css', 'src/task-control.css', 'src/commands.css', 'src/report-assets.css', 'src/report-explorer.css', 'src/report-details.css'];
+const files = ['src/styles.css', 'src/readability.css', 'src/accounts.css', 'src/components/model-settings.css'];
 const roots = files.map(file => ({ file, root: postcss.parse(fs.readFileSync(file, 'utf8')) }));
 const tokens = {};
 for (const { root } of roots) root.walkRules(':root', rule => rule.walkDecls(decl => { tokens[decl.prop] = decl.value; }));

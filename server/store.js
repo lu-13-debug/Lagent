@@ -1,7 +1,20 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import os from 'node:os';
+
+// 备份/恢复会直接替换 SQLite 文件，表结构必须在一个地方定义，恢复后重新初始化。
+const SCHEMA = `PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+      CREATE TABLE IF NOT EXISTS entities (kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id));
+      CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS wallet (id INTEGER PRIMARY KEY CHECK(id=1), balance INTEGER NOT NULL, frozen INTEGER NOT NULL, spent INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS reservations (task_id TEXT PRIMARY KEY, state TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY, type TEXT NOT NULL, amount INTEGER NOT NULL, task_id TEXT, description TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE UNIQUE INDEX IF NOT EXISTS unique_task_transaction ON transactions(task_id,type) WHERE task_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS unique_task_request ON entities(json_extract(body,'$.clientRequestId'))
+        WHERE kind='task' AND json_extract(body,'$.clientRequestId') IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS task_status ON entities(kind,json_extract(body,'$.status'));`;
 
 export function assertId(id) {
   if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(id)) {
@@ -15,17 +28,9 @@ export class Store {
     // User supplied resource IDs are SQL parameters; never used to form filesystem paths.
     const root = path.resolve(dataDir);
     mkdirSync(root, { recursive: true });
-    this.db = new DatabaseSync(path.join(root, 'lagent.sqlite'));
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
-      CREATE TABLE IF NOT EXISTS entities (kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id));
-      CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS wallet (id INTEGER PRIMARY KEY CHECK(id=1), balance INTEGER NOT NULL, frozen INTEGER NOT NULL, spent INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS reservations (task_id TEXT PRIMARY KEY, state TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY, type TEXT NOT NULL, amount INTEGER NOT NULL, task_id TEXT, description TEXT NOT NULL, created_at TEXT NOT NULL);
-      CREATE UNIQUE INDEX IF NOT EXISTS unique_task_transaction ON transactions(task_id,type) WHERE task_id IS NOT NULL;
-      CREATE UNIQUE INDEX IF NOT EXISTS unique_task_request ON entities(json_extract(body,'$.clientRequestId'))
-        WHERE kind='task' AND json_extract(body,'$.clientRequestId') IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS task_status ON entities(kind,json_extract(body,'$.status'));`);
+    this.dbPath = path.join(root, 'lagent.sqlite');
+    this.db = new DatabaseSync(this.dbPath);
+    this.db.exec(SCHEMA);
     if (!this.db.prepare('SELECT 1 FROM wallet').get()) this.atomic(() => {
       this.db.prepare('INSERT INTO wallet VALUES(1,500,0,0)').run();
       this.transaction('grant', 500, undefined, '本地试用额度赠送');
@@ -103,5 +108,51 @@ export class Store {
       this.put('task', task); return task;
     });
   }
+  // 一致性快照：VACUUM INTO 会生成一个已提交的 SQLite 文件，不包含 WAL 里的半截事务。
+  exportDatabase() {
+    const target = path.join(os.tmpdir(), `lagent-backup-${randomUUID()}.sqlite`);
+    try {
+      this.db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+      return readFileSync(target);
+    } finally {
+      try { if (existsSync(target)) unlinkSync(target); } catch { /* 临时文件清理失败不影响备份结果。 */ }
+    }
+  }
+
+  // 恢复时先验证文件确实是 Lagent 的 SQLite，再替换当前库；替换后重新建表，兼容旧备份缺列的情况。
+  replaceDatabase(bytes) {
+    if (!Buffer.isBuffer(bytes) || bytes.length < 100 || bytes.subarray(0, 16).toString('utf8') !== 'SQLite format 3\0') {
+      throw Object.assign(new Error('备份文件不是有效的 SQLite 数据库'), { status: 400 });
+    }
+    const temp = path.join(os.tmpdir(), `lagent-restore-${randomUUID()}.sqlite`);
+    try {
+      writeFileSync(temp, bytes);
+      const probe = new DatabaseSync(temp);
+      try {
+        probe.prepare('SELECT COUNT(*) AS n FROM entities').get();
+        probe.prepare('SELECT COUNT(*) AS n FROM config').get();
+      } finally { probe.close(); }
+      this.db.close();
+      try { rmSync(`${this.dbPath}-wal`, { force: true }); rmSync(`${this.dbPath}-shm`, { force: true }); } catch { /* 旧 WAL 可以忽略。 */ }
+      copyFileSync(temp, this.dbPath);
+      this.db = new DatabaseSync(this.dbPath);
+      this.db.exec(SCHEMA);
+      this.inTransaction = false; this.pendingChange = false;
+      this.changed();
+      return { ok: true };
+    } finally {
+      try { if (existsSync(temp)) unlinkSync(temp); } catch { /* 临时文件清理失败不影响恢复结果。 */ }
+    }
+  }
+
+  stats() {
+    const kinds = {};
+    for (const row of this.db.prepare('SELECT kind, COUNT(*) AS n FROM entities GROUP BY kind ORDER BY kind').all()) kinds[row.kind] = row.n;
+    const configKeys = this.db.prepare('SELECT key FROM config ORDER BY key').all().map(row => row.key);
+    let bytes = 0;
+    try { bytes = statSync(this.dbPath).size; } catch { /* 文件统计失败时返回 0。 */ }
+    return { kinds, configKeys, bytes, dbPath: path.basename(this.dbPath) };
+  }
+
   close() { this.listeners.clear(); this.db.close(); }
 }
