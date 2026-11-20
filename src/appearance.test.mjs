@@ -43,7 +43,7 @@ test('首帧脚本读取非敏感显示缓存并同步主题颜色', async () =>
   const meta={setAttribute(k,v){this[k]=v}}, root={dataset:{}};
   const context={document:{documentElement:root,querySelector:()=>meta},localStorage:{getItem:()=>JSON.stringify({theme:'dark',view:'concise'})},matchMedia:()=>({matches:false})};
   vm.runInNewContext(code,context);
-  assert.equal(root.dataset.theme,'dark'); assert.equal(root.dataset.view,'concise'); assert.equal(root.dataset.themeFix,''); assert.equal(meta.content,'#0d1110');
+  assert.equal(root.dataset.theme,'dark'); assert.equal(root.dataset.view,'concise'); assert.equal(root.dataset.themeFix,''); assert.equal(meta.content,'#101010');
 });
 
 test('侧栏默认随视图收放，显式选择优先且按账号隔离', async () => {
@@ -54,12 +54,14 @@ test('侧栏默认随视图收放，显式选择优先且按账号隔离', async
   assert.equal(readRail(storage,'https://host','b'),null);assert.notEqual(railKey('https://host','a'),railKey('https://host','b'));
 });
 
-test('浅色画布为纯白，主要按钮在两套主题中使用黑白反转', async () => {
+test('浅色画布为白色，主要按钮在两套主题中使用同一墨色主色', async () => {
   const fs = await import('node:fs'); const postcss = (await import('postcss')).default;
   const css = postcss.parse(fs.readFileSync(new URL('./appearance.css', import.meta.url), 'utf8'));
   const values = selector => { const result = {}; css.walkRules(rule => { if (rule.selector === selector) rule.walkDecls(d => { result[d.prop] = d.value; }); }); return result; };
   const light = values(':root, html[data-theme="light"]'), dark = values('html[data-theme="dark"]');
   assert.equal(light['--surface-0'], '#ffffff');
-  assert.equal(light['--primary-bg'], '#000000'); assert.equal(light['--primary-text'], '#ffffff');
-  assert.equal(dark['--primary-bg'], '#ffffff'); assert.equal(dark['--primary-text'], '#000000');
+  assert.equal(light['--primary-bg'], '#111111'); assert.equal(light['--primary-text'], '#ffffff');
+  assert.equal(dark['--primary-bg'], '#f2f2f2'); assert.equal(dark['--primary-text'], '#111111');
+  assert.equal(light['--accent'], light['--primary-bg']);
+  assert.equal(dark['--accent'], dark['--primary-bg']);
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildPreview, previewQuestion } from './work/risk.js';
@@ -54,6 +54,22 @@ test('验收在 Lagent 侧执行并返回通过/失败证据', async t => {
   assert.equal(fail.status, 'failed');
   assert.notEqual(fail.exitCode, 0);
   assert.match(fail.output, /fail|AssertionError|not ok/i);
+
+  // 带空格的参数在 Windows 上经 cmd.exe 重新分词，必须保持为一个参数。
+  writeFileSync(join(dir, 'space case.test.mjs'), "import test from 'node:test';\ntest('ok', () => {});\n", 'utf8');
+  const spaced = await runVerify({ verify: { command: 'node --test "space case.test.mjs"', expect: 'exit=0' }, projectPath: dir });
+  assert.equal(spaced.status, 'passed', spaced.output);
+});
+
+test('验收 cwd 不能通过项目内符号链接跳出项目目录', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-verify-link-'));
+  const outside = mkdtempSync(join(tmpdir(), 'lagent-verify-outside-'));
+  t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); });
+  symlinkSync(outside, join(dir, 'jump'), process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(
+    runVerify({ verify: { command: 'node --version', cwd: 'jump' }, projectPath: dir }),
+    error => error.status === 400 && /cwd/.test(error.message)
+  );
 });
 
 test('引擎在工单完成后可执行验收，失败会进入阻塞并留证据', async t => {
@@ -78,6 +94,9 @@ test('引擎在工单完成后可执行验收，失败会进入阻塞并留证�
   assert.equal(pass.status, 'completed');
   const passed = await engine.verifyTicket(pass.id);
   assert.equal(passed.acceptance.status, 'passed');
+  assert.equal(passed.review.verdict, 'pass');
+  assert.equal(passed.review.evidence.level, 'verified');
+  assert.equal(engine.detail(pass.id).ticket.review.evidence.level, 'verified');
   assert.equal(engine.detail(pass.id).ticket.acceptance.status, 'passed');
 
   writeFileSync(join(dir, 'fail.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('fail', () => assert.equal(1, 2));\n", 'utf8');
@@ -86,6 +105,9 @@ test('引擎在工单完成后可执行验收，失败会进入阻塞并留证�
   assert.equal(failed.acceptance.status, 'failed');
   assert.equal(failed.ticket.status, 'blocked');
   assert.match(failed.ticket.summary, /验收未通过/);
+  assert.equal(failed.review.verdict, 'reject');
+  assert.equal(failed.review.evidence.level, 'failed');
+  assert.equal(failed.ticket.review.evidence.execution, 'failed');
 });
 
 test('高风险动作即使默认不要求批准也会先进入待确认', async t => {

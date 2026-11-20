@@ -35,6 +35,13 @@ export function createExecutorRegistry(executors) {
       if (!entry.publicMetadata.available) throw workError(`执行器「${entry.publicMetadata.name}」当前不可用`, 400);
       return entry.executor;
     },
+    // 把策略里的并发数下发给支持动态并发的执行器；不支持的执行器保持自身限制。
+    setConcurrency(value) {
+      for (const { executor } of entries.values()) {
+        if (typeof executor.setConcurrency !== 'function') continue;
+        try { executor.setConcurrency(value); } catch { /* 单个执行器拒绝不影响其它执行器。 */ }
+      }
+    },
     close() {
       for (const { executor } of entries.values()) {
         try { executor.close?.(); } catch { /* Best-effort shutdown must not block others. */ }

@@ -227,6 +227,7 @@ export function createRoutineService({ store, engine, now = Date.now, tickMs = 3
       .filter(ticket => ticket && ticket.status === 'working' && String(ticket.updatedAt || ticket.createdAt || '').slice(0, 24) && Date.parse(ticket.updatedAt || ticket.createdAt) <= cutoff)
       .slice(0, 5);
     const created = [];
+    let lastError = '';
     for (const ticket of stale) {
       const control = store.get('work-control', ticket.id);
       if (!control?.projectChatId) continue;
@@ -243,17 +244,17 @@ export function createRoutineService({ store, engine, now = Date.now, tickMs = 3
         created.push(suggestion);
       } catch (error) {
         // 单个工单无法跟进（例如执行器已不可用）不影响其它工单。
-        row = { ...row, lastError: String(error?.message || error).slice(0, 200) };
+        lastError = String(error?.message || error).slice(0, 200);
       }
     }
-    return created;
+    return { created, lastError };
   }
 
   function execute(row, { manual = false, slot = '' } = {}) {
     const runSlot = slot || String(Math.floor(now() / 60000));
     if (row.kind === 'stall-followup') {
-      const created = createStallSuggestions(row, runSlot);
-      return { tickets: created, text: created.length ? `已为 ${created.length} 个停滞工单创建跟进建议` : '没有发现停滞工单' };
+      const { created, lastError } = createStallSuggestions(row, runSlot);
+      return { tickets: created, text: created.length ? `已为 ${created.length} 个停滞工单创建跟进建议` : '没有发现停滞工单', ...(lastError ? { lastError } : {}) };
     }
     const body = promptFor(row, runSlot);
     if (!body) throw workError('例行任务内容为空', 400);
@@ -267,16 +268,17 @@ export function createRoutineService({ store, engine, now = Date.now, tickMs = 3
       routineId: row.id
     });
     let autoApproved = false;
+    let lastError = '';
     if (row.mode === 'auto' && engine.policy()?.requireApproval !== true) {
       try {
         engine.action(ticket.id, 'approve');
         autoApproved = true;
       } catch (error) {
         // 自动执行失败时保留建议工单，让用户能看到失败原因并手动处理。
-        row = { ...row, lastError: `自动执行失败：${String(error?.message || error).slice(0, 160)}` };
+        lastError = `自动执行失败：${String(error?.message || error).slice(0, 160)}`;
       }
     }
-    return { tickets: [ticket], autoApproved, text: autoApproved ? '已自动执行' : '已创建建议工单' };
+    return { tickets: [ticket], autoApproved, text: autoApproved ? '已自动执行' : '已创建建议工单', ...(lastError ? { lastError } : {}) };
   }
 
   function runNow(id, { manual = true } = {}) {
@@ -290,7 +292,7 @@ export function createRoutineService({ store, engine, now = Date.now, tickMs = 3
         lastRunAt: nowIso(now),
         lastSlot: slot,
         lastTicketId: tickets[tickets.length - 1]?.id || row.lastTicketId || null,
-        lastError: row.lastError || '',
+        lastError: result.lastError || '',
         updatedAt: nowIso(now)
       };
       store.put(ROUTINE_KIND, row);
@@ -304,10 +306,11 @@ export function createRoutineService({ store, engine, now = Date.now, tickMs = 3
 
   function recordRun(row, slot) {
     try {
-      execute(row, { slot });
+      const result = execute(row, { slot });
       const latest = store.get(ROUTINE_KIND, row.id) || row;
       const last = store.list('work-ticket').find(ticket => ticket.routineId === row.id);
-      store.put(ROUTINE_KIND, { ...latest, lastRunAt: nowIso(now), lastTicketId: last?.id || latest.lastTicketId || null, lastError: '', updatedAt: nowIso(now) });
+      // 自动执行/停滞跟进失败时 execute 会带回原因；只有真正成功才清空 lastError。
+      store.put(ROUTINE_KIND, { ...latest, lastRunAt: nowIso(now), lastTicketId: last?.id || latest.lastTicketId || null, lastError: result.lastError || '', updatedAt: nowIso(now) });
       return true;
     } catch (error) {
       store.put(ROUTINE_KIND, { ...row, lastRunAt: nowIso(now), lastError: String(error?.message || error).slice(0, 200), updatedAt: nowIso(now) });
@@ -323,29 +326,35 @@ export function createRoutineService({ store, engine, now = Date.now, tickMs = 3
       const stamp = now();
       for (const row of rows()) {
         if (!row.enabled) continue;
-        if (row.schedule?.kind === 'git' || row.schedule?.kind === 'file') {
-          const project = engine.getProject(row.projectId);
-          const signature = watchSignature(project.path, row.schedule);
-          if (signature === row.watchHash) {
-            if (row.watchPendingSince) store.put(ROUTINE_KIND, { ...row, watchPendingSince: null, updatedAt: nowIso(now) });
+        // 单条例行任务的异常（项目被删、路径失效、监控读取失败）不能中断整轮，
+        // 否则排在后面的例程每轮都会饿死。
+        try {
+          if (row.schedule?.kind === 'git' || row.schedule?.kind === 'file') {
+            const project = engine.getProject(row.projectId);
+            const signature = watchSignature(project.path, row.schedule);
+            if (signature === row.watchHash) {
+              if (row.watchPendingSince) store.put(ROUTINE_KIND, { ...row, watchPendingSince: null, updatedAt: nowIso(now) });
+              continue;
+            }
+            const debounceMs = Number(row.schedule.debounceMs) || 0;
+            const pending = row.watchPendingSince && row.watchPendingHash === signature ? row.watchPendingSince : 0;
+            if (debounceMs && (!pending || stamp - pending < debounceMs)) {
+              store.put(ROUTINE_KIND, { ...row, watchPendingSince: pending || stamp, watchPendingHash: signature, updatedAt: nowIso(now) });
+              continue;
+            }
+            const advanced = { ...row, watchHash: signature, watchPendingSince: null, watchPendingHash: '', updatedAt: nowIso(now) };
+            store.put(ROUTINE_KIND, advanced);
+            if (recordRun(advanced, String(Math.floor(stamp / 1000)))) ran++;
             continue;
           }
-          const debounceMs = Number(row.schedule.debounceMs) || 0;
-          const pending = row.watchPendingSince && row.watchPendingHash === signature ? row.watchPendingSince : 0;
-          if (debounceMs && (!pending || stamp - pending < debounceMs)) {
-            store.put(ROUTINE_KIND, { ...row, watchPendingSince: pending || stamp, watchPendingHash: signature, updatedAt: nowIso(now) });
-            continue;
-          }
-          const advanced = { ...row, watchHash: signature, watchPendingSince: null, watchPendingHash: '', updatedAt: nowIso(now) };
+          if (!row.nextAt || row.nextAt > stamp) continue;
+          // 先推进 nextAt 再执行：即使执行慢或抛错，也不会在同一时间片重复触发。
+          const advanced = { ...row, nextAt: nextAtFor(row.schedule, stamp), updatedAt: nowIso(now) };
           store.put(ROUTINE_KIND, advanced);
           if (recordRun(advanced, String(Math.floor(stamp / 1000)))) ran++;
-          continue;
+        } catch (error) {
+          try { store.put(ROUTINE_KIND, { ...row, lastError: String(error?.message || error).slice(0, 200), updatedAt: nowIso(now) }); } catch { /* 记录失败也要继续下一行。 */ }
         }
-        if (!row.nextAt || row.nextAt > stamp) continue;
-        // 先推进 nextAt 再执行：即使执行慢或抛错，也不会在同一时间片重复触发。
-        const advanced = { ...row, nextAt: nextAtFor(row.schedule, stamp), updatedAt: nowIso(now) };
-        store.put(ROUTINE_KIND, advanced);
-        if (recordRun(advanced, String(Math.floor(stamp / 1000)))) ran++;
       }
     } finally {
       ticking = false;

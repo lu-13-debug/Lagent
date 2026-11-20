@@ -126,3 +126,20 @@ test('同一工单默认同时只领取一个 effect，完成后再领下一个'
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('幂等键：同一次执行只产生一个副作用，新的 attempt 才允许重跑', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-effects-idem-'));
+  const store = new Store(dir);
+  const first = enqueue(store, { kind: EFFECT_KINDS.launch, key: 'same', ticketId: 't1', stepId: 's1', attempt: 1, payload: { assignmentId: 'a1' } });
+  assert.equal(first.idempotencyKey, 'launch:t1:s1:1:same');
+  complete(store, first.id);
+  const again = enqueue(store, { kind: EFFECT_KINDS.launch, key: 'same', ticketId: 't1', stepId: 's1', attempt: 1, payload: { assignmentId: 'a1' } });
+  assert.equal(again.id, first.id);
+  assert.equal(again.status, 'done');
+  assert.equal(listEffects(store, { ticketId: 't1' }).length, 1);
+  const nextAttempt = enqueue(store, { kind: EFFECT_KINDS.launch, key: 'same', ticketId: 't1', stepId: 's1', attempt: 2, payload: { assignmentId: 'a1' } });
+  assert.notEqual(nextAttempt.id, first.id);
+  assert.equal(nextAttempt.idempotencyKey, 'launch:t1:s1:2:same');
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});

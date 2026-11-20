@@ -175,6 +175,29 @@ test('E10 规划建议调用已配置模型、校验步骤并记录 planner 用�
   assert.throws(() => module.parseWorkPlanReply(JSON.stringify({ steps: [{ executorId: 'analysis', text: 'x' }] }), ['analysis']), { status: 502 });
 });
 
+test('E10 规划器接受长目标，并在解析阶段复用引擎的 verify 白名单', async t => {
+  const reply = {
+    steps: [
+      { executorId: 'claude-code', text: '修改前端页面', scope: ['frontend/src/**'], verify: { command: 'npm test', expect: 'exit=0' } },
+      { executorId: 'analysis', text: '核对结果', dependsOn: [0] }
+    ]
+  };
+  const fetchImpl = async () => Response.json({
+    status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(reply) }] }]
+  });
+  const { api, hub } = await setup(t, { fetchImpl });
+  const { profile } = await configured(api);
+  assert.equal((await api('/workflow-config', 'PUT', { defaultProfileId: profile.id })).status, 200);
+  const result = await hub.suggestWorkPlan({ goal: '长目标'.repeat(400), executors: ['claude-code', 'analysis'] });
+  assert.deepEqual(result.steps[0].scope, ['frontend/src/**']);
+  assert.equal(result.steps[0].verify.command, 'npm test');
+  assert.equal(result.steps[0].verify.expect, 'exit=0');
+  assert.throws(() => module.parseWorkPlanReply(JSON.stringify({ steps: [
+    { executorId: 'analysis', text: '非法验收', verify: { command: 'npx eslint .' } },
+    { executorId: 'analysis', text: '第二步' }
+  ] }), ['analysis']), { status: 502 });
+});
+
 test('E10 规划器把窗口句柄限制在可见窗口列表', () => {
   const reply = JSON.stringify({ steps: [
     { executorId: 'window', text: '继续执行', executorInput: { handle: 42 } },
@@ -183,4 +206,33 @@ test('E10 规划器把窗口句柄限制在可见窗口列表', () => {
   const steps = module.parseWorkPlanReply(reply, ['window', 'analysis'], [], [{ handle: 42, process: 'Codex', title: 'Codex' }]);
   assert.deepEqual(steps[0].executorInput, { handle: 42, process: 'Codex', submit: true });
   assert.throws(() => module.parseWorkPlanReply(reply, ['window', 'analysis'], [], [{ handle: 7, process: 'Other', title: 'Other' }]), { status: 502 });
+});
+
+test('删除被引用的模型配置会清理子智能体与评审员引用', async t => {
+  const { api, hub } = await setup(t); const { profile, credential } = await configured(api);
+  const reader = (await api('/model-profiles', 'POST', { name: '子智能体', credentialId: credential.id, model: 'gpt-5.4' })).profile;
+  const reviewer = (await api('/model-profiles', 'POST', { name: '评审员', credentialId: credential.id, model: 'gpt-5.4' })).profile;
+  assert.equal((await api('/workflow-config', 'PUT', {
+    defaultProfileId: profile.id,
+    stages: { insights: { subagents: [{ id: 'reader', profileId: reader.id, name: '只读', role: '核对证据' }], review: { reviewerProfileIds: [reviewer.id] } } }
+  })).status, 200);
+  await api(`/model-profiles/${reader.id}`, 'DELETE');
+  await api(`/model-profiles/${reviewer.id}`, 'DELETE');
+  const stage = hub.captureWorkflow().stages.insights;
+  assert.equal(stage.subagents, undefined);
+  assert.equal(stage.review, undefined);
+});
+
+test('删除被子智能体引用的个人Skill不会卡死后续任务', async t => {
+  const { api, hub } = await setup(t); const { profile, credential } = await configured(api);
+  const reader = (await api('/model-profiles', 'POST', { name: '子智能体', credentialId: credential.id, model: 'gpt-5.4' })).profile;
+  const skill = (await api('/workflow-skills', 'POST', { name: '个人洞察', stageId: 'insights', description: '', content: '# 洞察\n基于证据。' })).skill;
+  assert.equal((await api('/workflow-config', 'PUT', {
+    defaultProfileId: profile.id,
+    stages: { insights: { subagents: [{ id: 'reader', profileId: reader.id, name: '只读', role: '核对证据', skillId: skill.id }] } }
+  })).status, 200);
+  await api(`/workflow-skills/${skill.id}`, 'DELETE');
+  const stage = hub.captureWorkflow().stages.insights;
+  assert.equal(stage.subagents.length, 1);
+  assert.equal(stage.subagents[0].skillId, undefined);
 });

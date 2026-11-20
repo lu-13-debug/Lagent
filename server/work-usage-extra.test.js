@@ -52,7 +52,7 @@ test('工单用量达到 80% 时发布一次预算告警事件', async t => {
   const engine = createWorkEngine(store, createExecutorRegistry([cli]), event => published.push(event), {
     workspace: dir,
     policy: { allowedExecutors: ['codex'], budgets: { maxConcurrent: 2, maxCallsPerTicket: 12, maxRuntimeMs: 3600000, maxTokensPerTicket: 1000 } },
-    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' }
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' }
   });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   const ticket = engine.command({ text: '预算告警', executorId: 'codex', executorInput: { prompt: 'x' } });

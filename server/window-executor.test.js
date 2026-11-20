@@ -56,6 +56,25 @@ test('窗口没有新输出时明确提示，而不是当作空结果', async t 
   assert.match(finished.warning, /读取/);
 });
 
+test('停止窗口任务后异步轮询不会把状态改回完成', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'window-stop-'));
+  const store = new Store(dir);
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  let reads = 0;
+  const bridge = {
+    listWindows: async () => [{ id: '42', handle: 42, process: 'Codex', title: 'Codex' }],
+    sendToWindow: async () => ({ ok: true, process: 'Codex', submitted: true }),
+    readWindow: async () => { reads += 1; await sleep(20); return { text: reads === 1 ? '旧输出' : `新输出${reads}` }; }
+  };
+  const executor = windowExecutor({ store, bridge, waitMs: 0, pollMs: 200, maxWaitMs: 1000 });
+  const task = executor.start({ id: 'ticket-stop' }, { id: 'assignment-stop' }, { executorInput: { handle: 42, text: '继续', submit: true } });
+  for (let i = 0; i < 40 && reads < 2; i++) await sleep(10);
+  executor.stop(executor.get(task.id));
+  await sleep(600);
+  assert.equal(executor.get(task.id).status, 'cancelled');
+  assert.equal(store.get('task', task.id).status, 'cancelled', '取消状态不能被轮询完成覆盖');
+});
+
 test('计划自动执行可把步骤分派给窗口执行器', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'window-plan-'));
   const store = new Store(dir);

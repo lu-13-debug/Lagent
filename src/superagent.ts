@@ -36,6 +36,26 @@ export interface WorkAcceptance {
   durationMs?: number;
   at?: string;
 }
+/** 证据链：执行验收优先，结构评审只能解释、不能覆盖验收失败。 */
+export interface WorkReviewIssue {
+  code: string;
+  severity: 'blocking' | 'warning' | string;
+  message: string;
+  fix?: string;
+  failureMode?: string;
+  evidenceRefs?: string[];
+}
+export interface WorkReview {
+  verdict: 'pass' | 'revise' | 'reject' | 'unreviewed' | string;
+  issues: WorkReviewIssue[];
+  rubricVersion?: string;
+  failureModes?: string[];
+  evidence?: {
+    level: 'verified' | 'reviewed' | 'failed' | 'unreviewed' | string;
+    execution?: 'passed' | 'failed' | 'unreviewed' | string;
+    verification?: WorkAcceptance | null;
+  };
+}
 /** 结构化交接简报：换 Agent 接手时只读这一块。 */
 export interface WorkHandoff {
   summary?: string;
@@ -51,7 +71,9 @@ export interface WorkTicket {
   executor: string; summary: string; datasetId?: string | null; attention?: WorkAttention; createdAt: string; updatedAt: string;
   parentTicketId?: string | null; chainRootId?: string | null; handoffDepth?: number; handoffSummary?: string; handoffChildId?: string | null;
   planId?: string | null; planStep?: number | null; planTotal?: number | null; projectChatId?: string | null;
-  preview?: WorkPreview | null; verify?: WorkVerifySpec | null; acceptance?: WorkAcceptance | null; contract?: WorkTaskContract | null;
+  /** 会话归属：一条工单是哪个会话、哪一轮里哪个 Agent 的一次 run。 */
+  conversationId?: string | null; turnId?: string | null; agentId?: string | null; role?: 'answer' | 'synthesis' | 'step' | string | null;
+  preview?: WorkPreview | null; verify?: WorkVerifySpec | null; acceptance?: WorkAcceptance | null; review?: WorkReview | null; contract?: WorkTaskContract | null;
   handoff?: WorkHandoff | null;
   /** 详情接口在长时间无心跳时返回；列表投影不带。 */
   stalled?: boolean;
@@ -140,6 +162,9 @@ export interface WorkTaskAnalysis {
 export interface WorkProjectMemoryEntry {
   id: string; projectId: string; ticketId: string | null; projectChatId: string | null;
   executorId: string | null; title: string; status: string | null; summary: string;
+  /** change / note 为普通记忆；reflection 为失败反思，只在 playbook 中前置注入。 */
+  kind?: 'change' | 'note' | 'reflection' | string;
+  lesson?: string; failureCode?: string; occurrences?: number; positive?: number; negative?: number;
   files: string[]; improvements: string[]; openQuestions: string[];
   scope?: string; tags?: string[]; confidence?: number;
   source: 'local' | 'model' | 'external' | string;
@@ -156,6 +181,10 @@ export interface WorkProjectChat {
   autoTitle?: boolean;
   // 团队协作产生的从属会话会指向上级对话；侧栏只列上级对话，右栏再展开各个 Agent。
   parentChatId?: string;
+  /** 归属的 Lagent 会话；有它的时候打开会跳转会话线程，而不是单 Agent 对话。 */
+  conversationId?: string;
+  /** 会话内部执行用的对话：不出现在项目页与侧栏。 */
+  hidden?: boolean;
   // 这条会话自己的权限档位；没有这个字段表示跟随设置里的全局档位。
   permission?: 'read' | 'workspace' | 'full';
   // 建会话时挑的协作 Agent：内置 Agent 拆解后分派给它们，最多 3 个。
@@ -166,6 +195,23 @@ export interface WorkProjectChat {
 export interface WorkProject {
   id: string; name: string; path: string; gitBranch: string; entryCount: number;
   chatCount: number; chats: WorkProjectChat[]; lastActivity?: string; createdAt: string; updatedAt: string;
+}
+export type WorkProjectFileKind = 'dir' | 'markdown' | 'html' | 'pdf' | 'docx' | 'doc' | 'pptx' | 'ppt' | 'csv' | 'sheet' | 'legacy' | 'image' | 'code' | 'text' | 'unsupported';
+export interface WorkProjectFileEntry {
+  name: string; path: string; type: 'dir' | 'file'; size?: number; modifiedAt?: string;
+  ext: string; kind: WorkProjectFileKind; previewable: boolean; locked?: boolean;
+}
+export interface WorkProjectFileList {
+  root: string; path: string; parent: string | null; entries: WorkProjectFileEntry[]; truncated: boolean;
+}
+export interface WorkProjectFileSearch { query: string; entries: WorkProjectFileEntry[]; truncated: boolean }
+export interface WorkProjectFileTable { headers: string[]; rows: string[][]; truncated?: boolean }
+export interface WorkProjectFileSlide { index: number; title: string; text: string }
+export interface WorkProjectFilePreview {
+  path: string; name: string; ext: string; kind: Exclude<WorkProjectFileKind, 'dir'>;
+  mime: string; size: number; modifiedAt: string;
+  text?: string; html?: string; slides?: WorkProjectFileSlide[]; sheets?: ({ name: string } & WorkProjectFileTable)[];
+  headers?: string[]; rows?: string[][]; truncated?: boolean; message?: string;
 }
 export interface WorkProjectSession {
   executorId: 'claude-code' | 'codex' | string; sessionId: string; title: string; updatedAt: string; bytes: number; imported: boolean;
@@ -226,6 +272,19 @@ export interface WorkRun {
   digest: string;
   error: string | null;
 }
+// 会话：用户可见的唯一对话容器。每个被选中的 Agent 只是会话里的一次 run。
+export interface WorkConversationRun { ticketId: string; agentId: string; role: 'answer' | 'synthesis' | 'step' | string }
+export interface WorkConversationTurn {
+  id: string; index: number; prompt: string; mode: 'auto' | 'review' | 'plan' | string;
+  agentIds: string[]; runs: WorkConversationRun[];
+  synthesisTicketId?: string; synthesisAgentId?: string; createdAt: string;
+}
+export interface WorkConversationSummary {
+  id: string; title: string; goal: string; host: string; projectId: string | null;
+  participants: string[]; ticketIds: string[]; turnCount: number;
+  lastPrompt: string; lastMode: string; status: string; createdAt: string; updatedAt: string;
+}
+export interface WorkConversation extends WorkConversationSummary { turns: WorkConversationTurn[] }
 export interface WorkBootstrap {
   capabilities: { work: boolean };
   /** 执行器并发占用：工单显示「排队中」时用来解释是在等空位。 */
@@ -239,13 +298,57 @@ export interface WorkBootstrap {
   profiles?: WorkProfile[];
   activeProfile?: WorkProfilesActive;
   plans?: WorkPlanSummary[];
+  conversations?: WorkConversationSummary[];
   projects?: WorkProject[];
   /** 未绑定工作文件夹时，Agent 读写文件所在的目录。 */
   workspace?: string | null;
+  /** 内置主控的就绪状态：未配置模型时前端禁用发送，外部 Agent 不能绕过。 */
+  lagent?: WorkLagentState;
+}
+export interface WorkLagentState {
+  ready: boolean;
+  configured: boolean;
+  available?: boolean;
+  name?: string;
+  executorId?: string;
+  code?: string;
+  reason?: string;
 }
 export interface WorkAssignment { id: string; ticketId: string; executor: string; status: string; startedAt?: string; endedAt?: string; sessionId?: string; error?: string; heartbeatAt?: string; stalled?: boolean }
 export type WorkReportKind = 'progress' | 'waiting' | 'ready' | 'blocked' | 'failed' | 'dropped';
 export interface WorkReport { id: string; ticketId: string; assignmentId: string; kind: WorkReportKind; summary: string; artifacts?: Record<string, unknown>; createdAt: string }
+// 报告中心：以报告为主表，按会话或工单聚合后的列表项。
+export interface WorkReportItem {
+  id: string;
+  group: 'conversation' | 'ticket' | 'report';
+  groupId: string;
+  reportId: string;
+  reportIds: string[];
+  reportCount: number;
+  title: string;
+  kind: string;
+  kindLabel: string;
+  summary: string;
+  createdAt: string;
+  ticketId: string;
+  ticketTitle: string;
+  ticketStatus: string;
+  conversationId: string;
+  turnId: string;
+  executorId: string;
+  role: string;
+  projectId: string;
+  projectName: string;
+}
+export interface WorkReportList { group: 'conversation' | 'ticket' | 'report'; total: number; reportTotal?: number; cursor: string | null; items: WorkReportItem[] }
+export interface WorkReportArtifact { name: string; kind: string; summary?: string }
+export interface WorkReportDetail {
+  report: { id: string; ticketId: string; assignmentId: string; kind: string; kindLabel: string; summary: string; createdAt: string; conversationId: string; turnId: string; executorId: string; role: string };
+  ticket: { id: string; title: string; status: string; executorId: string; role: string; summary: string; conversationId: string; turnId: string; projectId: string; createdAt: string; updatedAt: string } | null;
+  conversation: { id: string; title: string; goal: string; projectId: string; participants: string[]; createdAt: string } | null;
+  project: { id: string; name: string } | null;
+  artifacts: WorkReportArtifact[];
+}
 export interface WorkTeamProposal { id: string; kind: 'chart' | 'clean'; status: 'proposed' | 'needsApproval' | 'accepted' | 'rejected'; summary: string }
 export interface WorkTeamNode {
   id: string; parentId: string | null; depth: number; name: string; status: string;
@@ -350,3 +453,26 @@ export interface WorkImChannel { id: string; name: string; kind: 'slack' | 'team
 export interface WorkImConfig { kinds: WorkImChannel['kind'][]; baseUrl: string; channels: WorkImChannel[] }
 export interface WorkLiveSession { id: string; handle: number; process: string; title: string; ticketId: string; status: 'live' | 'paused' | 'takeover' | 'error'; pausedReason: string; lastError: string; intervalMs: number; frames: number; seq: number; startedAt: string; lastFrameAt: string | null; width: number; height: number }
 export interface WorkLiveFrame { id: string; seq: number; image: string; width: number; height: number; at: string; status: string }
+
+// 技能与插件中心：技能写原生 .claude/skills，插件交给本机 Claude Code CLI。
+export type WorkSkillScope = 'project' | 'global';
+export interface WorkSkillSource { type: 'catalog' | 'github'; repo: string; path: string; ref: string; commit: string; catalogId?: string }
+export interface WorkSkillFile { path: string; size: number; sha256: string }
+export interface WorkSkill {
+  id: string; name: string; description: string; scope: WorkSkillScope; projectId: string | null;
+  source: WorkSkillSource; targetPath: string; files: WorkSkillFile[]; enabled: boolean; missing: boolean;
+  installedAt: string; updatedAt: string;
+}
+export interface WorkSkillCatalogEntry {
+  id: string; name: string; title: string; description: string; category: 'code' | 'docs' | 'data' | 'ops' | string;
+  repo: string; path: string; ref: string; license: string; installedProject: boolean; installedGlobal: boolean;
+}
+export interface WorkSkillPreview {
+  token?: string; candidates?: string[]; name?: string; description?: string; repo?: string; path?: string;
+  ref?: string; commit?: string; catalog?: boolean; license?: string; files?: WorkSkillFile[]; digest?: string; bytes?: number;
+}
+export interface WorkPluginMarketplace { name?: string; source?: string; repo?: string; installLocation?: string; [key: string]: unknown }
+export interface WorkPlugins {
+  available: boolean; reason?: string; binary?: string;
+  installed: Record<string, unknown>[]; catalog: Record<string, unknown>[]; marketplaces: WorkPluginMarketplace[];
+}

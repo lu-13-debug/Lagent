@@ -1,66 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AppWindow, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCopy, File as FileIcon, Folder, FolderGit2, GitBranch, History, Inbox, LayoutDashboard, Package, Plus, RefreshCw, Save, Send, ShieldCheck, SkipForward, Sparkles, Trash2, Users, X } from 'lucide-react';
+import { Bot, Brain, ChevronLeft, ChevronRight, ClipboardCopy, Download, File as FileIcon, Folder, FolderGit2, FolderOpen, History, Inbox, LayoutDashboard, Package, Plus, RefreshCw, Save, Sparkles, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import { Modal } from './ui';
-import { ChatModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
-import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkRun, WorkTeamwork, WorkTicket } from '../superagent';
-import { ACTIVE_TICKET_STATUS, RUN_STATUS_LABELS, RUN_STEP_LABELS, STATUS_LABELS } from '../status';
+import { ProjectFiles } from './ProjectFiles';
+import { FileKindIcon, FILE_KIND_LABELS, FilePreviewBody, fileKindFromPath, formatFileSize, formatFileTime, useProjectFilePreview } from './ProjectFilePreview';
+import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession } from '../superagent';
+import { STATUS_LABELS } from '../status';
+import { EXECUTOR_LABELS } from '../executor-label';
 import '../projects.css';
 
 type Props = {
   notify: (text: string, error?: boolean) => void;
-  onOpenTicket: (id: string) => void;
   allowedExecutors?: string[];
   focusProjectId?: string | null;
   focusChatId?: string | null;
   requestImport?: number;
   onState?: (state: { projects: WorkProject[]; projectId: string | null; chatId: string | null }) => void;
   onFocusProject?: (id: string | null) => void;
-  // chat：只显示一个对话（独立页面）；project：单个项目自己的页面；manage：全部项目（导入、浏览、删除）。
-  mode?: 'manage' | 'chat' | 'project';
+  // project：单个项目自己的页面；manage：全部项目（导入、浏览、删除）。
+  mode?: 'manage' | 'project';
   onOpenChat?: (projectId: string, chatId: string) => void;
-  onExitChat?: () => void;
   onBackToProjects?: () => void;
-  // 对话页里直接确认待审批的工单，不用先打开详情弹窗。
-  onApprove?: (ticketId: string) => void;
-  // 计划里某一步彻底修不好时跳过它，好让后面的步骤继续跑。
-  onSkip?: (ticketId: string) => void;
-  // 消息被删除后通知外层：右侧「执行详情」是主壳自己的一份快照，不刷新会留着已删的卡片。
-  onTicketsChanged?: () => void;
 };
 
-const EXECUTOR_LABELS: Record<string, string> = {
-  model: 'Lagent',
-  'claude-code': 'Claude Code',
-  codex: 'Codex',
-  'claude-acp': 'Claude ACP',
-  'dsh-acp': 'DSH ACP',
-  'codex-acp': 'Codex ACP',
-  opencode: 'OpenCode',
-  gemini: 'Gemini CLI',
-  qwen: 'Qwen Code',
-  'cursor-agent': 'Cursor Agent',
-  dsh: 'DSH CLI',
-  codebuddy: 'CodeBuddy',
-  qoder: 'Qoder',
-  iflow: 'iFlow',
-  kimi: 'Kimi CLI',
-  workbuddy: 'WorkBuddy',
-  window: '窗口 Agent'
-};
-
-// 分派优先级：先 CLI（能改文件、能续接会话），再 ACP，最后其它本机 Agent。
-const DISPATCH_ORDER = ['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi', 'workbuddy'];
-
-// 编排运行的状态文案；步骤状态复用执行器的那套，避免多一套词。
-const PERMISSION_LABELS: Record<'read' | 'workspace' | 'full', string> = {
-  read: '仅查看',
-  workspace: '仅工作区内修改',
-  full: '完全权限'
-};
-
-export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onExitChat, onBackToProjects, onApprove, onSkip, onTicketsChanged }: Props) {
-  const chatMode = mode === 'chat';
+export function ProjectsPanel({ notify, allowedExecutors = ['claude-code', 'codex'], focusProjectId = null, focusChatId = null, requestImport = 0, onState, onFocusProject, mode = 'manage', onOpenChat, onBackToProjects }: Props) {
   const projectMode = mode === 'project';
   const [projects, setProjects] = useState<WorkProject[]>([]);
   const [loading, setLoading] = useState(true);
@@ -80,34 +43,12 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     window.history.replaceState(null, '', url);
   }, [activeProjectId]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [tickets, setTickets] = useState<WorkTicket[]>([]);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [sessions, setSessions] = useState<WorkProjectSession[] | null>(null);
-  const [chatDraft, setChatDraft] = useState('');
-  const [chatModel, setChatModel] = useState<ChatModelChoice>({ profileId: '', effort: 'default' });
-  // 深度编排：开=一次运行里分析/拆解/分发/验证；关=沿用现在的单条工单。
-  // 深度编排的模板：空字符串 = 让编排器按目标猜，其余为用户手选。
-  const [orchTemplate, setOrchTemplate] = useState(() => {
-    try { return localStorage.getItem('lagent.orchtemplate.v1') || ''; } catch { return ''; }
-  });
-  const [orchestrate, setOrchestrate] = useState(() => {
-    try { return localStorage.getItem('lagent.orchestrate.v1') !== 'off'; } catch { return true; }
-  });
-  const [runs, setRuns] = useState<WorkRun[]>([]);
-  const [runBusy, setRunBusy] = useState('');
-  // 服务端关掉编排器（LAGENT_ORCHESTRATOR=legacy）时不显示开关，免得点了报 503。
-  const [orchestratorOn, setOrchestratorOn] = useState(true);
   const [newChatOpen, setNewChatOpen] = useState(false);
-  const [newExecutors, setNewExecutors] = useState<string[]>([]);
   const [newTitle, setNewTitle] = useState('');
   const [newTask, setNewTask] = useState('');
-  const [windows, setWindows] = useState<{ id: string; handle: number; pid: number; process: string; title: string }[]>([]);
-  const [windowId, setWindowId] = useState('');
-  const [planOpen, setPlanOpen] = useState(false);
-  const [planGoal, setPlanGoal] = useState('');
-  const [planSteps, setPlanSteps] = useState<{ executorId: string; text: string; dependsOn?: number[] }[]>([]);
-  const [planBusy, setPlanBusy] = useState('');
-  const [tab, setTab] = useState<'overview' | 'chat' | 'archive' | 'memory' | 'artifacts'>('chat');
+  const [tab, setTab] = useState<'overview' | 'chat' | 'files' | 'archive' | 'memory' | 'artifacts'>('chat');
   const [memory, setMemory] = useState<WorkProjectMemory | null>(null);
   const [memoryBusy, setMemoryBusy] = useState('');
   const [brief, setBrief] = useState<WorkProjectBrief | null>(null);
@@ -118,26 +59,9 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [changeTitle, setChangeTitle] = useState('');
   const [changeSummary, setChangeSummary] = useState('');
-  const [dispatchOpen, setDispatchOpen] = useState(false);
-  const [dispatchTargets, setDispatchTargets] = useState<string[]>([]);
-  const [dispatchBusy, setDispatchBusy] = useState(false);
-  // 对话里的协作：内置 Agent 当主对话，另外挑 1–3 个外部 Agent 一起做，结果汇总回这里。
-  const [collabOpen, setCollabOpen] = useState(false);
-  const [collabAgents, setCollabAgents] = useState<string[]>([]);
-  // 派单前的任务书版本：内置 Agent 把不够具体的话改写成三份，用户挑一份再分发。
-  const [promptAsk, setPromptAsk] = useState<{ goal: string; source: string; modelError?: string; options: WorkPromptOption[] } | null>(null);
-  // 协作任务：软件把目标拆成三份、分派、再组装成一个游戏。
-  const [teamworkOpen, setTeamworkOpen] = useState(false);
-  const [teamworkGoal, setTeamworkGoal] = useState('');
-  const [teamworkAgents, setTeamworkAgents] = useState<string[]>([]);
-  const [teamworkBusy, setTeamworkBusy] = useState('');
-  const [teamworks, setTeamworks] = useState<WorkTeamwork[]>([]);
-  // 对话页：每条 Agent 回复可以展开看它怎么想、怎么做。按工单 id 缓存，避免重复请求。
-  const [expandedTurns, setExpandedTurns] = useState<Record<string, boolean>>({});
-  const [traces, setTraces] = useState<Record<string, { loading?: boolean; error?: string; items?: { kind: string; text: string; detail?: string; at?: string }[] }>>({});
 
   const project = useMemo(() => projects.find(item => item.id === activeProjectId) || null, [projects, activeProjectId]);
-  const dispatchExecutors = useMemo(() => DISPATCH_ORDER.filter(id => allowedExecutors.includes(id)), [allowedExecutors]);
+  const chat = useMemo(() => project?.chats.find(item => item.id === activeChatId) || null, [project, activeChatId]);
   // 产物不看工单，只看项目变更档案：同一路径可能被多次改动，合并成一行。
   const artifactRows = useMemo(() => {
     const rows = new Map<string, { path: string; count: number; last: string; executor: string }>();
@@ -154,23 +78,10 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     }
     return [...rows.values()].sort((left, right) => right.last.localeCompare(left.last));
   }, [changes]);
-  // 能跟着内置 Agent 一起干活的外部 Agent：不含内置 Agent 自己，最多再选 3 个。
-  const collabCandidates = useMemo(() => dispatchExecutors.filter(id => id !== 'model'), [dispatchExecutors]);
-  const chat = useMemo(() => project?.chats.find(item => item.id === activeChatId) || null, [project, activeChatId]);
-  // 每个对话各自的模型与思考强度，切对话时恢复上次的选择；协作 Agent 也跟着会话走。
-  useEffect(() => {
-    if (!activeChatId) return;
-    setChatModel(readChatModel(activeChatId));
-    const stored = project?.chats.find(item => item.id === activeChatId)?.collaborators;
-    setCollabAgents(Array.isArray(stored) ? stored.slice(0, 3) : []);
-    // 只在切换会话时重置，避免项目刷新把用户刚勾的协作 Agent 冲掉。
-  }, [activeChatId]);
-  const planExecutors = useMemo(() => {
-    const ids = new Set<string>();
-    for (const item of project?.chats || []) ids.add(item.executorId);
-    for (const id of allowedExecutors) if (id !== 'window') ids.add(id);
-    return [...ids];
-  }, [project, allowedExecutors]);
+  // 产物预览：与「文件」页共用同一套渲染，点一行看一份。
+  const [artifactPath, setArtifactPath] = useState<string | null>(null);
+  const artifactRow = useMemo(() => artifactRows.find(row => row.path === artifactPath) || null, [artifactRows, artifactPath]);
+  const { preview: artifactPreview, loading: artifactLoading, error: artifactError } = useProjectFilePreview(activeProjectId || '', artifactPath);
 
   const loadProjects = async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -182,31 +93,6 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     finally { if (!quiet) setLoading(false); }
   };
   useEffect(() => { void loadProjects(); }, []);
-  // 服务端说「项目/对话/文件夹不存在」时，界面上的列表大概率已经过期（比如在别处删掉了）。
-  // 直接刷新一次列表，并把提示换成一句人话，免得用户以为是自己点错了。
-  const reportFailure = async (cause: unknown) => {
-    const message = (cause as Error)?.message || '操作失败';
-    if (/不存在|已经不在|已被删|被删掉/.test(message)) {
-      notify('这个工作文件夹或对话已经不在列表里了，已帮你刷新。', true);
-      await loadProjects(true);
-      return;
-    }
-    notify(message, true);
-  };
-  const loadTeamworks = async (projectId: string | null = activeProjectId) => {
-    if (!projectId) { setTeamworks([]); return; }
-    try {
-      const result = await api.workProjectTeamworks(projectId);
-      setTeamworks(result.teamworks);
-    } catch { /* 轮询失败不打断页面。 */ }
-  };
-  useEffect(() => { void loadTeamworks(activeProjectId); }, [activeProjectId]);
-  // 有协作任务在跑时每 5 秒刷新一次状态，跑完自动停。
-  useEffect(() => {
-    if (!teamworks.some(item => item.status === 'running')) return;
-    const timer = window.setInterval(() => void loadTeamworks(), 5000);
-    return () => window.clearInterval(timer);
-  }, [teamworks, activeProjectId]);
   // 侧栏「添加本地文件夹」：打开导入表单，并把焦点放进路径输入框。
   useEffect(() => {
     if (!requestImport) return;
@@ -219,13 +105,18 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
   useEffect(() => {
     onState?.({ projects, projectId: activeProjectId, chatId: activeChatId });
   }, [projects, activeProjectId, activeChatId, onState]);
+  // 只有「换了项目」才重置页签与缓存；项目列表的后台刷新不应该把用户从
+  // 记忆/档案/产物页踢回对话。
+  useEffect(() => {
+    if (!activeProjectId) return;
+    setSessionsOpen(false); setSessions(null);
+    setTab('chat'); setBrief(null); setChanges([]); setChangeTitle(''); setChangeSummary(''); setMemory(null); setArtifactPath(null);
+  }, [activeProjectId]);
   useEffect(() => {
     if (!activeProjectId) { setActiveChatId(null); return; }
     const item = projects.find(entry => entry.id === activeProjectId);
     if (!item) return;
     setActiveChatId(previous => previous && item.chats.some(entry => entry.id === previous) ? previous : item.chats[0]?.id || null);
-    setSessionsOpen(false); setSessions(null);
-    setTab('chat'); setBrief(null); setChanges([]); setChangeTitle(''); setChangeSummary(''); setMemory(null);
   }, [activeProjectId, projects]);
   // 从侧栏或工单详情进入时，切到指定项目 / 指定会话，并清除一次性焦点。
   // 必须排在「切换项目时校正当前会话」之后，否则会被它矫正回第一条会话。
@@ -244,70 +135,6 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     }
     onFocusProject?.(null);
   }, [focusProjectId, focusChatId, projects, onFocusProject]);
-  useEffect(() => {
-    let cancelled = false;
-    if (!chat) { setTickets([]); return () => { cancelled = true; }; }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // 消息还在跑的时候自己轮询：批准之后状态要立刻从「待确认」变成「执行中」，不能等刷新页面。
-    const load = async () => {
-      try {
-        const result = await api.workProjectChatTickets(chat.id);
-        if (cancelled) return;
-        setTickets(result.tickets);
-        if (result.tickets.some(ticket => ACTIVE_TICKET_STATUS.has(ticket.status))) {
-          timer = setTimeout(() => void load(), 2500);
-        }
-      } catch {
-        if (!cancelled) setTickets([]);
-      }
-    };
-    void load();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [chat?.id, chat?.lastTicketId]);
-
-  // 编排器是否启用：只有启用时才显示「深度编排」开关。
-  useEffect(() => {
-    let cancelled = false;
-    api.workOrchestrator()
-      .then(result => {
-        if (cancelled) return;
-        setOrchestratorOn(result.enabled);
-        if (!result.enabled) setOrchestrate(false);
-      })
-      .catch(() => { if (!cancelled) setOrchestratorOn(false); });
-    return () => { cancelled = true; };
-  }, []);
-
-  // 深度编排的运行记录：只取当前对话的。有活在跑时 3 秒刷一次，空闲时 12 秒兜底
-  // （之前只在「本次加载到活运行」时才续期，刚发起的运行永远刷不到新状态）。
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    if (!chat) { setRuns([]); return () => { cancelled = true; }; }
-    const chatId = chat.id;
-    const tick = async () => {
-      let delay = 12000;
-      try {
-        const result = await api.workRuns(20);
-        if (cancelled) return;
-        const mine = result.runs.filter(run => run.chatId === chatId);
-        setRuns(mine);
-        if (mine.some(run => ['drafting', 'awaiting_approval', 'running', 'verifying', 'repairing'].includes(run.status))) delay = 3000;
-      } catch {
-        if (!cancelled) setRuns([]);
-      }
-      if (!cancelled) timer = setTimeout(() => void tick(), delay);
-    };
-    void tick();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [chat?.id]);
-
-  // 进对话就停在最新一条上（和常见聊天软件一致），否则新消息会藏在输入框下面。
-  useEffect(() => {
-    const list = [...document.querySelectorAll<HTMLElement>('.pj-messages')].find(node => node.getClientRects().length > 0);
-    if (!list) return;
-    list.scrollTop = list.scrollHeight;
-  }, [chat?.id, tickets.length]);
 
   const loadDirectory = async (target = '') => {
     setBrowserBusy(true);
@@ -340,20 +167,6 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     } catch (cause) { notify((cause as Error).message, true); }
     finally { setBusy(''); }
   };
-  const removeProject = (item: WorkProject) => setConfirm({
-    title: `移除项目「${item.name}」`,
-    body: '只删除软件内的记录，不会删除本地文件，也不会影响 Git 仓库。',
-    label: '移除项目',
-    run: async () => {
-      setBusy(`delete-${item.id}`);
-      try {
-        await api.workDeleteProject(item.id);
-        await loadProjects(true);
-        notify(`已移除项目「${item.name}」。`);
-      } catch (cause) { notify((cause as Error).message, true); }
-      finally { setBusy(''); }
-    }
-  });
   const openSessions = async () => {
     if (!project) return;
     setSessionsOpen(true);
@@ -375,59 +188,32 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     } catch (cause) { notify((cause as Error).message, true); }
     finally { setBusy(''); }
   };
+  // 新建对话不再让用户先挑 Agent：默认由内置 Lagent 负责，建好后在对话输入框里按任务换人。
+  const defaultChatExecutor = () => allowedExecutors.includes('model') ? 'model' : (allowedExecutors[0] || '');
   const openNewChat = async () => {
     setNewChatOpen(true);
-    setNewExecutors([allowedExecutors[0] || 'claude-code']);
     setNewTitle('');
     setNewTask('');
-    if (allowedExecutors.includes('window')) {
-      try { setWindows((await api.workWindows()).windows); } catch { setWindows([]); }
-    }
   };
-  const toggleNewExecutor = (id: string) => setNewExecutors(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id]);
   const createChat = async () => {
     if (!project) return;
-    const execs = [...new Set(newExecutors)].filter(id => allowedExecutors.includes(id));
-    if (!execs.length) { notify('请至少选择一个 Agent。', true); return; }
-    if (execs.length > 4) { notify('一次最多选择 4 个 Agent。', true); return; }
-    const target = windows.find(item => item.id === windowId);
-    if (execs.includes('window') && !target) { notify('请选择要接管的窗口。', true); return; }
+    const executorId = defaultChatExecutor();
+    if (!executorId) { notify('没有可用于项目的执行器，请先在设置里启用。', true); return; }
     setBusy('new-chat');
     try {
       const task = newTask.trim();
-      if (execs.length > 1) {
-        // 多 Agent：同一任务并行分派，每个 Agent 一条工单，各自在自己的会话里执行。
-        // 窗口 Agent 不在项目目录里跑，它把同一段任务发进你选定的那个窗口。
-        if (!task) { notify('多 Agent 协同需要写下要一起完成的任务。', true); return; }
-        const result = await api.workProjectDispatch(project.id, task, execs, execs.includes('window') && target
-          ? { handle: target.handle, process: target.process, title: target.title }
-          : undefined);
-        await loadProjects(true);
-        setNewChatOpen(false);
-        const chatId = result.tickets.map(ticket => ticket.projectChatId).filter(Boolean)[0];
-        if (chatId) setActiveChatId(chatId);
-        notify(execs.includes('window')
-          ? `已把任务分派给 ${execs.length} 个 Agent：项目内 Agent 会在项目目录执行，窗口 Agent 会发送到「${target?.title || '所选窗口'}」。`
-          : `已把任务分派给 ${execs.length} 个 Agent，各自在项目目录里开始执行。`);
-        return;
-      }
       const result = await api.workCreateProjectChat(project.id, {
-        executorId: execs[0],
-        ...(newTitle.trim() ? { title: newTitle.trim() } : {}),
-        ...(execs[0] === 'window' && target ? { handle: target.handle, process: target.process, windowTitle: target.title } : {})
+        executorId,
+        ...(newTitle.trim() ? { title: newTitle.trim() } : {})
       });
-      let ticketId = '';
-      if (task) {
-        const sent = await api.workProjectChatMessage(result.chat.id, task);
-        ticketId = sent.ticket.id;
-      }
+      if (task) await api.workProjectChatMessage(result.chat.id, task);
       await loadProjects(true);
       setActiveChatId(result.chat.id);
       setNewChatOpen(false);
-      if (!chatMode && onOpenChat) onOpenChat(project.id, result.chat.id);
+      if (onOpenChat) onOpenChat(project.id, result.chat.id);
       notify(task
-        ? `已创建与 ${EXECUTOR_LABELS[execs[0]] || execs[0]} 的项目对话，并提交了任务（待确认）。`
-        : `已创建与 ${EXECUTOR_LABELS[execs[0]] || execs[0]} 的项目对话。`);
+        ? `已创建与 ${EXECUTOR_LABELS[executorId] || executorId} 的项目对话，并提交了任务（待确认）。`
+        : `已创建与 ${EXECUTOR_LABELS[executorId] || executorId} 的项目对话。`);
     } catch (cause) { notify((cause as Error).message, true); }
     finally { setBusy(''); }
   };
@@ -445,197 +231,6 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       finally { setBusy(''); }
     }
   });
-  const send = async () => {
-    const text = chatDraft.trim();
-    if (!chat || !text) return;
-    // 协作与深度编排都是「派活」：先把用户的话改写成三份任务书让他挑，
-    // 挑完再分发。单 Agent 普通对话不走这一步，免得每次都多一次确认。
-    if (chat.executorId === 'model' && (collabAgents.length > 0 || orchestrate)) {
-      setBusy('send');
-      try {
-        const refined = await api.workSuggestPrompts({
-          goal: text,
-          // 深度编排时还没挑协作 Agent，这里用「能接项目活的执行器」当候选写进任务书。
-          agentIds: collabAgents.length ? collabAgents : dispatchExecutors,
-          ...(project?.id ? { projectId: project.id } : {}),
-          projectChatId: chat.id,
-        });
-        if (!refined.prompts.length) {
-          await deliver(text);
-          return;
-        }
-        setPromptAsk({ goal: text, source: refined.source, modelError: refined.modelError, options: refined.prompts });
-      } catch (cause) { await reportFailure(cause); }
-      finally { setBusy(''); }
-      return;
-    }
-    await deliver(text);
-  };
-  /** 真的把一条消息交给 Agent（状态机在这里分三个入口）。 */
-  const deliver = async (text: string) => {
-    if (!chat || !text.trim()) return;
-    setBusy('send');
-    try {
-      // 协作：本条对话是内置 Agent 时，可以拉着另外 1–3 个 Agent 一起做。
-      // 内置 Agent 负责拆解与汇总留在主对话里，其他 Agent 作为从属会话挂在右栏。
-      // 优先于「深度编排」：你亲手点了哪几个 Agent，就按你的来。
-      if (chat.executorId === 'model' && collabAgents.length) {
-        const result = await api.workCollaborate(text, collabAgents, {
-          projectChatId: chat.id,
-          ...(chatModel.profileId ? { profileId: chatModel.profileId } : {}),
-          autoRun: true
-        });
-        setChatDraft('');
-        await loadProjects(true);
-        if (result.mainChatId) setActiveChatId(result.mainChatId);
-        notify(`已交给 ${collabAgents.length + 1} 个 Agent：Lagent 先拆解，其余各自执行，结果汇总回这条对话。`);
-        return;
-      }
-      // 深度编排：把整句话交给编排器，它自己拆解、分发、验证。
-      if (orchestrate) {
-        const started = await api.workStartRun({ goal: text, projectId: project?.id || null, chatId: chat.id, templateId: orchTemplate || null });
-        setChatDraft('');
-        setRuns(current => [started.run, ...current.filter(run => run.id !== started.run.id)]);
-        notify('已开始分析任务；拆完的计划会先给你过一遍，批准后才动手。');
-        return;
-      }
-      const result = await api.workProjectChatMessage(chat.id, text, undefined, chat.executorId === 'model' ? chatModel : undefined);
-      setChatDraft('');
-      setTickets(current => [...current.filter(item => item.id !== result.ticket.id), result.ticket]);
-      await loadProjects(true);
-      notify(chat.executorId === 'window' ? '已发送到该窗口的 Agent 会话。' : '已交给 Agent 开始执行，过程在右侧「执行详情」里。');
-    } catch (cause) { await reportFailure(cause); }
-    finally { setBusy(''); }
-  };
-  const toggleOrchestrate = () => {
-    const next = !orchestrate;
-    setOrchestrate(next);
-    // 打开深度编排就清掉手选的协作 Agent：两种模式只能留一个。
-    if (next) setCollabAgents([]);
-    try { localStorage.setItem('lagent.orchestrate.v1', next ? 'on' : 'off'); } catch { /* 隐私模式下忽略 */ }
-  };
-  // 每条会话自己的权限档位：留空表示跟随设置里的全局档位。
-  const changePermission = async (next: '' | 'read' | 'workspace' | 'full') => {
-    if (!chat) return;
-    setBusy('permission');
-    try {
-      await api.workChatPermission(chat.id, next);
-      notify(next ? `这条对话的权限改成「${PERMISSION_LABELS[next]}」。` : '这条对话改回跟随设置里的权限档位。');
-      await loadProjects(true);
-    } catch (cause) { notify((cause as Error).message, true); }
-    finally { setBusy(''); }
-  };
-  const decideRun = async (run: WorkRun, decision: 'approve' | 'reject') => {
-    setRunBusy(`${run.id}:${decision}`);
-    try {
-      const result = await api.workApproveRun(run.id, decision);
-      setRuns(current => current.map(item => item.id === result.run.id ? result.run : item));
-      notify(decision === 'approve' ? '已批准，编排器开始分发执行。' : '已退回，这次运行不会执行。');
-    } catch (cause) { await reportFailure(cause); }
-    finally { setRunBusy(''); }
-  };
-  const cancelRun = async (run: WorkRun) => {
-    setRunBusy(`${run.id}:cancel`);
-    try {
-      const result = await api.workCancelRun(run.id);
-      setRuns(current => current.map(item => item.id === result.run.id ? result.run : item));
-      notify('已取消这次运行。');
-    } catch (cause) { notify((cause as Error).message, true); }
-    finally { setRunBusy(''); }
-  };
-  const toggleDispatchTarget = (id: string) => {
-    setDispatchTargets(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
-  };
-  const toggleDispatchPanel = () => {
-    if (dispatchOpen) { setDispatchOpen(false); return; }
-    if (!dispatchTargets.length) {
-      const preferred = chat && dispatchExecutors.includes(chat.executorId) ? chat.executorId : dispatchExecutors[0];
-      setDispatchTargets(preferred ? [preferred] : []);
-    }
-    setDispatchOpen(true);
-  };
-  const toggleCollabTarget = (id: string) => {
-    const adding = !collabAgents.includes(id);
-    if (adding && !collabAgents.length) {
-      // 协作和深度编排是两种模式：点了具体 Agent，就不再让编排器自己挑人。
-      setOrchestrate(false);
-      try { localStorage.setItem('lagent.orchestrate.v1', 'off'); } catch { /* 隐私模式下忽略 */ }
-    }
-    setCollabAgents(current => (current.includes(id)
-      ? current.filter(item => item !== id)
-      : current.length >= 3 ? current : [...current, id]));
-  };
-  const toggleCollabPanel = () => {
-    if (collabOpen) { setCollabOpen(false); return; }
-    // 打开面板就退出「深度编排」：接下来由你挑人，不再让编排器自己分配。
-    // 不预选，避免"看起来已经选了却还没确认"。
-    setOrchestrate(false);
-    try { localStorage.setItem('lagent.orchestrate.v1', 'off'); } catch { /* 隐私模式下忽略 */ }
-    setCollabOpen(true);
-  };
-  const dispatch = async () => {
-    const text = chatDraft.trim();
-    if (!project || !text || !dispatchTargets.length) return;
-    setDispatchBusy(true);
-    try {
-      const result = await api.workProjectDispatch(project.id, text, dispatchTargets);
-      setChatDraft('');
-      setDispatchOpen(false);
-      await loadProjects(true);
-      notify(`已分派给 ${result.tickets.length} 个 Agent，各自在项目目录里开始执行。`);
-    } catch (cause) { notify((cause as Error).message, true); }
-    finally { setDispatchBusy(false); }
-  };
-  // 协作任务：拆分 → 分派（软件写骨架与契约，三个 Agent 各写一份）→ 组装。
-  const startTeamwork = async () => {
-    if (!project) return;
-    const goal = teamworkGoal.trim();
-    if (!goal) { notify('先写下想做什么样的游戏。', true); return; }
-    const executors = (teamworkAgents.length ? teamworkAgents : dispatchExecutors.slice(0, 3)).filter(id => dispatchExecutors.includes(id));
-    if (!executors.length) { notify('至少选择一个 Agent。', true); return; }
-    setTeamworkBusy('start');
-    try {
-      const result = await api.workStartTeamwork(project.id, goal, executors);
-      setTeamworks(previous => [result.teamwork, ...previous]);
-      setTeamworkOpen(false);
-      setTeamworkGoal('');
-      await loadProjects(true);
-      const agents = new Set(result.teamwork.parts.map(part => part.executorId)).size;
-      notify(`已拆成 ${result.teamwork.parts.length} 份，分给 ${agents} 个 Agent；确认工单后各自开始。`);
-    } catch (cause) { notify((cause as Error).message, true); }
-    finally { setTeamworkBusy(''); }
-  };
-  const assembleTeamwork = async (item: WorkTeamwork) => {
-    setTeamworkBusy(item.id);
-    try {
-      const result = await api.workAssembleTeamwork(item.id);
-      setTeamworks(previous => previous.map(entry => entry.id === item.id ? result.teamwork : entry));
-      if (result.ok) notify(`已组装成 ${result.relativePath}（${Math.max(1, Math.round((result.bytes || 0) / 1024))} KB）。`);
-      else notify(`还组装不了：${result.problems[0]?.message || '文件没写齐'}`, true);
-    } catch (cause) { notify((cause as Error).message, true); }
-    finally { setTeamworkBusy(''); }
-  };
-  const retryTeamworkPart = async (item: WorkTeamwork, partId: string) => {
-    setTeamworkBusy(`${item.id}:${partId}`);
-    try {
-      const result = await api.workRetryTeamworkPart(item.id, partId);
-      setTeamworks(previous => previous.map(entry => entry.id === item.id ? result.teamwork : entry));
-      notify('已重新派这一段；确认新工单后它会接着写。');
-    } catch (cause) { notify((cause as Error).message, true); }
-    finally { setTeamworkBusy(''); }
-  };
-  const openTeamworkFile = async (item: WorkTeamwork) => {
-    if (!item.outputPath) return;
-    const absolute = `${item.projectPath || project?.path || ''}\\${item.outputPath.replace(/\//g, '\\')}`;
-    const bridge = (window as unknown as { lagentDesktop?: { openPath?: (target: string) => Promise<unknown> } }).lagentDesktop;
-    if (bridge?.openPath) {
-      try { await bridge.openPath(absolute); return; } catch { /* 落到复制路径。 */ }
-    }
-    try {
-      await navigator.clipboard.writeText(absolute);
-      notify(`已复制路径：${absolute}`);
-    } catch { notify(absolute); }
-  };
   const loadArchive = async (projectId = activeProjectId) => {
     if (!projectId) return;
     setArchiveBusy('load');
@@ -752,307 +347,10 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
     } catch { notify('复制失败，请允许浏览器访问剪贴板后重试。', true); }
     finally { setArchiveBusy(''); }
   };
-  const startPlan = async () => {
-    if (!chat) return;
-    const goal = chatDraft.trim();
-    if (!goal) { notify('请先在输入框描述项目目标。', true); return; }
-    setPlanBusy('suggest');
-    try {
-      const result = await api.suggestWorkPlan(goal, planExecutors, chat.id);
-      setPlanGoal(goal);
-      setPlanSteps(result.steps.map(step => ({ executorId: step.executorId, text: step.text, ...(step.dependsOn?.length ? { dependsOn: step.dependsOn } : {}) })));
-      setPlanOpen(true);
-    } catch (cause) { notify((cause as Error).message, true); }
-    finally { setPlanBusy(''); }
-  };
-  const openManualPlan = () => {
-    if (!chat) return;
-    const draft = chatDraft.trim();
-    const second = planExecutors.find(id => id !== chat.executorId) || chat.executorId;
-    setPlanGoal(draft);
-    setPlanSteps([
-      { executorId: chat.executorId, text: draft },
-      { executorId: second, text: '', dependsOn: [0] }
-    ]);
-    setPlanOpen(true);
-  };
-  const addPlanStep = () => {
-    setPlanSteps(current => current.length >= 5 ? current : [...current, { executorId: planExecutors[0] || '', text: '', dependsOn: current.length ? [current.length - 1] : [] }]);
-  };
-  const removePlanStep = (index: number) => {
-    if (planSteps.length <= 2) return;
-    setPlanSteps(current => current
-      .filter((_, position) => position !== index)
-      .map(step => ({ ...step, dependsOn: step.dependsOn?.filter(item => item !== index).map(item => item > index ? item - 1 : item) })));
-  };
-  const createPlan = async () => {
-    if (!chat || !planSteps.length) return;
-    if (!planGoal.trim()) { notify('请填写计划目标。', true); return; }
-    if (planSteps.some(step => !step.executorId || !step.text.trim())) { notify('每个步骤都需要选择 Agent 并填写说明。', true); return; }
-    setPlanBusy('create');
-    try {
-      const plan = await api.createWorkPlan(planGoal, planSteps, `project-${chat.id}-${Date.now()}`, false, chat.id);
-      setPlanOpen(false);
-      setChatDraft('');
-      await loadProjects(true);
-      const agents = [...new Set(plan.plan.steps.map(step => EXECUTOR_LABELS[step.executorId] || step.executorId))].join('、');
-      notify(`已创建 ${plan.plan.totalSteps} 步计划，批准后会按步骤分派给 ${agents}。`);
-      const first = plan.plan.steps[0]?.ticketId;
-      if (first) onOpenTicket(first);
-    } catch (cause) { notify((cause as Error).message, true); }
-    finally { setPlanBusy(''); }
-  };
-
-  const chatHeader = <header className="pj-chat-head">
-    <button type="button" className="pj-btn pj-small" onClick={() => { if (chat?.parentChatId && onOpenChat && project) onOpenChat(project.id, chat.parentChatId); else onExitChat?.(); }}><ChevronLeft size={14} />{chat?.parentChatId ? '返回主对话' : '返回项目'}</button>
-    <div className="pj-chat-head-main">
-      <strong>{chat?.title || '对话'}</strong>
-      <span>{project ? `${project.name} · ${project.path}` : '工作文件夹'}{chat ? ` · ${EXECUTOR_LABELS[chat.executorId] || chat.executorId}` : ''}{chat?.parentChatId ? ' · 团队协作分派' : ''}</span>
-    </div>
-    {chat && <span className={`pj-source ${chat.executorId !== 'window' && chat.writable ? 'write' : ''}`}>{chat.executorId === 'window' ? '不写文件' : chat.writable ? '可修改项目' : '只读'}</span>}
-  </header>;
-
-  // 独立对话页：只渲染这一个对话的消息与输入框。
-  // 对话页按时间正序排列：这是「一次对话」，先说的在上面；同批计划步按 planStep 排。
-  const threadTickets = tickets.slice().sort((left, right) => {
-    const stepDelta = (left.planStep ?? -1) - (right.planStep ?? -1);
-    if (left.planId && right.planId && stepDelta !== 0) return stepDelta;
-    return String(left.createdAt).localeCompare(String(right.createdAt));
-  });
-
-  async function toggleTrace(ticket: WorkTicket) {
-    const open = !expandedTurns[ticket.id];
-    setExpandedTurns(current => ({ ...current, [ticket.id]: open }));
-    if (!open) return;
-    scrollTurn(ticket.id);
-    if (traces[ticket.id]?.items || traces[ticket.id]?.loading) return;
-    setTraces(current => ({ ...current, [ticket.id]: { loading: true } }));
-    try {
-      const detail = await api.workTicket(ticket.id);
-      setTraces(current => ({ ...current, [ticket.id]: { items: (detail.activity || []).slice(0, 120) } }));
-    } catch (error) {
-      setTraces(current => ({ ...current, [ticket.id]: { error: error instanceof Error ? error.message : '读取执行记录失败' } }));
-    }
-    scrollTurn(ticket.id);
-  }
-
-  // 展开过程后把这一轮的回复滚进可视区：整轮比视口高时，优先露出回复的结尾。
-  function scrollTurn(ticketId: string) {
-    window.setTimeout(() => {
-      const node = document.querySelector<HTMLElement>(`[data-turn="${ticketId}"]`);
-      if (!node) return;
-      const list = node.closest<HTMLElement>('.pj-messages');
-      const bubble = node.querySelector<HTMLElement>('.pj-bubble-agent');
-      if (list && bubble) {
-        const gap = bubble.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom;
-        if (gap > 0) {
-          list.scrollTo({ top: list.scrollTop + gap + 10, behavior: 'smooth' });
-          return;
-        }
-        if (node.getBoundingClientRect().top < list.getBoundingClientRect().top) {
-          list.scrollTo({ top: list.scrollTop + node.getBoundingClientRect().top - list.getBoundingClientRect().top - 10, behavior: 'smooth' });
-          return;
-        }
-      }
-      node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }, 80);
-  }
-
-  // 删除自己发的一条消息：连同执行记录、报告、快照一起清掉；属于计划的会整条计划一起删。
-  const removeMessage = (ticket: WorkTicket) => setConfirm({
-    title: '删除这条消息？',
-    quote: ticket.title.slice(0, 160),
-    notes: [
-      ticket.planId ? '这条消息属于一个多步计划，整个计划会一起删除。' : '',
-      '它的执行记录、报告与改动快照会一起删除，无法恢复。'
-    ].filter(Boolean),
-    label: '删除',
-    run: async () => {
-      const result = await api.workDeleteTicket(ticket.id);
-      setTickets(current => current.filter(item => !result.ids.includes(item.id)));
-      setExpandedTurns(current => { const next = { ...current }; result.ids.forEach(id => delete next[id]); return next; });
-      notify(result.planRemoved ? `已删除这条消息和它的 ${result.ids.length} 个步骤。` : '已删除这条消息。');
-      onTicketsChanged?.();
-    }
-  });
-
-  const thread = project && chat ? <div className="pj-thread pj-thread-full">
-    <div className="pj-messages pj-conv">
-      {runs.length > 0 && <div className="pj-runs">
-        {runs.map(run => {
-          const total = run.steps.length;
-          const done = run.steps.filter(step => step.status === 'done' || step.status === 'skipped').length;
-          const pct = total ? Math.round((done / total) * 100) : 0;
-          return <div className={`pj-run is-${run.status}`} key={run.id}>
-          <div className="pj-run-head">
-            <span className="pj-run-icon"><Sparkles size={13} /></span>
-            <span className="pj-run-title">深度编排</span>
-            {run.templateLabel && <span className="pj-run-tag">{run.templateLabel}{run.templateChoice ? ' · 手选' : ''}</span>}
-            <span className={`pj-run-status is-${run.status}`}>{RUN_STATUS_LABELS[run.status] || run.status}</span>
-            <span className="pj-run-time">{new Date(run.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
-          </div>
-          <p className="pj-run-goal" title={run.goal}>{run.goal}</p>
-          {total > 0 && <div className="pj-run-progress" role="progressbar" aria-valuenow={done} aria-valuemin={0} aria-valuemax={total} aria-label="已完成的步骤">
-            <span className="pj-run-progress-bar"><i style={{ width: `${pct}%` }} /></span>
-            <span className="pj-run-progress-text">{done}/{total} 步</span>
-          </div>}
-          {run.steps.length > 0 && <ol className="pj-run-steps">
-            {run.steps.map(step => {
-              const inner = <>
-                <span className="pj-run-step-index">{step.index + 1}</span>
-                <span className="pj-run-step-role">{step.role}</span>
-                <span className="pj-run-step-exec">{step.executorId ? (EXECUTOR_LABELS[step.executorId] || step.executorId) : '无可用 Agent'}</span>
-                <span className="pj-run-step-status">{RUN_STEP_LABELS[step.status] || step.status}</span>
-              </>;
-              const ticketId = step.ticketId;
-              // 有工单的步骤点开就能看它到底做了什么（执行记录、改动文件都在详情里）。
-              return <li key={`${run.id}-${step.index}`}>
-                {ticketId
-                  ? <button type="button" className={`pj-run-step pj-run-step-btn is-${step.status}`} title="打开这一步的执行记录" onClick={() => onOpenTicket(ticketId)}>{inner}</button>
-                  : <div className={`pj-run-step is-${step.status}`}>{inner}</div>}
-              </li>;
-            })}
-          </ol>}
-          {run.board.length > 0 && <ul className="pj-run-board">
-            {run.board.slice(-3).map((entry, index) => <li key={`${run.id}-board-${index}`}>{entry.text}</li>)}
-          </ul>}
-          {run.status === 'completed' && run.digest && <p className="pj-run-digest">{run.digest}</p>}
-          {run.error && <p className="pj-run-error">{run.error}</p>}
-          <div className="pj-run-actions">
-            {run.status === 'awaiting_approval' && <>
-              <button type="button" className="pj-btn pj-primary pj-small" disabled={runBusy.startsWith(run.id)} onClick={() => void decideRun(run, 'approve')}><Check size={13} />{runBusy === `${run.id}:approve` ? '批准中…' : '批准计划'}</button>
-              <button type="button" className="pj-btn pj-small" disabled={runBusy.startsWith(run.id)} onClick={() => void decideRun(run, 'reject')}>退回</button>
-            </>}
-            {['drafting', 'awaiting_approval', 'running', 'verifying', 'repairing'].includes(run.status) && <button type="button" className="pj-link" disabled={runBusy.startsWith(run.id)} onClick={() => void cancelRun(run)}><X size={12} />取消这次运行</button>}
-          </div>
-        </div>;
-        })}
-      </div>}
-      {threadTickets.length ? threadTickets.map(ticket => {
-        const open = expandedTurns[ticket.id] === true;
-        const trace = traces[ticket.id];
-        const items = trace?.items || [];
-        const agentName = EXECUTOR_LABELS[ticket.executor || ''] || EXECUTOR_LABELS[chat.executorId] || ticket.executor || chat.executorId;
-        const stamp = new Date(ticket.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-        return <div className="pj-turn" key={ticket.id} data-turn={ticket.id}>
-          <div className="pj-turn-row pj-turn-user">
-            <div className="pj-bubble pj-bubble-user">
-              <p className="pj-bubble-text">{ticket.title}</p>
-              <div className="pj-bubble-foot">
-                <time>{stamp}</time>
-                <button type="button" className="pj-bubble-delete" title="删除这条消息" aria-label="删除这条消息" onClick={() => removeMessage(ticket)}><Trash2 size={12} /></button>
-              </div>
-            </div>
-          </div>
-          <div className="pj-turn-row pj-turn-agent">
-            <div className="pj-bubble pj-bubble-agent">
-              <div className="pj-bubble-head">
-                <span className="pj-agent-name"><Bot size={13} />{agentName}</span>
-                <span className={`pj-agent-status is-${ticket.status}`}>{STATUS_LABELS[ticket.status] || ticket.status}</span>
-                <time>{stamp}</time>
-              </div>
-              {ticket.summary ? <p className={`pj-bubble-text${open ? '' : ' pj-clamp'}`}>{ticket.summary}</p> : <p className="pj-bubble-text pj-bubble-muted">{ticket.status === 'awaiting_review' ? '等你确认后开始执行。' : ticket.status === 'queued' ? '排队中，还没开始。' : ticket.status === 'failed' ? '执行失败了，展开过程能看到是哪一步出的问题。' : '还没有输出。'}</p>}
-              <div className="pj-bubble-actions">
-                <button type="button" className="pj-link" aria-expanded={open} onClick={() => void toggleTrace(ticket)}>{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{open ? '收起过程' : '展开思考过程'}</button>
-                {ticket.status === 'awaiting_review' && onApprove && <button type="button" className="pj-btn pj-primary pj-small" onClick={() => onApprove(ticket.id)}><Check size={13} />确认执行</button>}
-                {ticket.planId && ['failed', 'blocked'].includes(ticket.status) && onSkip && <button type="button" className="pj-btn pj-small" onClick={() => onSkip(ticket.id)}><SkipForward size={13} />跳过这步</button>}
-                <button type="button" className="pj-link" onClick={() => onOpenTicket(ticket.id)}>完整详情</button>
-              </div>
-              {open && <div className="pj-trace">
-                {trace?.loading && <p className="pj-trace-empty">正在读取执行记录…</p>}
-                {trace?.error && <p className="pj-trace-empty">{trace.error}</p>}
-                {!trace?.loading && !trace?.error && (items.length
-                  ? <ol className="pj-trace-list">{items.map((item, index) => <li key={`${ticket.id}-${index}`} className="pj-trace-item">
-                    <span className="pj-trace-index">{index + 1}</span>
-                    <div className="pj-trace-body">
-                      <span className="pj-trace-text">{item.text || item.kind}</span>
-                      {item.detail && <span className="pj-trace-detail">{item.detail}</span>}
-                    </div>
-                    {item.at && <time className="pj-trace-time">{new Date(item.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time>}
-                  </li>)}</ol>
-                  : <p className="pj-trace-empty">{ticket.status === 'queued' || ticket.status === 'awaiting_review' ? '还没开始执行，暂时没有过程记录。' : '这次执行没有留下步骤记录。'}</p>)}
-              </div>}
-            </div>
-          </div>
-        </div>;
-      }) : <p className="pj-empty">还没有消息。在下方描述任务，Agent 会直接开始做。</p>}
-    </div>
-    <div className="pj-composer">
-      <textarea value={chatDraft} onChange={event => setChatDraft(event.target.value)} rows={3} maxLength={3000} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} placeholder={chat.executorId === 'window' ? '描述要发送到该窗口 Agent 会话的指令…' : '描述要在该项目中完成的任务，例如：修复首页布局在窄屏下的溢出'} />
-      {collabOpen && <div className="pj-dispatch pj-collab-panel">
-        <span className="pj-dispatch-label">一起做的 Agent</span>
-        {collabCandidates.map(id => <button type="button" key={id} className={`pj-chip ${collabAgents.includes(id) ? 'on' : ''}`} aria-pressed={collabAgents.includes(id)} onClick={() => toggleCollabTarget(id)}>{collabAgents.includes(id) ? <Check size={12} /> : <Plus size={12} />}{EXECUTOR_LABELS[id] || id}</button>)}
-        <span className="pj-dispatch-hint">Lagent 拆解与汇总；最多再选 3 个</span>
-        <span className="pj-dispatch-actions">
-          <button type="button" className="pj-link" onClick={() => { setCollabAgents([]); setCollabOpen(false); }}>清空</button>
-          <button type="button" className="pj-btn pj-primary pj-small" onClick={() => setCollabOpen(false)}>选好了</button>
-        </span>
-      </div>}
-      {dispatchOpen && <div className="pj-dispatch">
-        <span className="pj-dispatch-label">并行分派给</span>
-        {dispatchExecutors.map(id => <button type="button" key={id} className={`pj-chip ${dispatchTargets.includes(id) ? 'on' : ''}`} aria-pressed={dispatchTargets.includes(id)} onClick={() => toggleDispatchTarget(id)}>{dispatchTargets.includes(id) ? <Check size={12} /> : <Plus size={12} />}{EXECUTOR_LABELS[id] || id}</button>)}
-        <span className="pj-dispatch-hint">每个 Agent 各建一条工单</span>
-        <span className="pj-dispatch-actions">
-          <button type="button" className="pj-link" onClick={() => setDispatchOpen(false)}>取消</button>
-          <button type="button" className="pj-btn pj-primary pj-small" disabled={!dispatchTargets.length || dispatchBusy} onClick={() => void dispatch()}>{dispatchBusy ? '分派中…' : `分派给 ${dispatchTargets.length} 个 Agent`}</button>
-        </span>
-      </div>}
-      {chat.executorId === 'model' && <ChatModelPicker
-        chatId={chat.id}
-        value={chatModel}
-        onChange={next => { setChatModel(next); writeChatModel(chat.id, next); }}
-        disabled={busy === 'send'}
-      />}
-      <div className="pj-composer-actions">
-        <label className={`pj-perm${chat.permission ? ' is-local' : ''}`} title="只影响这条对话；留空则跟随设置里的全局权限档位">
-          <ShieldCheck size={13} />
-          <span className="pj-perm-label">权限</span>
-          <select
-            value={chat.permission || ''}
-            disabled={busy === 'permission'}
-            onChange={event => void changePermission(event.target.value as '' | 'read' | 'workspace' | 'full')}
-          >
-            <option value="">跟随设置</option>
-            <option value="read">仅查看</option>
-            <option value="workspace">仅工作区内修改</option>
-            <option value="full">完全权限</option>
-          </select>
-        </label>
-        {chat.executorId === 'model' && <button type="button" className={`pj-chip pj-collab${collabAgents.length ? ' on' : ''}`} aria-expanded={collabOpen} aria-pressed={collabAgents.length > 0} onClick={toggleCollabPanel} title="让 Lagent 带着另外几个 Agent 一起做：Lagent 拆解与汇总，其余各自执行"><Users size={13} />{collabAgents.length ? `协作 ${collabAgents.length + 1} 个 Agent` : '协作 Agent'}</button>}
-        {orchestratorOn && <button type="button" className={`pj-chip pj-orch${orchestrate ? ' on' : ''}`} aria-pressed={orchestrate} onClick={toggleOrchestrate} title="开着：先分析任务、拆成步骤、分配 Agent，批准后逐步执行并在验证不过时返工">{orchestrate ? <Check size={12} /> : <Plus size={12} />}深度编排</button>}
-        {orchestrate && (
-          <label className="pj-orch-template" title="用哪套步骤模板；自动识别按目标里的关键词猜">
-            <span>模板</span>
-            <select
-              value={orchTemplate}
-              disabled={busy === 'send'}
-              onChange={event => {
-                const next = event.target.value;
-                setOrchTemplate(next);
-                try { localStorage.setItem('lagent.orchtemplate.v1', next); } catch { /* 隐私模式下忽略 */ }
-              }}
-            >
-              <option value="">自动识别</option>
-              <option value="code-change">改代码</option>
-              <option value="data-analysis">数据分析</option>
-              <option value="research">资料研究</option>
-              <option value="ops">运维处置</option>
-            </select>
-          </label>
-        )}
-        <button type="button" className="pj-btn" disabled={!chatDraft.trim() || !dispatchExecutors.length} aria-expanded={dispatchOpen} onClick={toggleDispatchPanel}><Users size={14} />并行分派</button>
-        <button type="button" className="pj-btn" disabled={!chatDraft.trim() || planBusy === 'suggest'} onClick={() => void startPlan()}><Sparkles size={14} />{planBusy === 'suggest' ? '拆解中…' : '拆成计划'}</button>
-        <button type="button" className="pj-btn pj-primary" disabled={!chatDraft.trim() || busy === 'send'} onClick={() => void send()}><Send size={14} />{busy === 'send' ? '提交中…' : chat.executorId === 'model' && collabAgents.length ? `让 ${collabAgents.length + 1} 个 Agent 一起做` : orchestrate ? '开始编排' : '发送'}</button>
-      </div>
-      <p className="pj-note pj-note-bar">{chat.executorId === 'model' && collabAgents.length ? `协作：Lagent 先把任务拆清楚，再分给另外 ${collabAgents.length} 个 Agent 并行做，结果汇总回这条对话；子 Agent 挂在右栏。` : orchestrate ? '深度编排：先分析任务、拆成步骤并分给合适的 Agent，逐步执行，验证不过会自动返工（最多 2 轮）。越界操作仍会单独弹窗。' : '消息会立刻交给 Agent 执行；能不能改文件、要不要你确认，取决于设置里的权限档位。'}<button type="button" className="pj-link" onClick={openManualPlan}>手动编排计划</button><span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
-    </div>
-  </div> : null;
-
-  return <section className={`pj-page${chatMode ? ' pj-chatpage' : ''}${projectMode ? ' pj-projectpage' : ''}`}>
-    {chatMode && <>{chatHeader}{thread || <div className="pj-empty-block pj-placeholder"><p>选择一个对话。</p></div>}</>}
+  return <section className={`pj-page${projectMode ? ' pj-projectpage' : ''}`}>
     {projectMode && <header className="pj-head">
       <div>
-        <p className="pj-eyebrow"><FolderGit2 size={13} /> PROJECT</p>
+        <p className="pj-eyebrow"><FolderGit2 size={13} /> 项目</p>
         <h1>{project?.name || '项目'}</h1>
         <p className="pj-sub">{project ? `${project.path}${project.gitBranch ? ` · ${project.gitBranch}` : ''} · ${project.chatCount} 个对话` : '这个项目已不在列表里。'}</p>
       </div>
@@ -1063,9 +361,9 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
         <button type="button" className="pj-btn" onClick={() => void loadProjects()} disabled={loading}><RefreshCw size={14} className={loading ? 'pj-spin' : ''} />刷新</button>
       </div>
     </header>}
-    {!chatMode && <header className="pj-head" hidden={projectMode}>
+    <header className="pj-head" hidden={projectMode}>
       <div>
-        <p className="pj-eyebrow"><FolderGit2 size={13} /> PROJECTS</p>
+        <p className="pj-eyebrow"><FolderGit2 size={13} /> 工作文件夹</p>
         <h1>项目</h1>
         <p className="pj-sub">导入本地文件夹，接管 Claude Code / Codex 已有的项目会话；消息审批后会在同一会话中修改项目文件。</p>
       </div>
@@ -1073,9 +371,9 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
         <button type="button" className="pj-btn" onClick={() => void loadProjects()} disabled={loading}><RefreshCw size={14} className={loading ? 'pj-spin' : ''} />刷新</button>
         <button type="button" className="pj-btn" onClick={() => void pickFolder()} disabled={busy === 'import'}><Plus size={15} />导入文件夹</button>
       </div>
-    </header>}
+    </header>
 
-    {!chatMode && editorOpen && <form className="pj-editor" onSubmit={event => { event.preventDefault(); void importProject(pathDraft, nameDraft); }}>
+    {editorOpen && <form className="pj-editor" onSubmit={event => { event.preventDefault(); void importProject(pathDraft, nameDraft); }}>
       <label>文件夹绝对路径<input value={pathDraft} onChange={event => setPathDraft(event.target.value)} placeholder="例如 D:\\work\\my-project" autoFocus /></label>
       <label>显示名称（可选）<input value={nameDraft} onChange={event => setNameDraft(event.target.value)} placeholder="默认使用文件夹名" /></label>
       <div className="pj-editor-actions">
@@ -1084,7 +382,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       </div>
     </form>}
 
-    {!chatMode && <div className="pj-layout pj-layout-single">
+    <div className="pj-layout pj-layout-single">
       <div className="pj-main">
         {!project ? <div className="pj-empty-block pj-placeholder"><FolderGit2 size={26} /><p>导入一个本地文件夹开始。</p></div> : <>
           {!projectMode && <div className="pj-project-head">
@@ -1103,6 +401,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
           <div className="pj-tabs">
             <button type="button" className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}><LayoutDashboard size={13} />概览</button>
             <button type="button" className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}><Bot size={13} />对话</button>
+            <button type="button" className={tab === 'files' ? 'active' : ''} onClick={() => setTab('files')}><FolderOpen size={13} />文件</button>
             <button type="button" className={tab === 'archive' ? 'active' : ''} onClick={openArchive}><History size={13} />变更档案</button>
             <button type="button" className={tab === 'memory' ? 'active' : ''} onClick={openMemory}><Brain size={13} />项目记忆</button>
             <button type="button" className={tab === 'artifacts' ? 'active' : ''} onClick={() => setTab('artifacts')}><Package size={13} />产物</button>
@@ -1130,15 +429,53 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
             </section>
           </div>}
 
-          {tab === 'artifacts' && <div className="pj-artifacts">
-            <div className="pj-card-head"><strong>项目产物</strong><span>{artifactRows.length} 个文件</span></div>
-            {artifactRows.length ? <ul className="pj-artifact-list">
-              {artifactRows.map(row => <li key={row.path}>
-                <FileIcon size={14} />
-                <span className="pj-artifact-path" title={row.path}>{row.path}</span>
-                <span className="pj-artifact-meta">{EXECUTOR_LABELS[row.executor] || row.executor} · {row.count} 次 · {new Date(row.last).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}</span>
-              </li>)}
-            </ul> : <p className="pj-empty">还没有产物。Agent 完成一次写入后，这里会按文件聚合。</p>}
+          {tab === 'files' && <ProjectFiles project={project} notify={notify} />}
+
+          {tab === 'artifacts' && <div className="pj-artifact-workspace">
+            <aside className="pj-artifact-pane" aria-label="项目产物">
+              <div className="pj-artifact-head"><strong>项目产物</strong><span>{artifactRows.length} 个文件</span></div>
+              {artifactRows.length ? <ul className="pj-artifact-list">
+                {artifactRows.map(row => <li key={row.path}>
+                  <button
+                    type="button"
+                    className={`pj-artifact-row${row.path === artifactPath ? ' is-active' : ''}`}
+                    onClick={() => setArtifactPath(row.path)}
+                    title={row.path}
+                  >
+                    <span className="pj-artifact-icon"><FileKindIcon kind={fileKindFromPath(row.path)} /></span>
+                    <span className="pj-artifact-path">{row.path}</span>
+                    <span className="pj-artifact-meta">{[EXECUTOR_LABELS[row.executor] || row.executor, `${row.count} 次`, new Date(row.last).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })].filter(Boolean).join(' · ')}</span>
+                  </button>
+                </li>)}
+              </ul> : <p className="pj-empty">还没有产物。Agent 完成一次写入后，这里会按文件聚合。</p>}
+            </aside>
+            <section className="pjf-preview" aria-live="polite">
+              <header className="pjf-preview-head">
+                <div className="pjf-preview-title">
+                  <span className="pjf-preview-icon"><FileKindIcon kind={artifactPreview?.kind || (artifactPath ? fileKindFromPath(artifactPath) : 'unsupported')} /></span>
+                  <div>
+                    <strong>{artifactPreview?.name || artifactPath?.split('/').pop() || '产物预览'}</strong>
+                    <span>{artifactPreview
+                      ? [FILE_KIND_LABELS[artifactPreview.kind] || artifactPreview.kind, formatFileSize(artifactPreview.size), formatFileTime(artifactPreview.modifiedAt), artifactRow ? [EXECUTOR_LABELS[artifactRow.executor] || artifactRow.executor, `${artifactRow.count} 次`].filter(Boolean).join(' · ') : ''].filter(Boolean).join(' · ')
+                      : artifactPath || '从左侧选择产物查看内容'}</span>
+                  </div>
+                </div>
+                {artifactPreview && <div className="pjf-preview-actions">
+                  <a className="pj-btn" href={api.workProjectFileUrl(project.id, artifactPreview.path, true)} download><Download size={13} />下载</a>
+                </div>}
+              </header>
+              <div className="pjf-preview-body">
+                {!artifactPath
+                  ? <div className="pjf-empty pjf-empty-preview"><Package size={26} /><strong>选择一个产物查看内容</strong><span>这里汇总 Agent 写入过的文件，可直接预览或下载。</span></div>
+                  : artifactLoading
+                    ? <div className="pjf-empty pjf-empty-preview"><RefreshCw size={22} className="pjf-spin" /><span>正在读取产物…</span></div>
+                    : artifactError
+                      ? <div className="pjf-alert" role="alert">{artifactError}</div>
+                      : artifactPreview
+                        ? <FilePreviewBody projectId={project.id} preview={artifactPreview} />
+                        : <div className="pjf-empty pjf-empty-preview"><span>还没有可显示的内容。</span></div>}
+              </div>
+            </section>
           </div>}
 
           {tab === 'chat' && sessionsOpen && <div className="pj-sessions">
@@ -1154,22 +491,12 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
           </div>}
 
           {tab === 'chat' && newChatOpen && <div className="pj-newchat">
-            <div className="pj-newchat-agents">
-              <span>Agent</span>
-              <div className="pj-newchat-chips">
-                {(allowedExecutors.length ? allowedExecutors : ['claude-code', 'codex']).map(id => {
-                  const on = newExecutors.includes(id);
-                  return <button type="button" key={id} className={`pj-chip ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => toggleNewExecutor(id)}>{on && <Check size={11} />}{EXECUTOR_LABELS[id] || id}</button>;
-                })}
-              </div>
-              <small>{newExecutors.includes('window') ? '窗口 Agent 会把同一条任务发送到你选定的那个窗口，其余 Agent 在项目目录里执行；每个 Agent 各有一条工单。' : '可选多个 Agent；多选时会用同一条任务并行分派，每个 Agent 各有一条工单。'}</small>
-            </div>
-            {newExecutors.includes('window') && <label>目标窗口<select value={windowId} onChange={event => setWindowId(event.target.value)}><option value="">选择窗口…</option>{windows.map(item => <option key={item.id} value={item.id}>{item.process} · {item.title}</option>)}</select></label>}
+            <p className="pj-note"><Sparkles size={13} />默认由 {defaultChatExecutor() ? EXECUTOR_LABELS[defaultChatExecutor()] || defaultChatExecutor() : '内置 Agent'} 负责；创建后可以在对话输入框上方按任务换人，一个对话里不同任务可以用不同 Agent。</p>
             <label>对话标题（可选）<input value={newTitle} onChange={event => setNewTitle(event.target.value)} placeholder="例如 修复登录页" /></label>
-            <label>任务（可选）<textarea rows={3} maxLength={3000} value={newTask} onChange={event => setNewTask(event.target.value)} placeholder={newExecutors.length > 1 ? '写下要一起完成的任务，创建后立即并行分派' : '写下要完成的任务，创建后立即提交'} /></label>
+            <label>任务（可选）<textarea rows={3} maxLength={3000} value={newTask} onChange={event => setNewTask(event.target.value)} placeholder="写下要完成的任务，创建后立即提交" /></label>
             <div className="pj-editor-actions">
               <button type="button" className="pj-btn" onClick={() => setNewChatOpen(false)}>取消</button>
-              <button type="button" className="pj-btn pj-primary" disabled={busy === 'new-chat'} onClick={() => void createChat()}>{busy === 'new-chat' ? '创建中…' : newExecutors.length > 1 ? `分派给 ${newExecutors.length} 个 Agent` : '创建'}</button>
+              <button type="button" className="pj-btn pj-primary" disabled={busy === 'new-chat'} onClick={() => void createChat()}>{busy === 'new-chat' ? '创建中…' : '创建'}</button>
             </div>
           </div>}
 
@@ -1256,7 +583,7 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
                 </ul> : <p className="pj-empty">Agent 完成项目任务后会自动记录摘要与改动文件；也可以手动补充。</p>}
               </section>
             </div>
-          </div> : <div className="pj-work">
+          </div> : tab === 'chat' ? <div className="pj-work">
             <div className="pj-chats">
               <div className="pj-side-title"><span>项目对话</span><span>{project.chats.filter(item => !item.parentChatId).length}</span></div>
               {project.chats.filter(item => !item.parentChatId).length ? <ul>
@@ -1273,10 +600,10 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
               </ul> : <p className="pj-empty">还没有项目对话。可导入已有会话，或新建一个。</p>}
             </div>
 
-          </div>}
+          </div> : null}
         </>}
       </div>
-    </div>}
+    </div>
 
     {browserOpen && <div className="pj-plan">
       <div className="pj-plan-card pj-browser">
@@ -1297,72 +624,6 @@ export function ProjectsPanel({ notify, onOpenTicket, allowedExecutors = ['claud
       </div>
     </div>}
 
-    {planOpen && <div className="pj-plan">
-      <div className="pj-plan-card">
-        <header><strong>项目拆解</strong><button type="button" className="pj-link" onClick={() => setPlanOpen(false)}>关闭</button></header>
-        <label className="pj-field"><span>计划目标</span><input value={planGoal} maxLength={300} onChange={event => setPlanGoal(event.target.value)} placeholder="这次要完成什么" /></label>
-        <ol>{planSteps.map((step, index) => <li key={index}>
-          <select
-            value={step.executorId}
-            aria-label={`第 ${index + 1} 步执行的 Agent`}
-            onChange={event => {
-              const executorId = event.target.value;
-              setPlanSteps(current => current.map((item, position) => position === index ? { ...item, executorId } : item));
-            }}
-          >
-            {(planExecutors.includes(step.executorId) ? planExecutors : [step.executorId, ...planExecutors]).map(id => <option key={id} value={id}>{EXECUTOR_LABELS[id] || id}</option>)}
-          </select>
-          <input
-            className="pj-plan-text"
-            value={step.text}
-            maxLength={3000}
-            aria-label={`第 ${index + 1} 步说明`}
-            placeholder={index === 0 ? '第一步做什么' : '下一步做什么'}
-            onChange={event => {
-              const text = event.target.value;
-              setPlanSteps(current => current.map((item, position) => position === index ? { ...item, text } : item));
-            }}
-          />
-          {step.dependsOn?.length ? <em>依赖第 {step.dependsOn.map(item => item + 1).join('、')} 步</em> : null}
-          {planSteps.length > 2 && <button type="button" className="pj-link" aria-label={`删除第 ${index + 1} 步`} onClick={() => removePlanStep(index)}>删除</button>}
-        </li>)}</ol>
-        <button type="button" className="pj-link" disabled={planSteps.length >= 5} onClick={addPlanStep}>+ 添加步骤</button>
-        <p className="pj-note">每步可以选择不同的 Agent；未建立对话的 Agent 会在创建计划时自动建立项目对话。也可以不用 AI，直接手动编排。</p>
-        <footer>
-          <button type="button" className="pj-btn" onClick={() => setPlanOpen(false)}>取消</button>
-          <button type="button" className="pj-btn pj-primary" disabled={planBusy === 'create'} onClick={() => void createPlan()}>{planBusy === 'create' ? '创建中…' : '创建计划'}</button>
-        </footer>
-      </div>
-    </div>}
-    {promptAsk && <Modal title="挑一份任务书再分发" subtitle="三个版本侧重不同；选中的那一份会原样交给 Agent 执行。" close={() => setPromptAsk(null)} wide>
-      <div className="pj-prompts">
-        <p className="pj-prompts-goal">原来的要求：{promptAsk.goal.slice(0, 240)}</p>
-        {promptAsk.modelError && <p className="pj-prompts-warn">模型改写失败，已回退本地模板：{promptAsk.modelError}</p>}
-        <ul className="pj-prompt-list">
-          {promptAsk.options.map((option, index) => (
-            <li key={option.id} className="pj-prompt-card">
-              <div className="pj-prompt-head">
-                <span className="pj-prompt-index">{index + 1}</span>
-                <strong>{option.label}</strong>
-                {option.focus && <span className="pj-prompt-focus">{option.focus}</span>}
-              </div>
-              <p className="pj-prompt-body">{option.prompt}</p>
-              <div className="pj-prompt-actions">
-                <button type="button" className="pj-btn pj-primary pj-small" disabled={busy === 'send'} onClick={() => {
-                  const chosen = option.prompt;
-                  setPromptAsk(null);
-                  setChatDraft('');
-                  void deliver(chosen);
-                }}>用这一版分发<ChevronRight size={12} /></button>
-              </div>
-            </li>
-          ))}
-        </ul>
-        <footer className="pj-prompt-footer">
-          <button type="button" className="pj-btn" onClick={() => setPromptAsk(null)}>取消</button>
-        </footer>
-      </div>
-    </Modal>}
     {confirm && <Modal title={confirm.title} subtitle={confirm.quote ? '这一步无法撤销。' : confirm.body} close={() => { if (!confirmBusy) setConfirm(null); }}>
       <div className="pj-confirm">
         {confirm.quote && <blockquote className="pj-confirm-quote">{confirm.quote}</blockquote>}

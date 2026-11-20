@@ -133,15 +133,21 @@ export function AgentThinkingPanel({ orchestrator, agents, defaultOpen = true, o
   const [, setTick] = useState(0);
 
   const anyPending = agents.some(agent => !DONE.includes(agent.status));
+  // 只有还在跑时才需要刷新耗时；每秒一次足够，标签页在后台时停掉。
   useEffect(() => {
     if (!anyPending) return;
-    const timer = setInterval(() => setTick(value => value + 1), 500);
-    return () => clearInterval(timer);
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => { if (!timer) timer = setInterval(() => setTick(value => value + 1), 1000); };
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const sync = () => { if (document.visibilityState === 'hidden') stop(); else start(); };
+    sync();
+    document.addEventListener('visibilitychange', sync);
+    return () => { stop(); document.removeEventListener('visibilitychange', sync); };
   }, [anyPending]);
 
   const doneCount = agents.filter(agent => agent.status === 'completed').length;
-  // 排队中的也算「没结束」，否则 3 路里 2 路已完成时会显示成「3 路思考中 · 2/3 已完成」自相矛盾。
-  const pendingCount = agents.length - doneCount;
+  // 排队中的算「没结束」；失败、取消、阻断已经结束，不能再显示成「进行中」。
+  const pendingCount = agents.filter(agent => !DONE.includes(agent.status)).length;
   // 没手动点过标签时，跟随第一个正在思考的那一路，让正文始终有东西在动。
   const activeId = picked && agents.some(agent => agent.id === picked)
     ? picked
@@ -154,7 +160,9 @@ export function AgentThinkingPanel({ orchestrator, agents, defaultOpen = true, o
       ? '等待开始'
       : doneCount === agents.length
         ? `${agents.length} 个 Agent 已完成`
-        : `${pendingCount} 路进行中 · ${doneCount}/${agents.length} 已完成`;
+        : pendingCount === 0
+          ? `${agents.length} 个 Agent 已结束 · ${doneCount} 个完成`
+          : `${pendingCount} 路进行中 · ${doneCount}/${agents.length} 已完成`;
 
   return <section className={`sa-tp${open ? '' : ' is-closed'}`}>
     <header className="sa-tp-head">

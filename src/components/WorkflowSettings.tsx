@@ -1,28 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { BookOpen, Check, FileUp, KeyRound, Layers3, Plus, RefreshCw, Save, Settings2, X, Zap } from 'lucide-react';
 import { suggestedModels } from '../model-providers';
-import { completeWorkflow, EFFORT_LABELS, effortOptions, normalizeEffort, validateSkillFile, validateWorkflow, WORKFLOW_STAGES } from '../workflow-types';
+import { completeWorkflow, effortOptions, normalizeEffort, validateSkillFile, validateWorkflow, WORKFLOW_STAGES } from '../workflow-types';
 import type { CredentialInput, HubModelCatalog, HubModelProfile, ModelHubState, ModelProfileInput, ProviderPool, WorkflowConfig, WorkflowSkill, WorkflowSkillInput, WorkflowStageConfig } from '../workflow-types';
+import { request } from '../api';
 import { CredentialManager } from './CredentialManager';
 import { Spinner } from './ui';
 import '../workflow-settings.css';
 
-async function hubRequest<T>(path: string, method = 'GET', input?: unknown, signal?: AbortSignal): Promise<T> {
-  const timeout = AbortSignal.timeout(30000);
-  let response: Response;
-  try {
-    response = await fetch(`/api${path}`, { method, credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, ...(input === undefined ? {} : { body: JSON.stringify(input) }), signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
-  } catch {
-    if (signal?.aborted) throw new Error('请求已停止。');
-    throw new Error(timeout.aborted ? '请求超时，请刷新核对服务端状态后重试。' : '无法连接服务，请检查网络后重试。');
-  }
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    throw Object.assign(new Error(body?.error || (response.status === 401 ? '登录已过期，请重新登录。' : `请求失败（${response.status}）。`)), { status: response.status, code: body?.code });
-  }
-  try { return await response.json() as T; }
-  catch { throw new Error('服务返回了无法读取的结果，请刷新后重试。'); }
-}
+// 统一走 API 层：超时、401 会话失效与错误文案由它处理。
+const hubRequest = <T,>(path: string, method = 'GET', input?: unknown, signal?: AbortSignal) => request<T>(path, {
+  method,
+  ...(input === undefined ? {} : { body: JSON.stringify(input) }),
+  ...(signal ? { signal } : {})
+});
 
 export function ModelHubSettings({ onWorkflowChanged, compact = false }: { onWorkflowChanged?: () => void | Promise<void>; compact?: boolean }) {
   const [hub, setHub] = useState<ModelHubState | null>(null);

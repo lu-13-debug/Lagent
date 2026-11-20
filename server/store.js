@@ -54,8 +54,37 @@ export class Store {
   }
   get(kind, id) { assertId(id); const row = this.db.prepare('SELECT body FROM entities WHERE kind=? AND id=?').get(kind, id); return row ? JSON.parse(row.body) : null; }
   list(kind) { return this.db.prepare('SELECT body FROM entities WHERE kind=? ORDER BY rowid DESC').all(kind).map(x => JSON.parse(x.body)); }
+  // 只要最新一页时别把整类数据的正文都反序列化。
+  listRecent(kind, limit = 30, offset = 0) {
+    const size = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 500) : 30;
+    const skip = Number.isSafeInteger(offset) && offset > 0 ? offset : 0;
+    return this.db.prepare('SELECT body FROM entities WHERE kind=? ORDER BY rowid DESC LIMIT ? OFFSET ?')
+      .all(kind, size, skip).map(row => JSON.parse(row.body));
+  }
   put(kind, value) { assertId(value.id); this.db.prepare('INSERT INTO entities(kind,id,body) VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body').run(kind, value.id, JSON.stringify(value)); if (kind === 'task') this.changed(); return value; }
   delete(kind, id) { assertId(id); this.db.prepare('DELETE FROM entities WHERE kind=? AND id=?').run(kind, id); if (kind === 'task') this.changed(); }
+  // 只保留最新 keep 条。清理日志类数据时不必把每条 body 都 JSON.parse 一遍。
+  prune(kind, keep) {
+    const limit = Number.isSafeInteger(keep) && keep > 0 ? keep : 0;
+    if (!limit) return 0;
+    return this.db.prepare('DELETE FROM entities WHERE kind=? AND rowid NOT IN (SELECT rowid FROM entities WHERE kind=? ORDER BY rowid DESC LIMIT ?)')
+      .run(kind, kind, limit).changes;
+  }
+  // 按 body 顶层字段过滤。字段名只允许标识符，取值走参数绑定。
+  listWhere(kind, field, values) {
+    if (typeof field !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(field)) throw new Error('无效的字段名');
+    const list = [...new Set((Array.isArray(values) ? values : [values]).filter(value => typeof value === 'string' || typeof value === 'number'))];
+    if (!list.length) return [];
+    // SQLite 的绑定参数数量有上限（旧版本 999），大列表分批查，再按插入顺序合并。
+    const rows = [];
+    for (let index = 0; index < list.length; index += 500) {
+      const chunk = list.slice(index, index + 500);
+      const holes = chunk.map(() => '?').join(',');
+      rows.push(...this.db.prepare(`SELECT rowid AS _rowid, body FROM entities WHERE kind=? AND json_extract(body, ?) IN (${holes}) ORDER BY rowid DESC`)
+        .all(kind, `$.${field}`, ...chunk));
+    }
+    return rows.sort((left, right) => right._rowid - left._rowid).map(row => JSON.parse(row.body));
+  }
   monitorTasks(limit = 100) {
     // Drop large payloads in SQLite before allocating any JS report/message objects.
     return this.db.prepare(`SELECT json_remove(body,'$.report','$.messages','$.events','$.goal','$._analysis') AS body FROM entities
@@ -65,6 +94,8 @@ export class Store {
       ORDER BY rowid DESC`).all(limit).map(row => JSON.parse(row.body));
   }
   taskByRequestId(id) { const row = this.db.prepare("SELECT body FROM entities WHERE kind='task' AND json_extract(body,'$.clientRequestId')=? LIMIT 1").get(id); return row ? JSON.parse(row.body) : null; }
+  // 并发/忙碌判定只关心状态：走 SQL 计数，避免把历史任务的完整报告全部 JSON.parse 一遍。
+  busyTaskCount() { return this.db.prepare("SELECT COUNT(*) AS n FROM entities WHERE kind='task' AND json_extract(body,'$.status') IN ('running','awaiting_approval')").get().n; }
   config(key, value) {
     if (value === undefined) { const row = this.db.prepare('SELECT body FROM config WHERE key=?').get(key); return row ? JSON.parse(row.body) : null; }
     this.db.prepare('INSERT INTO config VALUES(?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body').run(key, JSON.stringify(value));

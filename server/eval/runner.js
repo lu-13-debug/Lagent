@@ -33,6 +33,7 @@ export async function runEval({ tasks = EVAL_TASKS, root = os.tmpdir(), executor
     const startedAt = Date.now();
     let ticket = null;
     let acceptance = null;
+    let trajectory = null;
     try {
       if (Array.isArray(task.plan) && task.plan.length) {
         const plan = engine.plan({
@@ -42,7 +43,7 @@ export async function runEval({ tasks = EVAL_TASKS, root = os.tmpdir(), executor
             executorId,
             text: `步骤 ${index + 1}`,
             executorInput: { actions: step.actions },
-            ...(index > 0 ? { dependsOn: [index - 1] } : {})
+            ...(Array.isArray(step.dependsOn) ? { dependsOn: step.dependsOn } : index > 0 ? { dependsOn: [index - 1] } : {})
           }))
         });
         await until(() => plan.steps.every(step => {
@@ -51,6 +52,8 @@ export async function runEval({ tasks = EVAL_TASKS, root = os.tmpdir(), executor
         }));
         const last = plan.steps[plan.steps.length - 1];
         ticket = engine.detail(last.ticketId).ticket;
+        // 轨迹评审：记录每一步最终状态，失败时能看出卡在哪一步，而不是只有一个总分。
+        trajectory = plan.steps.map(step => ({ step: step.index, executor: step.executorId || executorId, status: engine.detail(step.ticketId)?.ticket?.status || 'missing' }));
       } else {
         ticket = engine.command({
           text: task.goal,
@@ -61,20 +64,25 @@ export async function runEval({ tasks = EVAL_TASKS, root = os.tmpdir(), executor
         if (task.verify) {
           acceptance = await until(() => {
             const detail = engine.detail(ticket.id);
-            if (!detail.ticket.acceptance) return null;
             ticket = detail.ticket;
-            return detail.ticket.acceptance;
+            if (detail.ticket.acceptance) return detail.ticket.acceptance;
+            // 工单已经失败/阻塞/取消就不会再有验收结果，别等到超时。
+            // completed 不算终点：自动验收在完成之后异步跑，还要再等一会儿。
+            return ['failed', 'blocked', 'cancelled'].includes(detail.ticket.status) ? 'settled' : null;
           });
+          if (acceptance === 'settled') acceptance = null;
         }
+        trajectory = [{ step: 0, executor: executorId, status: ticket?.status || 'missing' }];
       }
       const passed = Boolean(await task.expect({ dir, engine, ticket, acceptance }));
-      results.push({ id: task.id, name: task.name, passed, status: ticket?.status || null, durationMs: Date.now() - startedAt });
+      results.push({ id: task.id, name: task.name, passed, status: ticket?.status || null, trajectory, durationMs: Date.now() - startedAt });
     } catch (error) {
-      results.push({ id: task.id, name: task.name, passed: false, error: error?.message || String(error), durationMs: Date.now() - startedAt });
+      results.push({ id: task.id, name: task.name, passed: false, error: error?.message || String(error), trajectory, durationMs: Date.now() - startedAt });
     } finally {
       engine.close();
       store.close();
-      fs.rmSync(dir, { recursive: true, force: true });
+      // Windows 上数据库文件句柄偶尔晚一拍释放，清理失败不应把一条通过的用例判成失败。
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* 临时目录留给系统清理 */ }
     }
   }
   const passed = results.filter(result => result.passed).length;

@@ -1,0 +1,156 @@
+[
+  {
+    "id": "webapp-testing",
+    "name": "webapp-testing",
+    "title": "Web 应用测试",
+    "description": "用浏览器驱动真实页面，验证交互、截图并定位前端问题。",
+    "category": "code",
+    "repo": "anthropics/skills",
+    "path": "skills/webapp-testing",
+    "ref": "main",
+    "license": "见仓库 THIRD_PARTY_NOTICES"
+  },
+  {
+    "id": "frontend-design",
+    "name": "frontend-design",
+    "title": "前端界面设计",
+    "description": "按产品语境设计页面结构、视觉层级和交互细节。",
+    "category": "code",
+    "repo": "anthropics/skills",
+    "path": "skills/frontend-design",
+    "ref": "main",
+    "license": "见仓库 THIRD_PARTY_NOTICES"
+  },
+  {
+    "id": "mcp-builder",
+    "name": "mcp-builder",
+    "title": "MCP 服务开发",
+    "description": "创建、调试和发布 MCP 服务器，把外部能力接给 Agent。",
+    "category": "code",
+    "repo": "anthropics/skills",
+    "path": "skills/mcp-builder",
+    "ref": "main",
+    "license": "见仓库 THIRD_PARTY_NOTICES"
+  },
+  {
+    "id": "doc-coauthoring",
+    "name": "doc-coauthoring",
+    "title": "文档协作",
+    "description": "和用户共同起草、评审、修改需求文档、方案和说明。",
+    "category": "docs",
+    "repo": "anthropics/skills",
+    "path": "skills/doc-coauthoring",
+    "ref": "main",
+    "license": "见仓库 THIRD_PARTY_NOTICES"
+  },
+  {
+    "id": "docx",
+    "name": "docx",
+    "title": "Word 文档",
+    "description": "读取、生成和编辑 .docx，保留样式、表格与页眉页脚。",
+    "category": "docs",
+    "repo": "anthropics/skills",
+    "path": "skills/docx",
+    "ref": "main",
+    "license": "见仓库 THIRD_PARTY_NOTICES"
+  },
+  {
+    "id": "pptx",
+    "name": "pptx",
+    "title": "演示文稿",
+    "description": "创建和修改 .pptx，处理版式、母版、图表和演讲者备注。",
+    "category": "docs",
+    "repo": "anthropics/skills",
+    "path": "skills/pptx",
+    "ref": "main",
+    "license": "见仓库 THIRD_PARTY_NOTICES"
+  },
+  {
+    "id": "pdf",
+    "name": "pdf",
+    "title": "PDF 文档",
+    "description": "提取、合并、拆分 PDF，填写表单并处理扫描件。",
+    "category": "docs",
+    "repo": "anthropics/skills",
+    "path": "skills/pdf",
+    "ref": "main",
+    "license": "见仓库 THIRD_PARTY_NOTICES"
+  },
+  {
+    "id": "xlsx",
+    "name": "xlsx",
+    "title": "Excel 表格",
+    "description": "读取、生成和分析 .xlsx，处理公式、透视表与多工作表。",
+    "category": "data",
+    "repo": "anthropics/skills",
+    "path": "skills/xlsx",
+    "ref": "main",
+    "license": "见仓库 THIRD_PARTY_NOTICES"
+  },
+  {
+    "id": "skill-creator",
+    "name": "skill-creator",
+    "title": "技能编写",
+    "description": "把团队做法沉淀成可复用的 Agent Skill，包含触发条件和检查表。",
+    "category": "docs",
+    "repo": "anthropics/skills",
+    "path": "skills/skill-creator",
+    "ref": "main",
+    "license": "见仓库 THIRD_PARTY_NOTICES"
+  },
+  {
+    "id": "canvas-design",
+    "name": "canvas-design",
+    "title": "视觉画布",
+    "description": "制作海报、信息图和视觉稿，输出可继续编辑的画布资产。",
+    "category": "docs",
+    "repo": "anthropics/skills",
+    "path": "skills/canvas-design",
+    "ref": "main",
+    "license": "见仓库 THIRD_PARTY_NOTICES"
+  },
+  {
+    "id": "unslop",
+    "name": "unslop",
+    "title": "去 AI 味设计",
+    "description": "按九道工序审查并重做界面：方向、排版、色彩、控件与动效，去掉模板化观感。",
+    "category": "design",
+    "repo": "heydamir/unslop",
+    "path": "skills/unslop",
+    "ref": "main",
+    "license": "CC BY 4.0（需保留署名）"
+  },
+  {
+    "id": "backend-patterns",
+    "name": "backend-patterns",
+    "title": "后端开发模式",
+    "description": "Node.js、Express 与 Next.js 的接口、数据访问、鉴权和错误处理模式。",
+    "category": "backend",
+    "repo": "xu-xiang/everything-claude-code-zh",
+    "path": "skills/backend-patterns",
+    "ref": "main",
+    "license": "MIT"
+  },
+  {
+    "id": "context-compression",
+    "name": "context-compression",
+    "title": "上下文压缩",
+    "description": "在长会话里做结构化摘要，保留决策、文件与未完成事项，压缩后仍可继续。",
+    "category": "context",
+    "repo": "muratcankoylan/Agent-Skills-for-Context-Engineering",
+    "path": "skills/context-compression",
+    "ref": "main",
+    "license": "MIT"
+  },
+  {
+    "id": "handoff",
+    "name": "handoff",
+    "title": "任务交接",
+    "description": "把当前进度整理成可交接的完整说明：目标、改动、验证结果与下一步。",
+    "category": "context",
+    "repo": "ToolMonsters/handoff-skill",
+    "path": ".",
+    "ref": "main",
+    "license": "MIT"
+  }
+]

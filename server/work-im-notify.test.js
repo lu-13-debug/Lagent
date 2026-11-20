@@ -112,3 +112,20 @@ test('通知按渠道事件过滤，用量告警单独推送', async t => {
   assert.deepEqual(f.im.removeChannel(disabled.id), { ok: true, id: disabled.id });
   assert.throws(() => f.im.removeChannel(disabled.id), { status: 404 });
 });
+
+test('容器部署只设置 PUBLIC_URL 时也能生成审批链接', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-im-'));
+  const store = new Store(join(dir, 'data'));
+  const requests = [];
+  const im = createImNotifier({
+    store,
+    engine: { action: () => ({ id: 'ticket-1', status: 'queued' }) },
+    env: { PUBLIC_URL: 'https://cloud.example' },
+    fetchImpl: async (url, init) => { requests.push({ url, body: JSON.parse(init.body) }); return { ok: true, status: 200 }; }
+  });
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  im.saveChannel({ name: '研发群', kind: 'slack', webhookUrl: 'https://hooks.example/services/abc', events: ['ticket'] });
+  assert.equal(im.list().baseUrl, 'https://cloud.example');
+  await im.onEvent({ id: 'evt-1', type: 'ticket', ticketId: 'ticket-1', payload: { id: 'ticket-1', title: '发布前检查', status: 'awaiting_review', summary: '请确认' } });
+  assert.match(requests[0].body.text, /https:\/\/cloud\.example\/api\/work\/im\/actions\//);
+});

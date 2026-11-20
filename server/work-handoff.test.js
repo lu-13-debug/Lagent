@@ -21,9 +21,9 @@ function fixture(t) {
     },
     get() { return null; }
   };
-  const engine = createWorkEngine(store, createExecutorRegistry([cli]), () => {}, { workspace: dir, env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' }, policy: { allowedExecutors: ['codex'] } });
+  const engine = createWorkEngine(store, createExecutorRegistry([cli]), () => {}, { workspace: dir, env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' }, policy: { allowedExecutors: ['codex'] } });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
-  return { engine, store };
+  return { engine, store, dir };
 }
 
 test('交接简报规范化与格式化', () => {
@@ -88,6 +88,22 @@ test('结构化交接写入子工单并把简报注入执行器输入', t => {
   const again = engine.handoff(source.id, { executorId: 'codex', handoff: { summary: 'x' } });
   assert.equal(again.created, false);
   assert.equal(again.ticket.id, child.id);
+});
+
+test('交接子工单留在原项目对话里，删除对话时一并清理', t => {
+  const { engine, store, dir } = fixture(t);
+  const project = engine.importProject({ path: dir, name: '交接项目' }).project;
+  const chat = engine.createProjectChat(project.id, { executorId: 'codex' }).chat;
+  const stamp = new Date().toISOString();
+  store.put('work-ticket', { id: 'source-chat', title: '来源任务', status: 'completed', executor: 'codex', summary: '已完成', projectChatId: chat.id, createdAt: stamp, updatedAt: stamp });
+  store.put('work-control', { id: 'source-chat', command: '来源任务', executor: 'codex', executorInput: { prompt: '来源任务' }, projectChatId: chat.id });
+
+  const { ticket } = engine.handoff('source-chat', { executorId: 'codex', handoff: { summary: '继续做' } });
+  assert.equal(ticket.projectChatId, chat.id, '子工单要继承项目对话');
+  assert.equal(store.get('work-control', ticket.id).projectChatId, chat.id, '控制记录也要带上对话，删消息/删对话才找得到它');
+
+  engine.deleteProjectChat(chat.id);
+  assert.equal(store.get('work-ticket', ticket.id), null, '删对话时不能留下孤儿子工单');
 });
 
 test('MCP 暴露 work_ticket_handoff，且仍不能批准工单', async t => {

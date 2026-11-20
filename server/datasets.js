@@ -236,7 +236,9 @@ export function createDataset(records, { name = '上传数据', source = 'upload
   return dataset;
 }
 export function publicDataset(dataset) {
-  const { records, ...safe } = dataset;
+  // rowSources/shardManifest 是逐行/逐分片的内部证据，体积与记录数同量级；
+  // 界面不读它们，接口里只保留 inspection 下的汇总。
+  const { records, rowSources, shardManifest, ...safe } = dataset;
   const capability = safe.inspection?.capability || buildCapability((dataset.tables || []).map(table => table.type));
   const result = { ...safe, domain: dataset.domain || 'game', capability, completeness: normalizeCompleteness(dataset.completeness, { legacyAt: dataset.createdAt }), timezone: normalizeTimezone(dataset.timezone, { legacyAt: dataset.createdAt }) };
   if (safe.inspection) result.inspection = safe.inspection.capability ? safe.inspection : { ...safe.inspection, capability };

@@ -373,7 +373,9 @@ export class MobileGateway {
     const expiresAt = createdAt + this.pairTtlMs;
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      this.db.prepare('DELETE FROM mobile_pairs WHERE claimed_at IS NULL OR expires_at<=?').run(createdAt);
+      // 只清理全局过期记录和本账号的旧码；旧实现没有 owner 条件，任意账号生成
+      // 配对码都会删掉其他账号尚未领取的码（云端所有租户共用一张表）。
+      this.db.prepare('DELETE FROM mobile_pairs WHERE expires_at<=? OR owner_id=?').run(createdAt, ownerId);
       let code = '';
       let digest = '';
       let salt = '';
@@ -687,10 +689,23 @@ export function registerMobileWorkRoutes(app, gateway, { engine, ownerId, onConn
     if (!result) throw mobileError('通知不存在', 404);
     res.json({ ok: true, ...result });
   });
-  app.post('/api/mobile/command', (req, res) => {
+  // 移动端不直接派外部 Agent：先在 Lagent 会话里建一轮，由主控拆分与汇总。
+  const toolExecutors = new Set(['analysis', 'terminal', 'browser', 'github', 'model', 'window']);
+  app.post('/api/mobile/command', async (req, res) => {
     auth(req);
     const input = {};
     for (const key of ['text', 'clientRequestId', 'executorId', 'executorInput', 'datasetId']) if (req.body?.[key] !== undefined) input[key] = req.body[key];
+    if (input.executorId && !toolExecutors.has(input.executorId)) {
+      const text = typeof input.text === 'string' ? input.text.trim() : '';
+      const conversation = engine.createConversation({ title: text.slice(0, 60), goal: text }).conversation;
+      const result = await engine.conversationMessage(conversation.id, {
+        text,
+        agentIds: [input.executorId],
+        ...(typeof input.clientRequestId === 'string' ? { clientRequestId: input.clientRequestId } : {}),
+        autoRun: true
+      });
+      return res.status(201).json({ ticket: sanitizeMobileTicket(result.tickets?.[0]), conversationId: conversation.id });
+    }
     res.status(201).json({ ticket: sanitizeMobileTicket(engine.command(input)) });
   });
   app.get('/api/mobile/tickets/:id', (req, res) => { auth(req); res.json(sanitizeMobileDetail(engine.detail(req.params.id))); });

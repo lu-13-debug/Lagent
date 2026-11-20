@@ -15,6 +15,28 @@ export const PROJECT_LIMITS = Object.freeze({
 
 export const PROJECT_CHAT_EXECUTORS = Object.freeze(['claude-code', 'codex', 'claude-acp', 'dsh-acp', 'codex-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi', 'workbuddy', 'model', 'window']);
 
+// 新建会话的占位标题必须用执行器的真实名称：以前只判断了 window/codex，
+// 结果所有其它执行器（包括内置 Lagent）都会被写成「Claude Code」。
+const PROJECT_CHAT_TITLES = Object.freeze({
+  model: 'Lagent',
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  'claude-acp': 'Claude ACP',
+  'dsh-acp': 'DSH ACP',
+  'codex-acp': 'Codex ACP',
+  opencode: 'OpenCode',
+  gemini: 'Gemini CLI',
+  qwen: 'Qwen Code',
+  'cursor-agent': 'Cursor Agent',
+  dsh: 'DSH CLI',
+  codebuddy: 'CodeBuddy',
+  qoder: 'Qoder CLI',
+  iflow: 'iFlow CLI',
+  kimi: 'Kimi CLI',
+  workbuddy: 'WorkBuddy',
+  window: '窗口 Agent'
+});
+
 export const CHANGE_LIMITS = Object.freeze({
   maxChanges: 300,
   maxFiles: 100,
@@ -152,16 +174,27 @@ export function projectService(db, { environment = process.env, home = os.homedi
     if (!project) throw workError('项目不存在', 404);
     return project;
   }
+  // 旧版本把非 Codex 执行器的占位标题一律写成「Claude Code」，连内置 Lagent 会话也中招。
+  // 读取时顺手改成真实名称；只修自动标题，用户手动改过的名字不动。
+  function repairChatTitle(chat) {
+    if (!chat || chat.autoTitle !== true || chat.executorId === 'claude-code') return chat;
+    const project = db.get('project', chat.projectId);
+    if (!project || (chat.title !== `${project.name} · Claude Code` && chat.title !== 'Claude Code')) return chat;
+    const next = { ...chat, title: `${project.name} · ${PROJECT_CHAT_TITLES[chat.executorId] || chat.executorId}` };
+    db.put('project-chat', next);
+    return next;
+  }
   function listChats(projectId) {
     return db.list('project-chat')
       .filter(chat => chat.projectId === projectId)
+      .map(repairChatTitle)
       .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
   }
   function getChat(id) {
     if (typeof id !== 'string' || !id.trim()) throw workError('项目对话 id 无效', 400);
     const chat = db.get('project-chat', id);
     if (!chat) throw workError('项目对话不存在', 404);
-    return chat;
+    return repairChatTitle(chat);
   }
   function deleteChat(id) {
     const chat = getChat(id);
@@ -330,11 +363,14 @@ export function projectService(db, { environment = process.env, home = os.homedi
       projectId: project.id,
       executorId,
       ...(parentChatId ? { parentChatId } : {}),
-      title: typeof input.title === 'string' && input.title.trim() ? cleanTitle(input.title) : `${project.name} · ${executorId === 'window' ? '窗口 Agent' : executorId === 'codex' ? 'Codex' : 'Claude Code'}`,
+      title: typeof input.title === 'string' && input.title.trim() ? cleanTitle(input.title) : `${project.name} · ${PROJECT_CHAT_TITLES[executorId] || executorId}`,
       // 没有显式标题时先放一个占位标题，等第一条消息到了再用消息内容替换。
       autoTitle: !(typeof input.title === 'string' && input.title.trim()),
       sessionId: '',
       writable: input.writable !== false,
+      // 会话内部的执行对话：归到 Lagent 会话名下，侧栏和项目页不再单独列出来。
+      ...(typeof input.conversationId === 'string' && input.conversationId.trim() ? { conversationId: input.conversationId.trim() } : {}),
+      ...(input.hidden === true ? { hidden: true } : {}),
       ...(PERMISSIONS.includes(input.permission) ? { permission: input.permission } : {}),
       ...(collaborators.length ? { collaborators } : {}),
       source: 'manual',
@@ -445,7 +481,8 @@ export function projectService(db, { environment = process.env, home = os.homedi
   }
 
   function projectSummary(project) {
-    const chats = listChats(project.id);
+    // 隐藏对话只用于承载会话内部的单 Agent 执行，不再作为独立对话出现在项目页。
+    const chats = listChats(project.id).filter(chat => chat.hidden !== true);
     // 侧栏要用「最近一次工单状态 / 是否有未读结果」，这里一次性把工单聚合成会话字段，避免前端再拉一轮。
     const byChat = new Map();
     for (const ticket of db.list('ticket')) {

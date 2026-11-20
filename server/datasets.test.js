@@ -30,6 +30,9 @@ test('Chinese CSV inspection preserves source mapping, full counts, duplicate lo
   assert.equal(inspection.analyzable, true);
   assert.equal(JSON.stringify(inspection).includes('private-player'), false);
   assert.equal(Object.hasOwn(publicDataset(dataset), 'records'), false);
+  // 逐行来源与分片清单不进接口：体积和记录数同量级，界面只看 inspection 的汇总。
+  assert.equal(Object.hasOwn(publicDataset(dataset), 'rowSources'), false);
+  assert.equal(Object.hasOwn(publicDataset(dataset), 'shardManifest'), false);
 });
 
 test('XLSX inspection retains workbook and sheet mapping with actual worksheet row numbers', async () => {

@@ -44,9 +44,13 @@ const publicPool = row => ({
 export function createProviderPool({ store, vault, ownerId = 'local', now = Date.now, fetchImpl = fetch } = {}) {
   if (!store || !vault) throw new TypeError('Provider 池需要 store 与凭据库');
   const configKey = `provider-pool-v1:${ownerId}`;
+  const usageKey = `provider-pool-usage-v1:${ownerId}`;
   const runtime = new Map(); // `${poolId}:${credentialId}` -> { failures, cooldownUntil, usedDay, usedToday, lastError, lastUsedAt, goodAffinity }
   const cursor = new Map(); // poolId -> round-robin index
   const affinityGood = new Map(); // `${poolId}:${affinity}` -> credentialId
+  let routeWrites = 0;
+  // 每日调用数必须跨进程重启累计，否则重启后配额会从 0 重新开始、实际超发。
+  let usage = null; // { day: 'YYYY-MM-DD', counts: { `${poolId}:${credentialId}`: number } }
 
   const rows = () => store.config(configKey) || [];
   const find = id => {
@@ -54,12 +58,29 @@ export function createProviderPool({ store, vault, ownerId = 'local', now = Date
     if (!row) throw vaultError('Provider 池不存在', 404);
     return row;
   };
+  const today = () => new Date(now()).toISOString().slice(0, 10);
+  function loadUsage() {
+    const day = today();
+    // 进程跨过午夜时 usage.day 会过期，必须按当天重新读一次（旧计数直接作废）。
+    if (usage && usage.day === day) return usage;
+    const stored = store.config(usageKey);
+    usage = stored?.day === day && stored.counts && typeof stored.counts === 'object'
+      ? { day, counts: { ...stored.counts } }
+      : { day, counts: {} };
+    return usage;
+  }
+  function persistUsage(key, count) {
+    const data = loadUsage();
+    if (data.counts[key] === count) return;
+    data.counts[key] = count;
+    try { store.config(usageKey, { day: data.day, counts: data.counts }); } catch { /* 统计写入失败不能影响模型请求。 */ }
+  }
   const stateOf = (poolId, credentialId) => {
     const key = `${poolId}:${credentialId}`;
     let state = runtime.get(key);
     if (!state) { state = { failures: 0, cooldownUntil: 0, usedDay: '', usedToday: 0, lastError: '', lastUsedAt: 0 }; runtime.set(key, state); }
-    const day = new Date(now()).toISOString().slice(0, 10);
-    if (state.usedDay !== day) { state.usedDay = day; state.usedToday = 0; }
+    const data = loadUsage();
+    if (state.usedDay !== data.day) { state.usedDay = data.day; state.usedToday = Number(data.counts[key]) || 0; }
     return state;
   };
 
@@ -135,6 +156,12 @@ export function createProviderPool({ store, vault, ownerId = 'local', now = Date
     store.config(configKey, rows().filter(item => item.id !== row.id));
     for (const key of runtime.keys()) if (key.startsWith(`${row.id}:`)) runtime.delete(key);
     for (const key of affinityGood.keys()) if (key.startsWith(`${row.id}:`)) affinityGood.delete(key);
+    const data = loadUsage();
+    const stale = Object.keys(data.counts).filter(key => key.startsWith(`${row.id}:`));
+    if (stale.length) {
+      for (const key of stale) delete data.counts[key];
+      try { store.config(usageKey, { day: data.day, counts: data.counts }); } catch { /* ignore */ }
+    }
     return { ok: true, id: row.id };
   }
 
@@ -203,6 +230,7 @@ export function createProviderPool({ store, vault, ownerId = 'local', now = Date
     const state = stateOf(leaseValue.poolId, leaseValue.credentialId);
     const row = find(leaseValue.poolId);
     state.usedToday++;
+    persistUsage(`${leaseValue.poolId}:${leaseValue.credentialId}`, state.usedToday);
     state.lastUsedAt = now();
     if (ok) {
       state.failures = 0;
@@ -231,8 +259,9 @@ export function createProviderPool({ store, vault, ownerId = 'local', now = Date
         error: String(error || '').slice(0, 200),
         at: new Date(now()).toISOString()
       });
-      const all = store.list('model-route');
-      for (const stale of all.slice(2000)) store.delete('model-route', stale.id);
+      // 每 50 条清理一次即可，避免每次请求都把全部路由日志读成对象。
+      routeWrites++;
+      if (routeWrites % 50 === 1) store.prune('model-route', 2000);
     } catch { /* 路由日志失败不能影响模型请求。 */ }
   }
 

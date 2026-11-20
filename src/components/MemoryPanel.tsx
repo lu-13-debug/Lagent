@@ -1,22 +1,19 @@
 import { useEffect, useState } from 'react';
+import { request } from '../api';
 import { filterMemory, memoryError, type MemoryItem } from '../memory';
 import '../memory.css';
 
-async function call(path = '', method = 'GET', body?: unknown) {
-  const response = await fetch(`/api/memory${path}`, { method, credentials: 'include', headers: { 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
-  const data = await response.json();
-  if (!response.ok) throw Error(data.error || '记忆操作失败');
-  return data;
-}
+// 走统一的 API 层，会话过期与错误文案和其它页面保持一致。
+const call = <T,>(path = '', method = 'GET', body?: unknown) => request<T>(`/memory${path}`, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
 
 const scopeNames: Record<string, string> = { user: '用户', project: '项目' };
 const typeNames: Record<string, string> = { preference: '偏好', glossary: '术语', decision: '决定', finding: '发现', constraint: '约束' };
 
 export function MemoryPanel() {
   const [items, setItems] = useState<MemoryItem[]>([]), [scope, setScope] = useState(''), [type, setType] = useState(''), [error, setError] = useState(''), [editing, setEditing] = useState<MemoryItem | null>(null), [key, setKey] = useState(''), [value, setValue] = useState('');
-  const load = () => call().then(data => setItems(data.memories)).catch(e => setError(e.message));
+  const load = () => call<{ memories: MemoryItem[] }>().then(data => setItems(data.memories)).catch(e => setError(e.message));
   useEffect(() => { void load(); }, []);
-  const change = async (id: string, method: string, body?: unknown) => { try { await call(`/${id}`, method, body); await load(); } catch (e) { setError((e as Error).message); } };
+  const change = async (id: string, method: string, body?: unknown) => { try { await call<unknown>(`/${id}`, method, body); await load(); } catch (e) { setError((e as Error).message); } };
   const visible = filterMemory(items, scope, type);
   const reset = () => { setEditing(null); setKey(''); setValue(''); };
 
@@ -39,7 +36,7 @@ export function MemoryPanel() {
       const message = memoryError(key, value);
       if (message) return setError(message);
       try {
-        await call(editing ? `/${editing.id}` : '', editing ? 'PATCH' : 'POST', { key, value, ...(!editing ? { scope: scope || 'user', type: type || 'preference' } : {}), status: 'confirmed' });
+        await call<unknown>(editing ? `/${editing.id}` : '', editing ? 'PATCH' : 'POST', { key, value, ...(!editing ? { scope: scope || 'user', type: type || 'preference' } : {}), status: 'confirmed' });
         reset();
         setError('');
         await load();

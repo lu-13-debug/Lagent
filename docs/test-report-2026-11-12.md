@@ -1,5 +1,6 @@
 # Lagent 全面功能测试报告
 
+> **历史快照**：本报告记录 2026-11-12 当天的测试结果，其中测试数量与 e2e spec 数已随功能演进变化；当前基线以 `npm test` 与 `npm run test:e2e` 的实际输出为准。  
 > 日期：2026-11-12
 > 提交：`57e5865`（测试基线 `3d6ba11`）
 > 环境：Windows 11 / Node 24 / Electron 45 / Edge (msedge)

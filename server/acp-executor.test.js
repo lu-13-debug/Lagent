@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { Store } from './store.js';
-import { createAcpExecutor } from './work/executors/acp.js';
+import { createAcpExecutor, resolveInside } from './work/executors/acp.js';
 import { createExecutorRegistry } from './work/executors/index.js';
 import { createWorkEngine } from './work/engine.js';
 
@@ -25,6 +25,22 @@ test('ACP 执行器完成 initialize、session/new 与 session/prompt', async t 
   assert.equal(finished.status, 'completed', finished.error);
   assert.equal(finished.artifacts.acp.stopReason, 'end_turn');
   assert.match(finished.artifacts.acp.text, /ACP OK/);
+  executor.close();
+});
+
+test('ACP 单条超大事件不会让整段任务失败，后续输出仍会保留', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'acp-large-'));
+  const store = new Store(dir);
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  const agentFile = fileURLToPath(new URL('./fixtures/fake-acp-large-agent.mjs', import.meta.url));
+  const executor = createAcpExecutor({ id: 'test-acp-large', name: 'Test ACP Large', store, cwd: dir, command: process.execPath, args: [agentFile], timeoutMs: 10000 });
+  const task = executor.start({ id: 't-large' }, { id: 'a-large' }, { prompt: '测试大事件' });
+  for (let i = 0; i < 100 && executor.get(task.id)?.status === 'running'; i++) await sleep(50);
+  const finished = executor.get(task.id);
+  assert.equal(finished.status, 'completed', finished.error);
+  assert.match(finished.artifacts.acp.text, /大事件之后仍能继续/);
+  // 保留正文有上限，避免把 300KiB 事件整段留在内存和工单里。
+  assert.ok(finished.artifacts.acp.text.length <= 8 * 1024 + 200, finished.artifacts.acp.text.length);
   executor.close();
 });
 
@@ -65,6 +81,17 @@ test('ACP 项目工单在 workspace 内开放文件读写，越界路径被拒�
   assert.equal(readFileSync(join(workspace, 'out', '.agent-output.txt'), 'utf8'), 'written by acp');
   assert.equal(existsSync(join(workspace, '..', 'escaped.txt')), false);
   executor.close();
+});
+
+test('项目内的符号链接不能把文件读写带出 workspace', t => {
+  const workspace = mkdtempSync(join(tmpdir(), 'acp-link-project-'));
+  const outside = mkdtempSync(join(tmpdir(), 'acp-link-outside-'));
+  t.after(() => { rmSync(workspace, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); });
+  writeFileSync(join(outside, 'secret.txt'), 'outside');
+  symlinkSync(outside, join(workspace, 'jump'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal(resolveInside(workspace, join(workspace, 'jump', 'secret.txt')), null, '链接指向的外部文件必须拒绝');
+  assert.equal(resolveInside(workspace, join(workspace, 'jump', 'new.txt')), null, '链接目录内的新文件同样拒绝');
+  assert.ok(resolveInside(workspace, join(workspace, 'normal.txt')), '项目内普通路径仍然允许');
 });
 
 test('ACP 无 workspace 的工单仍然只读', async t => {
@@ -111,7 +138,7 @@ test('ACP 工单未显式提供 executorInput 时用指令文本作为 prompt', 
     get: id => id && store.get('task', id),
     stop() {}
   };
-  const engine = createWorkEngine(store, createExecutorRegistry([acp]), () => {}, { env: { LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
+  const engine = createWorkEngine(store, createExecutorRegistry([acp]), () => {}, { env: { LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' } });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   engine.updatePolicy({ allowedExecutors: ['claude-acp'] });
   const ticket = engine.command({ text: '只回复 OK', executorId: 'claude-acp' });

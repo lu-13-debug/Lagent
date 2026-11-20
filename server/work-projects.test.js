@@ -170,6 +170,57 @@ test('P1 目录浏览只返回文件夹并拒绝文件路径', t => {
   if (process.platform === 'win32') assert.ok(roots.entries.some(item => /^[A-Z]:\/$/.test(item.path)));
 });
 
+test('P1 CLI 因回合上限失败后仍保存 sessionId，下一条消息可续接', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'lagent-projects-'));
+  const store = new Store(root);
+  const projectDir = makeProject(root);
+  const home = makeHome(root);
+  const spawned = [];
+  const claude = claudeCodeExecutor({
+    store,
+    cwd: root,
+    binary: process.execPath,
+    spawnImpl: (_executable, args) => {
+      spawned.push(args);
+      return fakeCliChild(jsonl([
+        { type: 'system', session_id: 'cli-failed-session' },
+        { type: 'result', subtype: 'error_max_turns', is_error: true, session_id: 'cli-failed-session', result: 'Claude Code error_max_turns' }
+      ]));
+    }
+  });
+  const engine = createWorkEngine(store, createExecutorRegistry([claude]), () => {}, {
+    policy: { allowedExecutors: ['claude-code'], requireApproval: false },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' },
+    home
+  });
+  t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const imported = engine.importProject({ path: projectDir });
+  const { chat } = engine.createProjectChat(imported.project.id, { executorId: 'claude-code' });
+
+  const ticket = engine.projectChatMessage(chat.id, { text: '从零完成一个大型项目' });
+  await waitFor(() => spawned.length === 1, '首条消息未启动');
+  const turnsIndex = spawned[0].indexOf('--max-turns');
+  assert.ok(turnsIndex >= 0, '应带上回合上限参数');
+  assert.equal(spawned[0][turnsIndex + 1], '30', '未显式指定时使用 CLI 默认回合数，而不是被引擎写死的较低值');
+  await waitFor(() => engine.detail(ticket.id).ticket.status === 'failed', '工单应因回合上限失败');
+  assert.equal(engine.getProject(imported.project.id).chats[0].sessionId, 'cli-failed-session');
+
+  const second = engine.projectChatMessage(chat.id, { text: '继续，把剩下的做完' });
+  await waitFor(() => spawned.length === 2, '续接消息未启动');
+  const resumeIndex = spawned[1].indexOf('--resume');
+  assert.ok(resumeIndex >= 0);
+  assert.equal(spawned[1][resumeIndex + 1], 'cli-failed-session');
+  // 第一次失败后应把同执行器的教训前置到第二次任务里。
+  assert.match(spawned[1].join('\n'), /失败教训/);
+  await waitFor(() => engine.detail(second.id).ticket.status === 'failed', '第二条消息应结束');
+  const remembered = engine.projectMemoryDigest(imported.project.id);
+  const reflection = remembered.entries.find(entry => entry.kind === 'reflection');
+  assert.ok(reflection, '失败后应留下反思条目');
+  assert.equal(reflection.executorId, 'claude-code');
+  assert.ok(reflection.occurrences >= 2);
+  assert.match(reflection.lesson, /拆小|回合/);
+});
+
 test('P1 项目对话消息经审批后在工作目录续接会话并回写 sessionId', async t => {
   const root = mkdtempSync(join(tmpdir(), 'lagent-projects-'));
   const store = new Store(root);
@@ -202,7 +253,7 @@ test('P1 项目对话消息经审批后在工作目录续接会话并回写 sess
   let plannerInput = null;
   const engine = createWorkEngine(store, createExecutorRegistry([claude]), () => {}, {
     policy: { allowedExecutors: ['claude-code'], requireApproval: true },
-    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' },
     home,
     planner: async input => {
       plannerInput = input;
@@ -300,8 +351,11 @@ test('P1 项目对话消息经审批后在工作目录续接会话并回写 sess
 
   const dispatched = engine.projectDispatch(imported.project.id, { text: '同时检查依赖与样式', executorIds: ['claude-code'] });
   assert.equal(dispatched.tickets.length, 1);
-  assert.equal(dispatched.tickets[0].projectChatId, chat.id);
-  assert.equal(dispatched.project.chats.length, 1);
+  // 分派变成一条 Lagent 会话，Agent 的执行上下文是隐藏对话，不再复用/新增可见对话。
+  assert.ok(dispatched.conversationId, '分派返回会话 id');
+  assert.equal(dispatched.tickets[0].conversationId, dispatched.conversationId);
+  assert.notEqual(dispatched.tickets[0].projectChatId, chat.id, '不复用已有可见对话');
+  assert.equal(dispatched.project.chats.length, 1, '项目页仍然只有一条可见对话');
   assert.throws(() => engine.projectDispatch(imported.project.id, { text: '空目标', executorIds: [] }), { status: 400 });
   assert.throws(() => engine.projectDispatch(imported.project.id, { text: '窗口分派', executorIds: ['window'] }), { status: 400, message: /请先选择要接管的窗口/ });
 
@@ -404,7 +458,7 @@ test('P1 项目计划把步骤分派给不同 Agent 并各自建立项目对话'
   let plannerInput = null;
   const engine = createWorkEngine(store, createExecutorRegistry([claude, codex]), () => {}, {
     policy: { allowedExecutors: ['claude-code', 'codex'], requireApproval: true },
-    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' },
     home,
     planner: async input => {
       plannerInput = input;
@@ -419,7 +473,7 @@ test('P1 项目计划把步骤分派给不同 Agent 并各自建立项目对话'
     goal: '跨 Agent 完成夜间模式',
     projectChatId: chat.id,
     steps: [
-      { executorId: 'claude-code', text: '检查现有实现' },
+      { executorId: 'claude-code', text: '检查现有实现', executorInput: { maxTurns: 50, timeoutMs: 3_600_000 } },
       { executorId: 'codex', text: '实现夜间开关' }
     ]
   });
@@ -438,6 +492,9 @@ test('P1 项目计划把步骤分派给不同 Agent 并各自建立项目对话'
   assert.equal(codexCalls.length, 1);
   assert.equal(claudeCalls[0].options.cwd, resolve(projectDir));
   assert.equal(codexCalls[0].options.cwd, resolve(projectDir));
+  const claudeTask = store.get('task', engine.detail(plan.steps[0].ticketId).assignments[0].id);
+  assert.equal(claudeTask.cliInput.maxTurns, 50);
+  assert.equal(claudeTask.cliInput.timeoutMs, 3_600_000);
   assert.equal(engine.getProject(imported.project.id).chats.find(item => item.executorId === 'codex').sessionId, 'codex-thread');
 
   const changes = engine.projectChanges(imported.project.id);
@@ -473,7 +530,7 @@ test('P1 窗口 Agent 可与项目内 Agent 并行分派，窗口会话绑定所
   const window = windowExecutor({ store, bridge, waitMs: 1, pollMs: 1, maxWaitMs: 1 });
   const engine = createWorkEngine(store, createExecutorRegistry([claude, window]), () => {}, {
     policy: { allowedExecutors: ['claude-code', 'window'], requireApproval: true },
-    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' },
     home,
     windowBridge: bridge
   });
@@ -487,20 +544,23 @@ test('P1 窗口 Agent 可与项目内 Agent 并行分派，窗口会话绑定所
   });
   assert.equal(result.tickets.length, 2);
   assert.deepEqual(new Set(result.tickets.map(ticket => ticket.executor)), new Set(['claude-code', 'window']));
-  const chats = engine.getProject(imported.project.id).chats;
-  assert.equal(chats.length, 2);
-  const windowChat = chats.find(chat => chat.executorId === 'window');
+  // 分派只产生一条会话；各 Agent 的执行上下文是隐藏对话，不进项目页。
+  assert.equal(engine.getProject(imported.project.id).chats.length, 0, '分派不再各自创建可见对话');
+  assert.ok(result.conversationId, '分派返回会话 id');
+  const hidden = store.list('work-project-chat').filter(chat => chat.projectId === imported.project.id);
+  const windowChat = hidden.find(chat => chat.executorId === 'window');
+  assert.equal(windowChat.hidden, true);
+  assert.equal(windowChat.conversationId, result.conversationId);
   assert.equal(windowChat.window.handle, 42);
   assert.equal(windowChat.window.process, 'Codex');
-  // 窗口标题只用于定位窗口，不覆盖会话标题；会话标题会按首条消息自动生成。
   assert.equal(windowChat.window.title, 'Codex 窗口');
-  assert.equal(windowChat.title, '一起做两件事');
-  assert.equal(windowChat.autoTitle, false);
+  assert.equal(result.tickets.find(ticket => ticket.executor === 'window').projectChatId, windowChat.id);
 
-  // 同一句柄再次分派时复用已有会话，不会重复建会话。
+  // 同一句柄再次分派会进新的会话，仍不会冒出新的可见对话。
   const again = engine.projectDispatch(imported.project.id, { text: '再发一次', executorIds: ['window'], window: { handle: 42 } });
-  assert.equal(again.tickets[0].projectChatId, windowChat.id);
-  assert.equal(engine.getProject(imported.project.id).chats.filter(chat => chat.executorId === 'window').length, 1);
+  assert.ok(again.conversationId && again.conversationId !== result.conversationId);
+  assert.equal(again.tickets[0].conversationId, again.conversationId);
+  assert.equal(engine.getProject(imported.project.id).chats.length, 0, '可见对话数量保持为 0');
   assert.throws(() => engine.projectDispatch(imported.project.id, { text: '缺句柄', executorIds: ['claude-code', 'window'] }), { status: 400, message: /请先选择要接管的窗口/ });
 });
 
@@ -529,7 +589,7 @@ test('变更档案在没有 git 的目录里也会记下执行器报告的产出
   });
   const engine = createWorkEngine(store, createExecutorRegistry([model]), () => {}, {
     policy: { allowedExecutors: ['model'], requireApproval: false, permission: 'workspace' },
-    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' },
     home
   });
   t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
@@ -562,7 +622,7 @@ test('建会话时可以一次挑好协作 Agent，之后改名单也存得住',
     fetchImpl: async () => ({ ok: true, status: 200, headers: { get: () => null }, async json() { return { choices: [{ message: { content: '{"final":{"summary":"ok","done":true}}' } }] }; }, async text() { return '{}'; } })
   })]), () => {}, {
     policy: { allowedExecutors: ['model', 'claude-code', 'codex'], requireApproval: false, permission: 'workspace' },
-    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' },
     home
   });
   t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
@@ -598,7 +658,7 @@ test('删掉文件夹或对话时，挂在它上面的编排记录一起清掉',
     fetchImpl: async () => ({ ok: true, status: 200, headers: { get: () => null }, async json() { return { choices: [{ message: { content: '{"final":{"summary":"ok","done":true}}' } }] }; }, async text() { return '{}'; } })
   })]), () => {}, {
     policy: { allowedExecutors: ['model'], requireApproval: false, permission: 'workspace' },
-    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' },
     home
   });
   t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
@@ -609,15 +669,179 @@ test('删掉文件夹或对话时，挂在它上面的编排记录一起清掉',
   // 编排记录由编排器写入，这里直接落两条，模拟「项目被删掉但运行还挂着」。
   store.put('work-run', { id: 'run-keep', projectId: imported.project.id, chatId: 'other-chat', status: 'cancelled', createdAt: stamp, updatedAt: stamp, goal: '保留', steps: [], board: [] });
   store.put('work-run', { id: 'run-gone', projectId: imported.project.id, chatId: chat.id, status: 'awaiting_approval', createdAt: stamp, updatedAt: stamp, goal: '要清掉', steps: [], board: [] });
+  // 计划和它的检查点/补偿、团队房间也要跟着对话走，否则会留下打不开的僵尸计划。
+  store.put('work-plan', { id: 'plan-gone', goal: '清理计划', status: 'active', projectId: imported.project.id, projectChatId: chat.id, steps: [], createdAt: stamp, updatedAt: stamp });
+  store.put('work-checkpoint', { id: 'plan-gone-0', planId: 'plan-gone', step: 0, completed: [], files: [], at: stamp });
+  store.put('work-compensation', { id: 'plan-gone-0', planId: 'plan-gone', step: 0, command: 'git checkout .', status: 'pending' });
+  store.put('work-team-room', { id: 'room-gone', title: '清理房间', projectId: imported.project.id, planId: 'plan-gone', messages: [], createdAt: stamp, updatedAt: stamp });
 
   const removedChat = engine.deleteProjectChat(chat.id);
   assert.equal(removedChat.runs, 1, '删对话要带走挂在这条对话上的运行');
+  assert.equal(removedChat.plans, 1, '删对话要带走挂在这条对话上的计划');
   assert.equal(store.get('work-run', 'run-gone') ?? null, null);
   assert.ok(store.get('work-run', 'run-keep'), '别的对话的运行不能误删');
+  assert.equal(store.get('work-plan', 'plan-gone') ?? null, null);
+  assert.equal(store.get('work-checkpoint', 'plan-gone-0') ?? null, null);
+  assert.equal(store.get('work-compensation', 'plan-gone-0') ?? null, null);
+  assert.equal(store.get('work-team-room', 'room-gone') ?? null, null);
 
   store.put('work-run', { id: 'run-gone-2', projectId: imported.project.id, chatId: 'whatever', status: 'drafting', createdAt: stamp, updatedAt: stamp, goal: '也要清掉', steps: [], board: [] });
+  store.put('work-project-memory', { id: 'memory-gone', projectId: imported.project.id, title: '旧记忆', createdAt: stamp });
   const removedProject = engine.deleteProject(imported.project.id);
   assert.equal(removedProject.runs, 2, '删文件夹要把这个项目的运行一起带走');
   assert.equal(store.get('work-run', 'run-gone-2') ?? null, null);
   assert.equal(store.get('work-run', 'run-keep') ?? null, null);
+  assert.equal(store.get('work-project-memory', 'memory-gone') ?? null, null, '项目记忆不能让重新导入的项目继承旧 id');
+});
+
+test('新建会话的占位标题使用真实 Agent 名称', t => {
+  const root = mkdtempSync(join(tmpdir(), 'lagent-projects-'));
+  const store = new Store(root);
+  const projectDir = makeProject(root);
+  const service = projectService(store, { home: makeHome(root) });
+  t.after(() => { store.close(); rmSync(root, { recursive: true, force: true }); });
+
+  const project = service.importProject({ path: projectDir }).project;
+  const modelChat = service.createChat(project.id, { executorId: 'model' });
+  assert.equal(modelChat.title, `${project.name} · Lagent`, '内置 Agent 的会话不能写成 Claude Code');
+  assert.equal(modelChat.autoTitle, true);
+  const codexChat = service.createChat(project.id, { executorId: 'codex' });
+  assert.equal(codexChat.title, `${project.name} · Codex`);
+  const explicit = service.createChat(project.id, { executorId: 'model', title: '夜间开关' });
+  assert.equal(explicit.title, '夜间开关');
+  assert.equal(explicit.autoTitle, false);
+
+  // 旧版本已经写坏的自动标题，读取时也会被纠正；手动改过的名字保持原样。
+  store.put('project-chat', { ...modelChat, title: `${project.name} · Claude Code` });
+  assert.equal(service.getChat(modelChat.id).title, `${project.name} · Lagent`);
+  store.put('project-chat', { ...explicit, title: `${project.name} · Claude Code` });
+  assert.equal(service.getChat(explicit.id).title, `${project.name} · Claude Code`);
+});
+
+test('同一项目对话里的每条消息可以换执行器，续接 id 按执行器分开保存', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'lagent-projects-'));
+  const store = new Store(root);
+  const projectDir = makeProject(root);
+  const home = makeHome(root);
+  const claudeCalls = [];
+  const codexCalls = [];
+  const claude = claudeCodeExecutor({
+    store,
+    cwd: root,
+    binary: process.execPath,
+    spawnImpl: (_executable, args, options) => {
+      claudeCalls.push({ args, options });
+      return fakeCliChild(jsonl([
+        { type: 'system', session_id: 'claude-session' },
+        { type: 'result', subtype: 'success', is_error: false, session_id: 'claude-session', result: '检查完成' }
+      ]));
+    }
+  });
+  const codex = codexExecutor({
+    store,
+    cwd: root,
+    binary: process.execPath,
+    spawnImpl: (_executable, args, options) => {
+      codexCalls.push({ args, options });
+      return fakeCliChild(jsonl([
+        { type: 'thread.started', thread_id: 'codex-thread' },
+        { type: 'item.completed', item: { type: 'agent_message', text: '实现完成' } },
+        { type: 'turn.completed', usage: { input_tokens: 3, output_tokens: 5 } }
+      ]));
+    }
+  });
+  const engine = createWorkEngine(store, createExecutorRegistry([claude, codex]), () => {}, {
+    policy: { allowedExecutors: ['claude-code', 'codex'], requireApproval: true },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' },
+    home
+  });
+  t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const imported = engine.importProject({ path: projectDir });
+  const { chat } = engine.createProjectChat(imported.project.id, { executorId: 'claude-code' });
+
+  const first = engine.projectChatMessage(chat.id, { text: '检查现有实现' });
+  assert.equal(first.executor, 'claude-code', '不传执行器时沿用会话默认 Agent');
+  engine.action(first.id, 'approve');
+  await waitFor(() => engine.detail(first.id).ticket.status === 'completed', '第一条消息未完成');
+
+  const second = engine.projectChatMessage(chat.id, { text: '实现夜间开关', executorId: 'codex' });
+  assert.equal(second.projectChatId, chat.id, '换人后仍然属于同一条对话');
+  assert.equal(second.executor, 'codex');
+  engine.action(second.id, 'approve');
+  await waitFor(() => engine.detail(second.id).ticket.status === 'completed', '第二条消息未完成');
+  assert.equal(codexCalls.length, 1);
+  assert.equal(codexCalls[0].options.cwd, resolve(projectDir));
+  assert.equal(engine.getProject(imported.project.id).chats[0].executorId, 'claude-code', '换人不能改写会话的默认 Agent');
+
+  const stored = engine.getProject(imported.project.id).chats[0];
+  assert.equal(stored.sessionId, 'claude-session');
+  assert.equal(stored.sessions.codex, 'codex-thread');
+
+  const third = engine.projectChatMessage(chat.id, { text: '继续检查', executorId: 'claude-code' });
+  engine.action(third.id, 'approve');
+  await waitFor(() => engine.detail(third.id).ticket.status === 'completed', '第三条消息未完成');
+  const resumeIndex = claudeCalls[1].args.indexOf('--resume');
+  assert.ok(resumeIndex >= 0);
+  assert.equal(claudeCalls[1].args[resumeIndex + 1], 'claude-session', '切回原 Agent 时续接它自己的会话');
+
+  assert.throws(() => engine.projectChatMessage(chat.id, { text: '越权', executorId: 'analysis' }), { status: 400 });
+  assert.throws(() => engine.projectChatMessage(chat.id, { text: '越权', executorId: 'window' }), { status: 400 });
+});
+
+test('同一条项目消息可以并行交给多个 Agent，各开一张工单', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'lagent-projects-'));
+  const store = new Store(root);
+  const projectDir = makeProject(root);
+  const home = makeHome(root);
+  const claudeCalls = [];
+  const codexCalls = [];
+  const claude = claudeCodeExecutor({
+    store,
+    cwd: root,
+    binary: process.execPath,
+    spawnImpl: (_executable, args, options) => {
+      claudeCalls.push({ args, options });
+      return fakeCliChild(jsonl([
+        { type: 'system', session_id: 'claude-session' },
+        { type: 'result', subtype: 'success', is_error: false, session_id: 'claude-session', result: '检查完成' }
+      ]));
+    }
+  });
+  const codex = codexExecutor({
+    store,
+    cwd: root,
+    binary: process.execPath,
+    spawnImpl: (_executable, args, options) => {
+      codexCalls.push({ args, options });
+      return fakeCliChild(jsonl([
+        { type: 'thread.started', thread_id: 'codex-thread' },
+        { type: 'item.completed', item: { type: 'agent_message', text: '实现完成' } },
+        { type: 'turn.completed', usage: { input_tokens: 3, output_tokens: 5 } }
+      ]));
+    }
+  });
+  const engine = createWorkEngine(store, createExecutorRegistry([claude, codex]), () => {}, {
+    policy: { allowedExecutors: ['claude-code', 'codex'], requireApproval: true },
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' },
+    home
+  });
+  t.after(() => { engine.close(); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const imported = engine.importProject({ path: projectDir });
+  const { chat } = engine.createProjectChat(imported.project.id, { executorId: 'claude-code' });
+
+  const tickets = engine.projectChatMessages(chat.id, { text: '并行检查并各给结论', executorIds: ['claude-code', 'codex'] });
+  assert.equal(tickets.length, 2);
+  assert.deepEqual(new Set(tickets.map(ticket => ticket.executor)), new Set(['claude-code', 'codex']));
+  assert.ok(tickets.every(ticket => ticket.projectChatId === chat.id), '多张工单仍属于同一条对话');
+
+  for (const ticket of tickets) engine.action(ticket.id, 'approve');
+  await waitFor(() => tickets.every(ticket => engine.detail(ticket.id).ticket.status === 'completed'), '并行工单未全部完成');
+  assert.equal(claudeCalls.length, 1);
+  assert.equal(codexCalls.length, 1);
+  assert.equal(engine.getProject(imported.project.id).chats[0].executorId, 'claude-code', '批量执行不能改写会话默认 Agent');
+
+  assert.throws(() => engine.projectChatMessages(chat.id, { text: '太多人', executorIds: ['claude-code', 'codex', 'claude-acp', 'codex-acp', 'opencode'] }), { status: 400 });
+  assert.throws(() => engine.projectChatMessages(chat.id, { text: '越权', executorIds: ['claude-code', 'analysis'] }), { status: 400 });
 });

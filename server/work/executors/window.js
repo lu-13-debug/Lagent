@@ -16,6 +16,8 @@ function normalizeInput(input) {
 export function windowExecutor({ store, bridge, waitMs = 1200, pollMs = 900, maxWaitMs = 30000 } = {}) {
   if (!store) throw new TypeError('windowExecutor 需要 store');
   const tasks = new Map();
+  const cancelled = new Set();
+  const trimTasks = () => { if (tasks.size <= 200) return; for (const [idValue, row] of tasks) { if (tasks.size <= 200) break; if (!['running', 'awaiting_approval'].includes(row.status)) tasks.delete(idValue); } };
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const readText = async (handle, hint) => {
     try {
@@ -51,6 +53,7 @@ export function windowExecutor({ store, bridge, waitMs = 1200, pollMs = 900, max
           let output = '';
           let previous = null;
           while (Date.now() < deadline) {
+            if (cancelled.has(task.id)) return;
             const current = await readText(target, hint);
             if (current && current !== baseline) {
               output = current;
@@ -60,6 +63,7 @@ export function windowExecutor({ store, bridge, waitMs = 1200, pollMs = 900, max
             await pause(interval);
           }
           if (!output) output = await readText(target, hint);
+          if (cancelled.has(task.id)) return;
           const readable = Boolean(output && output !== baseline);
           if (!readable) output = '';
           const processName = sent.process || request.process || '窗口';
@@ -74,11 +78,15 @@ export function windowExecutor({ store, bridge, waitMs = 1200, pollMs = 900, max
             report: { id: `window-${task.id}`, summary, output: String(output).slice(-4000) },
             artifacts: { window: { handle: target, previousHandle: request.handle, relocated: sent.relocated === true, process: sent.process || request.process || '', submitted: sent.submitted === true, text: String(output).slice(-MAX_TEXT) } }
           };
+          if (cancelled.has(task.id)) return;
           tasks.set(task.id, finished);
+          trimTasks();
           store.put('task', finished);
         } catch (error) {
+          if (cancelled.has(task.id)) return;
           const failed = { ...task, status: 'failed', completedAt: new Date().toISOString(), error: String(error?.message || '窗口 Agent 执行失败').slice(0, 300) };
           tasks.set(task.id, failed);
+          trimTasks();
           store.put('task', failed);
         }
       })();
@@ -87,10 +95,12 @@ export function windowExecutor({ store, bridge, waitMs = 1200, pollMs = 900, max
     get: id => id && (tasks.get(id) || store.get('task', id)),
     stop(task) {
       if (!task) return;
+      cancelled.add(task.id);
       const stopped = { ...task, status: 'cancelled', completedAt: new Date().toISOString() };
       tasks.set(task.id, stopped);
+      trimTasks();
       store.put('task', stopped);
     },
-    close() { tasks.clear(); }
+    close() { tasks.clear(); cancelled.clear(); }
   };
 }

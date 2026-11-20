@@ -31,11 +31,11 @@ function fixture(t) {
   };
   const engine = createWorkEngine(store, createExecutorRegistry([terminal]), () => {}, { workspace: dir });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
-  return { engine, dir };
+  return { engine, dir, store };
 }
 
 test('工单完成后自动执行验收并通过', async t => {
-  const { engine } = fixture(t);
+  const { engine, store } = fixture(t);
   const ticket = engine.command({ text: '自动验收通过', executorId: 'terminal', executorInput: { program: 'pwd', args: [] }, verify: { command: 'npm --version' } });
   assert.equal(ticket.status, 'completed');
   const detail = await until(() => {
@@ -45,6 +45,12 @@ test('工单完成后自动执行验收并通过', async t => {
   assert.equal(detail.ticket.acceptance.status, 'passed');
   assert.equal(detail.ticket.status, 'completed');
   assert.match(detail.ticket.summary, /验收通过：npm --version/);
+  assert.equal(detail.ticket.review.verdict, 'pass');
+  assert.equal(detail.ticket.review.evidence.level, 'verified');
+  assert.deepEqual(detail.ticket.review.failureModes, []);
+  assert.equal(detail.reports[0].artifacts.review.evidence.level, 'verified');
+  // 自动验收回写不能把批准前冻结的执行输入冲掉，否则失败后重试会丢参数。
+  assert.deepEqual(store.get('work-control', ticket.id).executorInput, { program: 'pwd', args: [] });
 });
 
 test('自动验收失败时工单进入 blocked 并保留证据', async t => {
@@ -60,6 +66,9 @@ test('自动验收失败时工单进入 blocked 并保留证据', async t => {
   assert.match(detail.ticket.summary, /验收未通过/);
   assert.ok(detail.ticket.attention);
   assert.match(detail.reports[0].summary, /验收未通过/);
+  assert.equal(detail.ticket.review.verdict, 'reject');
+  assert.equal(detail.ticket.review.evidence.level, 'failed');
+  assert.ok(detail.ticket.review.issues.some(issue => issue.code === 'CRITIC_VERIFY_FAILED'));
 });
 
 test('autoVerify:false 时不会自动跑验收', async t => {

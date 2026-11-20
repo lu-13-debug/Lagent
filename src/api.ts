@@ -1,5 +1,5 @@
 import type { ModelUsageReport, Bootstrap, PublicReport, ShareItem, Dataset, ExploreInput, Exploration, Mode, ModelCatalog, ReportMetadata, Runtime, Settings, Task, TaskSnapshot, TaskResponse, Transaction, User, Wallet } from './types';
-import type { ProviderPool, WorkAction, WorkAcceptance, WorkBootstrap, WorkEffect, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveFrame, WorkLiveSession, WorkMcpServer, WorkMcpToken, WorkPlan, WorkPlanStep, WorkPolicy, WorkProfile, WorkProfilesActive, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkRoomDecision, WorkRoomMessage, WorkRosterEntry, WorkRoutine, WorkRun, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamRoom, WorkTeamTemplate, WorkTeamwork, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
+import type { WorkAction, WorkAcceptance, WorkBootstrap, WorkConversation, WorkConversationSummary, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveFrame, WorkLiveSession, WorkMcpServer, WorkMcpToken, WorkPlan, WorkPlanStep, WorkPlugins, WorkPolicy, WorkProfile, WorkProfilesActive, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectFileList, WorkProjectFilePreview, WorkProjectFileSearch, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkReportDetail, WorkReportList, WorkReview, WorkRoomMessage, WorkRosterEntry, WorkRoutine, WorkRun, WorkSkill, WorkSkillCatalogEntry, WorkSkillPreview, WorkSkillScope, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamRoom, WorkTeamTemplate, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
 import { uploadFiles } from './upload.ts';
 import type { UploadOptions } from './upload';
 
@@ -8,14 +8,14 @@ let sessionBoundary = 0;
 export function onSessionExpired(listener: () => void) { sessionExpiredListeners.add(listener); return () => { sessionExpiredListeners.delete(listener); }; }
 export function resetSessionBoundary() { sessionBoundary++; }
 
-async function request<T>(path: string, options: RequestInit = {}, authentication = false, format: 'json' | 'text' | 'blob' = 'json'): Promise<T> {
+export async function request<T>(path: string, options: RequestInit = {}, authentication = false, format: 'json' | 'text' | 'blob' = 'json', timeoutMs?: number): Promise<T> {
   const boundary = sessionBoundary;
   const headers = options.body instanceof FormData ? options.headers : { 'Content-Type': 'application/json', ...options.headers };
-  const timeout = AbortSignal.timeout(format === 'blob' ? 90000 : 30000);
+  const timeout = AbortSignal.timeout(timeoutMs ?? (format === 'blob' ? 90000 : 30000));
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   const connectionFailure = () => {
-    if (!signal.aborted) return new Error('无法连接分析服务，请检查网络和服务地址后重试。');
-    if (signal.reason?.name !== 'TimeoutError') return new Error('请求已停止，已有服务端任务不会因此取消。');
+    if (!signal.aborted) return new Error('无法连接服务端，请检查网络和服务地址后重试。');
+    if (signal.reason?.name !== 'TimeoutError') return new Error(options.method && options.method !== 'GET' ? '请求已停止，已有服务端任务不会因此取消。' : '请求已停止，请重试。');
     return new Error(options.method && options.method !== 'GET' ? '请求超时，服务端可能已处理；请先查看任务状态，再决定是否重试。' : '请求超时，请检查网络和服务地址后重试。');
   };
   let response: Response;
@@ -27,17 +27,37 @@ async function request<T>(path: string, options: RequestInit = {}, authenticatio
     throw Object.assign(new Error(body?.error || `请求失败（${response.status}），请重试。`), { code: typeof body?.code === 'string' ? body.code : undefined, status: response.status });
   }
   try { return await (format === 'text' ? response.text() : format === 'blob' ? response.blob() : response.json()) as T; }
-  catch { if (signal.aborted) throw connectionFailure(); throw new Error('分析服务返回格式异常，请重新载入；若问题持续，请联系管理员。'); }
+  catch { if (signal.aborted) throw connectionFailure(); throw new Error('服务端返回格式异常，请重新载入；若问题持续，请联系管理员。'); }
 }
 export const api = {
   workBootstrap: (signal?: AbortSignal) => request<WorkBootstrap>('/work/bootstrap', { signal }),
   workCommand: (text: string, clientRequestId?: string, datasetId?: string, executorId?: string, executorInput?: unknown, extra?: { verify?: WorkVerifySpec; contract?: WorkTaskContract; settings?: { profileId?: string; model?: string; effort?: string; permission?: 'read' | 'workspace' | 'full' } }) => request<{ ticket: WorkTicket }>('/work/command', { method: 'POST', body: JSON.stringify({ text, ...(clientRequestId ? { clientRequestId } : {}), ...(datasetId ? { datasetId } : {}), ...(executorId ? { executorId } : {}), ...(executorInput !== undefined ? { executorInput } : {}), ...(extra?.verify ? { verify: extra.verify } : {}), ...(extra?.contract ? { contract: extra.contract } : {}), ...(extra?.settings ? { settings: extra.settings } : {}) }) }),
   workTicket: (id: string) => request<WorkTicketDetail>(`/work/tickets/${encodeURIComponent(id)}`),
+  // 会话：对话只由 Lagent 创建，选中的 Agent 在会话内各是一条 run。
+  workConversations: (limit = 60) => request<{ conversations: WorkConversationSummary[] }>(`/work/conversations?limit=${limit}`),
+  workConversation: (id: string) => request<{ conversation: WorkConversation; tickets: WorkTicket[] }>(`/work/conversations/${encodeURIComponent(id)}`),
+  workCreateConversation: (input: { title?: string; goal?: string; projectId?: string; agentIds?: string[] }) => request<{ conversation: WorkConversationSummary }>('/work/conversations', { method: 'POST', body: JSON.stringify(input) }),
+  workRenameConversation: (id: string, title: string) => request<{ conversation: WorkConversationSummary }>(`/work/conversations/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
+  workDeleteConversation: (id: string) => request<{ id: string; ticketIds: string[] }>(`/work/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  workConversationMessage: (id: string, input: { text: string; mode?: 'auto' | 'review' | 'plan'; agentIds?: string[]; settings?: { profileId?: string; model?: string; effort?: string; permission?: 'read' | 'workspace' | 'full' }; executorInputs?: Record<string, unknown>; datasetId?: string; clientRequestId?: string; autoRun?: boolean }) => request<{ conversation: WorkConversationSummary; turn: unknown; tickets?: WorkTicket[]; plan?: WorkPlan }>(`/work/conversations/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify(input) }),
+  workConversationSynthesize: (id: string, turnId: string, agentId: string) => request<{ conversation: WorkConversationSummary; ticket: WorkTicket }>(`/work/conversations/${encodeURIComponent(id)}/turns/${encodeURIComponent(turnId)}/synthesize`, { method: 'POST', body: JSON.stringify({ agentId }) }),
+  // 报告中心：列表按会话/工单聚合，详情与导出共用同一份结论提取。
+  workReports: (options: { group?: 'conversation' | 'ticket' | 'report'; projectId?: string; conversationId?: string; ticketId?: string; executorId?: string; kind?: string; q?: string; limit?: number; cursor?: string | null } = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(options)) {
+      if (value === undefined || value === null || value === '') continue;
+      params.set(key, String(value));
+    }
+    return request<WorkReportList>(`/work/reports${params.toString() ? `?${params.toString()}` : ''}`);
+  },
+  workReport: (id: string) => request<WorkReportDetail>(`/work/reports/${encodeURIComponent(id)}`),
+  workReportMarkdown: (id: string) => request<string>(`/work/reports/${encodeURIComponent(id)}/markdown`, {}, false, 'text'),
+  workMaterializeChat: (id: string) => request<{ chat: WorkProjectChat; conversation: WorkConversationSummary; created: boolean }>(`/work/chats/${encodeURIComponent(id)}/materialize`, { method: 'POST', body: '{}' }),
+  workImportConversations: (groups: unknown[]) => request<{ imported: number; conversations: WorkConversationSummary[] }>('/work/conversations/import', { method: 'POST', body: JSON.stringify({ groups }) }),
   workTicketTrace: (id: string) => request<WorkTrace>(`/work/tickets/${encodeURIComponent(id)}/trace`),
-  workVerifyTicket: (id: string) => request<{ ticket: WorkTicket; acceptance: WorkAcceptance }>(`/work/tickets/${encodeURIComponent(id)}/verify`, { method: 'POST', body: '{}' }),
+  workVerifyTicket: (id: string) => request<{ ticket: WorkTicket; acceptance: WorkAcceptance; review?: WorkReview }>(`/work/tickets/${encodeURIComponent(id)}/verify`, { method: 'POST', body: '{}' }),
   workProjects: () => request<{ projects: WorkProject[] }>('/work/projects'),
   workImportProject: (path: string, name?: string) => request<{ project: WorkProject; created: boolean }>('/work/projects', { method: 'POST', body: JSON.stringify({ path, ...(name ? { name } : {}) }) }),
-  workProject: (id: string) => request<{ project: WorkProject }>(`/work/projects/${encodeURIComponent(id)}`),
   workDirectory: (path?: string) => request<{ path: string; parent: string | null; roots: string[]; entries: { name: string; path: string; isDir: boolean }[]; truncated: boolean }>(`/work/files${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   workProjectBrief: (id: string) => request<{ brief: WorkProjectBrief }>(`/work/projects/${encodeURIComponent(id)}/brief`),
   workSaveProjectBrief: (id: string, input: Partial<Omit<WorkProjectBrief, 'projectId' | 'updatedAt'>>) => request<{ brief: WorkProjectBrief }>(`/work/projects/${encodeURIComponent(id)}/brief`, { method: 'PUT', body: JSON.stringify(input) }),
@@ -56,40 +76,25 @@ export const api = {
   workDeleteProject: (id: string) => request<{ id: string }>(`/work/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   workRenameProject: (id: string, name: string) => request<{ project: WorkProject }>(`/work/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
   workProjectSessions: (id: string, executor?: string) => request<{ sessions: WorkProjectSession[] }>(`/work/projects/${encodeURIComponent(id)}/sessions${executor ? `?executor=${encodeURIComponent(executor)}` : ''}`),
+  // 项目文件：列表/搜索用相对路径，预览只返回内容；PDF、图片、HTML 直接加载原始文件接口。
+  workProjectFiles: (id: string, path = '') => request<WorkProjectFileList>(`/work/projects/${encodeURIComponent(id)}/files${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  workProjectFileSearch: (id: string, query: string) => request<WorkProjectFileSearch>(`/work/projects/${encodeURIComponent(id)}/files/search?q=${encodeURIComponent(query)}`),
+  workProjectFilePreview: (id: string, path: string) => request<WorkProjectFilePreview>(`/work/projects/${encodeURIComponent(id)}/file/preview?path=${encodeURIComponent(path)}`),
+  workProjectFileUrl: (id: string, path: string, download = false) => `/api/work/projects/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}`,
   workImportProjectSession: (id: string, executorId: string, sessionId: string) => request<{ chat: WorkProjectChat; created: boolean }>(`/work/projects/${encodeURIComponent(id)}/sessions`, { method: 'POST', body: JSON.stringify({ executorId, sessionId }) }),
   workCreateProjectChat: (projectId: string, input: { executorId: string; title?: string; writable?: boolean; handle?: number; process?: string; windowTitle?: string; collaborators?: string[] }) => request<{ chat: WorkProjectChat; project: WorkProject }>(`/work/projects/${encodeURIComponent(projectId)}/chats`, { method: 'POST', body: JSON.stringify(input) }),
-  workChatCollaborators: (id: string, collaborators: string[]) => request<{ chat: WorkProjectChat }>(`/work/chats/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ collaborators }) }),
   workDeleteProjectChat: (id: string) => request<{ id: string }>(`/work/chats/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   workRenameProjectChat: (id: string, title: string) => request<{ chat: WorkProjectChat }>(`/work/chats/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   // 每条会话自己的权限档位；传空字符串表示回到「跟随设置」。
   workChatPermission: (id: string, permission: '' | 'read' | 'workspace' | 'full') => request<{ chat: WorkProjectChat }>(`/work/chats/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ permission }) }),
-  workProjectChatMessage: (id: string, text: string, clientRequestId?: string, options?: { profileId?: string; model?: string; effort?: string }) => request<{ ticket: WorkTicket }>(`/work/chats/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(clientRequestId ? { clientRequestId } : {}), ...(options?.profileId ? { profileId: options.profileId } : {}), ...(options?.model ? { model: options.model } : {}), ...(options?.effort ? { effort: options.effort } : {}) }) }),
-  workProjectChatTickets: (id: string) => request<{ tickets: WorkTicket[] }>(`/work/chats/${encodeURIComponent(id)}/tickets`),
-  workProjectTeamworks: (projectId: string) => request<{ teamworks: WorkTeamwork[] }>(`/work/projects/${encodeURIComponent(projectId)}/teamworks`),
-  workStartTeamwork: (projectId: string, goal: string, executorIds: string[]) => request<{ teamwork: WorkTeamwork; tickets: WorkTicket[] }>(`/work/projects/${encodeURIComponent(projectId)}/teamwork`, { method: 'POST', body: JSON.stringify({ goal, executorIds }) }),
-  workAssembleTeamwork: (id: string) => request<{ ok: boolean; relativePath?: string; outputPath?: string; bytes?: number; problems: { part?: string; message: string }[]; teamwork: WorkTeamwork }>(`/work/teamworks/${encodeURIComponent(id)}/assemble`, { method: 'POST' }),
-  workRetryTeamworkPart: (id: string, partId: string) => request<{ teamwork: WorkTeamwork; ticket: WorkTicket }>(`/work/teamworks/${encodeURIComponent(id)}/retry`, { method: 'POST', body: JSON.stringify({ partId }) }),
-  workProjectDispatch: (projectId: string, text: string, executorIds: string[], window?: { handle: number; process?: string; title?: string }) => request<{ project: WorkProject; tickets: WorkTicket[] }>(`/work/projects/${encodeURIComponent(projectId)}/dispatch`, { method: 'POST', body: JSON.stringify({ text, executorIds, ...(window ? { window } : {}) }) }),
+  workProjectChatMessage: (id: string, text: string, clientRequestId?: string, options?: { profileId?: string; model?: string; effort?: string; executorId?: string; executorIds?: string[] }) => request<{ ticket: WorkTicket; tickets?: WorkTicket[]; conversationId?: string }>(`/work/chats/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(clientRequestId ? { clientRequestId } : {}), ...(options?.executorIds?.length ? { executorIds: options.executorIds } : options?.executorId ? { executorId: options.executorId } : {}), ...(options?.profileId ? { profileId: options.profileId } : {}), ...(options?.model ? { model: options.model } : {}), ...(options?.effort ? { effort: options.effort } : {}) }) }),
   workAction: (id: string, action: WorkAction, input?: Record<string, unknown>) => request<{ ticket: WorkTicket }>(`/work/tickets/${encodeURIComponent(id)}/actions`, { method: 'POST', body: JSON.stringify({ action, ...(input ? { input } : {}) }) }),
   workPermissionDecision: (id: string, requestId: string, decision: 'allow' | 'deny') => request<{ ticket: WorkTicket }>(`/work/tickets/${encodeURIComponent(id)}/permissions/${encodeURIComponent(requestId)}`, { method: 'POST', body: JSON.stringify({ decision }) }),
   workDeleteTicket: (id: string) => request<{ id: string; removed: number; ids: string[]; planRemoved: boolean }>(`/work/tickets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   // 编排器：一次运行 = 分析 → 拆解 → 批准 → 分发 → 验证（可返工）→ 汇总
-  workOrchestrator: () => request<{ enabled: boolean }>('/work/orchestrator'),
   workRuns: (limit = 20, includePlans = false) => request<{ runs: WorkRun[] }>(`/work/runs?limit=${limit}${includePlans ? '&include=plans' : ''}`),
-  workStartRun: (input: { goal: string; projectId?: string | null; chatId?: string | null; templateId?: string | null }) => request<{ run: WorkRun }>('/work/runs', { method: 'POST', body: JSON.stringify(input) }),
-  workApproveRun: (id: string, decision: 'approve' | 'reject' = 'approve') => request<{ run: WorkRun }>(`/work/runs/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify({ decision }) }),
-  workCancelRun: (id: string) => request<{ run: WorkRun }>(`/work/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' }),
   workResumeRun: (id: string) => request<{ run: WorkRun }>(`/work/runs/${encodeURIComponent(id)}/resume`, { method: 'POST', body: '{}' }),
   workRun: (id: string) => request<{ run: WorkRun }>(`/work/runs/${encodeURIComponent(id)}`),
-  workEffects: (options?: { ticketId?: string; kind?: string; status?: string; limit?: number }) => {
-    const params = new URLSearchParams();
-    if (options?.ticketId) params.set('ticketId', options.ticketId);
-    if (options?.kind) params.set('kind', options.kind);
-    if (options?.status) params.set('status', options.status);
-    if (options?.limit) params.set('limit', String(options.limit));
-    return request<{ effects: WorkEffect[] }>(`/work/effects${params.toString() ? `?${params.toString()}` : ''}`);
-  },
-  workRetryEffect: (id: string) => request<{ effect: WorkEffect }>(`/work/effects/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' }),
   workUsage: (options?: { projectId?: string; executorId?: string; from?: string; to?: string; days?: number | 'all'; includeHistory?: boolean }) => {
     const params = new URLSearchParams();
     if (options?.projectId) params.set('projectId', options.projectId);
@@ -109,9 +114,7 @@ export const api = {
     if (options?.includeHistory) params.set('includeHistory', '1');
     return request<Blob>(`/work/usage.csv?${params.toString()}`, {}, false, 'blob');
   },
-  workProfiles: (projectId?: string) => request<{ profiles: WorkProfile[]; active: WorkProfilesActive }>(`/work/profiles${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
   workSaveProfile: (input: { name: string; description?: string; settings?: unknown; policy?: WorkPolicy; library?: unknown }) => request<{ profile: WorkProfile }>('/work/profiles', { method: 'POST', body: JSON.stringify(input) }),
-  workUpdateProfile: (id: string, input: { name?: string; description?: string; settings?: unknown; policy?: WorkPolicy; library?: unknown }) => request<{ profile: WorkProfile }>(`/work/profiles/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) }),
   workDeleteProfile: (id: string) => request<{ id: string }>(`/work/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   workApplyProfile: (id: string, projectId?: string) => request<{ profile: WorkProfile; scope: string; projectId: string | null; policy: WorkPolicy; active: WorkProfilesActive }>(`/work/profiles/${encodeURIComponent(id)}/apply`, { method: 'POST', body: JSON.stringify(projectId ? { projectId } : {}) }),
   workResetProfile: (projectId?: string) => request<{ scope: string; projectId: string | null; policy: WorkPolicy; active: WorkProfilesActive }>('/work/profiles/reset', { method: 'POST', body: JSON.stringify(projectId ? { projectId } : {}) }),
@@ -131,6 +134,24 @@ export const api = {
   workLibraryApply: (projectId: string, options?: { targets?: string[]; mcpUrl?: string; mcpToken?: string }) => request<{ sync: WorkLibrarySync }>(`/work/projects/${encodeURIComponent(projectId)}/library/apply`, { method: 'POST', body: JSON.stringify(options || {}) }),
   workLibrarySyncs: (projectId: string) => request<{ syncs: WorkLibrarySync[] }>(`/work/projects/${encodeURIComponent(projectId)}/library/syncs`),
   workLibraryRollback: (projectId: string, syncId: string) => request<{ sync: WorkLibrarySync; restored: string[] }>(`/work/projects/${encodeURIComponent(projectId)}/library/rollback`, { method: 'POST', body: JSON.stringify({ syncId }) }),
+  // 技能与插件中心。
+  workSkills: () => request<{ skills: WorkSkill[]; catalog: WorkSkillCatalogEntry[] }>('/work/skills'),
+  // 预览要克隆 GitHub 仓库，30 秒容易超时；安装/更新同理。
+  workSkillPreview: (input: { catalogId?: string; source?: unknown; url?: string; repo?: string; path?: string; ref?: string }) => request<WorkSkillPreview>('/work/skills/preview', { method: 'POST', body: JSON.stringify(input) }, false, 'json', 180000),
+  workSkillInstall: (input: { token: string; name?: string; scope: WorkSkillScope; projectId?: string; commit?: string; digest?: string; confirmed?: boolean; onConflict?: 'overwrite' | 'rename' }) => request<{ skill: WorkSkill; backup: string }>('/work/skills/install', { method: 'POST', body: JSON.stringify(input) }, false, 'json', 120000),
+  workSkillUpdate: (id: string) => request<{ skill: WorkSkill; backup: string }>(`/work/skills/${encodeURIComponent(id)}/update`, { method: 'POST', body: '{}' }, false, 'json', 180000),
+  workSkillEnable: (id: string) => request<{ skill: WorkSkill }>(`/work/skills/${encodeURIComponent(id)}/enable`, { method: 'POST', body: '{}' }),
+  workSkillDisable: (id: string) => request<{ skill: WorkSkill }>(`/work/skills/${encodeURIComponent(id)}/disable`, { method: 'POST', body: '{}' }),
+  workSkillRemove: (id: string) => request<{ id: string; removed: boolean; backup: string }>(`/work/skills/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  workPlugins: (refresh = false) => request<WorkPlugins>(`/work/plugins${refresh ? '?refresh=1' : ''}`),
+  workPluginDetails: (name: string) => request<{ name: string; text: string }>('/work/plugins/preview', { method: 'POST', body: JSON.stringify({ name }) }),
+  workPluginAddMarketplace: (source: string, scope: 'user' | 'project' | 'local' = 'user') => request<{ marketplace: unknown; raw: string }>('/work/plugins/marketplaces', { method: 'POST', body: JSON.stringify({ source, scope }) }),
+  workPluginRemoveMarketplace: (name: string) => request<{ ok: boolean; name: string }>(`/work/plugins/marketplaces/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  workPluginInstall: (name: string, options?: { marketplace?: string; scope?: 'user' | 'project' | 'local'; acceptCommand?: string }) => request<{ plugin: unknown; raw: string }>('/work/plugins/install', { method: 'POST', body: JSON.stringify({ name, ...(options?.marketplace ? { marketplace: options.marketplace } : {}), ...(options?.scope ? { scope: options.scope } : {}), ...(options?.acceptCommand ? { acceptCommand: options.acceptCommand } : {}) }) }, false, 'json', 180000),
+  workPluginEnable: (name: string, scope?: 'user' | 'project' | 'local') => request<{ plugin: unknown }>(`/work/plugins/${encodeURIComponent(name)}/enable`, { method: 'POST', body: JSON.stringify({ ...(scope ? { scope } : {}) }) }),
+  workPluginDisable: (name: string, scope?: 'user' | 'project' | 'local') => request<{ plugin: unknown }>(`/work/plugins/${encodeURIComponent(name)}/disable`, { method: 'POST', body: JSON.stringify({ ...(scope ? { scope } : {}) }) }),
+  workPluginUpdate: (name: string) => request<{ plugin: unknown }>(`/work/plugins/${encodeURIComponent(name)}/update`, { method: 'POST', body: '{}' }),
+  workPluginUninstall: (name: string) => request<{ ok: boolean; plugin: unknown }>(`/work/plugins/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   // 例行任务：默认只生成待批准工单。
   workRoutines: () => request<{ routines: WorkRoutine[]; kinds: string[] }>('/work/routines'),
   workSaveRoutine: (input: Partial<WorkRoutine> & { projectId: string; executorId: string; name: string; kind: string }) => request<{ routine: WorkRoutine; webhookToken?: string }>('/work/routines', { method: 'POST', body: JSON.stringify(input) }),
@@ -140,17 +161,9 @@ export const api = {
   workTeamRooms: (projectId: string) => request<{ rooms: WorkTeamRoom[] }>(`/work/projects/${encodeURIComponent(projectId)}/rooms`),
   workCreateTeamRoom: (projectId: string, input: { planId?: string; title?: string; goal?: string; members?: string[]; lead?: string }) => request<{ room: WorkTeamRoom }>(`/work/projects/${encodeURIComponent(projectId)}/rooms`, { method: 'POST', body: JSON.stringify(input) }),
   workTeamRoom: (id: string) => request<{ room: WorkTeamRoom }>(`/work/rooms/${encodeURIComponent(id)}`),
-  workUpdateTeamRoom: (id: string, input: { title?: string; goal?: string; lead?: string; members?: string[] }) => request<{ room: WorkTeamRoom }>(`/work/rooms/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) }),
   workDeleteTeamRoom: (id: string) => request<{ ok: boolean; id: string }>(`/work/rooms/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   workPostTeamRoomMessage: (id: string, input: { text: string; agent?: string; kind?: string }) => request<{ room: WorkTeamRoom; message: WorkRoomMessage }>(`/work/rooms/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify(input) }),
   workClaimTeamRoomTicket: (id: string, input: { ticketId: string; member: string }) => request<{ room: WorkTeamRoom }>(`/work/rooms/${encodeURIComponent(id)}/claims`, { method: 'POST', body: JSON.stringify(input) }),
-  workDecideTeamRoom: (id: string, input: { ticketId: string; decision: string; by?: string }) => request<{ room: WorkTeamRoom; decision: WorkRoomDecision }>(`/work/rooms/${encodeURIComponent(id)}/decisions`, { method: 'POST', body: JSON.stringify(input) }),
-  providerPools: () => request<{ pools: ProviderPool[] }>('/provider-pools'),
-  saveProviderPool: (input: Partial<ProviderPool> & { name: string }) => request<{ pool: ProviderPool }>('/provider-pools', { method: 'POST', body: JSON.stringify(input) }),
-  updateProviderPool: (id: string, input: Partial<ProviderPool>) => request<{ pool: ProviderPool }>(`/provider-pools/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(input) }),
-  deleteProviderPool: (id: string) => request<{ ok: boolean; id: string }>(`/provider-pools/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  explainProviderPool: (id: string) => request<{ routing: unknown }>(`/provider-pools/${encodeURIComponent(id)}/explain`),
-  testProviderPool: (id: string) => request<{ ok: boolean; message: string }>(`/provider-pools/${encodeURIComponent(id)}/test`, { method: 'POST', body: '{}' }),
   workMcpServers: () => request<{ servers: WorkMcpServer[]; projectConfig: boolean }>('/work/mcp/servers'),
   addWorkMcpServer: (input: { name: string; command: string; args?: string[]; env?: Record<string, string>; tools?: string[]; enabled?: boolean }) => request<{ server: WorkMcpServer }>('/work/mcp/servers', { method: 'POST', body: JSON.stringify(input) }),
   removeWorkMcpServer: (id: string) => request<{ ok: boolean; id: string }>(`/work/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
@@ -159,7 +172,6 @@ export const api = {
   saveWorkImChannel: (input: { id?: string; name: string; kind: WorkImChannel['kind']; webhookUrl?: string; events?: string[]; enabled?: boolean; baseUrl?: string }) => request<{ channel: WorkImChannel }>(input.id ? `/work/im/channels/${encodeURIComponent(input.id)}` : '/work/im/channels', { method: input.id ? 'PATCH' : 'POST', body: JSON.stringify(input) }),
   deleteWorkImChannel: (id: string) => request<{ ok: boolean; id: string }>(`/work/im/channels/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   testWorkImChannel: (id: string) => request<{ ok: boolean; status: number }>(`/work/im/channels/${encodeURIComponent(id)}/test`, { method: 'POST', body: '{}' }),
-  workLiveSessions: () => request<{ sessions: WorkLiveSession[]; sensitivePattern: string }>('/work/live'),
   startWorkLive: (input: { handle: number; process?: string; title?: string; ticketId?: string }) => request<{ session: WorkLiveSession }>('/work/live', { method: 'POST', body: JSON.stringify(input) }),
   workLiveSession: (id: string) => request<{ session: WorkLiveSession }>(`/work/live/${encodeURIComponent(id)}`),
   workLiveFrame: (id: string) => request<{ frame: WorkLiveFrame }>(`/work/live/${encodeURIComponent(id)}/frame`),
@@ -184,11 +196,9 @@ export const api = {
   suggestWorkPlan: (goal: string, executors: string[], projectChatId?: string) => request<{ steps: { executorId: string; text: string; datasetId?: string; reason?: string; dependsOn?: number[]; executorInput?: { handle?: number; process?: string; title?: string }; verify?: WorkVerifySpec; contract?: WorkTaskContract }[] }>('/work/plans/suggest', { method: 'POST', body: JSON.stringify({ goal, executors, ...(projectChatId ? { projectChatId } : {}) }) }),
   workPlan: (id: string) => request<{ plan: WorkPlan; tickets?: WorkTicket[] }>(`/work/plans/${encodeURIComponent(id)}`),
   workPlanSheet: (id: string) => request<{ plan: WorkPlan; rows: { index: number; title: string; executorId: string; executorName: string; status: string; ticketId: string; summary: string; verify?: WorkVerifySpec | null; acceptance?: WorkAcceptance | null; files: string[]; tokens: number; cost: number }[]; brief: WorkProjectBrief | null; markdown: string }>(`/work/plans/${encodeURIComponent(id)}/sheet`),
-  workCommander: (goal: string, executors: string[], options?: { projectChatId?: string; projectId?: string; autoRun?: boolean }) => request<{ plan: WorkPlan; steps: { executorId: string; text: string; dependsOn?: number[] }[]; analysis?: WorkTaskAnalysis | null }>('/work/commander', { method: 'POST', body: JSON.stringify({ goal, executors, ...(options?.projectChatId ? { projectChatId: options.projectChatId } : {}), ...(!options?.projectChatId && options?.projectId ? { projectId: options.projectId } : {}), ...(options?.autoRun ? { autoRun: true } : {}) }) }),
-  workAnalyze: (goal: string, executors: string[], options?: { projectId?: string }) => request<WorkTaskAnalysis>('/work/analyze', { method: 'POST', body: JSON.stringify({ goal, executors, ...(options?.projectId ? { projectId: options.projectId } : {}) }) }),  workCommanderReport: (id: string) => request<{ plan: { id: string; goal: string; status: string }; rows: { index: number; title: string; executorId: string; executorName: string; status: string; ticketId: string; summary: string }[]; completed: number; total: number; markdown: string }>(`/work/commander/${encodeURIComponent(id)}/report`),
   // 团体协作：内置模型 Agent 先理解拆解，再分派给所选外部 Agent，最后由它收拢结果。
   workSuggestPrompts: (input: { goal: string; agentIds?: string[]; projectId?: string; projectChatId?: string }) => request<{ prompts: WorkPromptOption[]; source: 'model' | 'local'; model?: { provider: string; model: string }; modelError?: string }>('/work/prompts', { method: 'POST', body: JSON.stringify(input) }),
-  workCollaborate: (goal: string, agentIds: string[], options?: { projectId?: string; projectChatId?: string; profileId?: string; models?: Record<string, string>; autoRun?: boolean }) => request<{ plan: WorkPlan; steps: WorkPlanStep[]; analysis?: WorkTaskAnalysis | null; mainChatId?: string | null }>('/work/collaborate', { method: 'POST', body: JSON.stringify({ goal, agentIds, ...(options?.projectChatId ? { projectChatId: options.projectChatId } : {}), ...(!options?.projectChatId && options?.projectId ? { projectId: options.projectId } : {}), ...(options?.profileId ? { profileId: options.profileId } : {}), ...(options?.models && Object.keys(options.models).length ? { models: options.models } : {}), ...(options?.autoRun ? { autoRun: true } : {}) }) }),
+  workCollaborate: (goal: string, agentIds: string[], options?: { projectId?: string; projectChatId?: string; profileId?: string; models?: Record<string, string>; autoRun?: boolean }) => request<{ plan: WorkPlan; steps: WorkPlanStep[]; analysis?: WorkTaskAnalysis | null; mainChatId?: string | null; conversationId?: string | null }>('/work/collaborate', { method: 'POST', body: JSON.stringify({ goal, agentIds, ...(options?.projectChatId ? { projectChatId: options.projectChatId } : {}), ...(!options?.projectChatId && options?.projectId ? { projectId: options.projectId } : {}), ...(options?.profileId ? { profileId: options.profileId } : {}), ...(options?.models && Object.keys(options.models).length ? { models: options.models } : {}), ...(options?.autoRun ? { autoRun: true } : {}) }) }),
   modelHub: () => request<{ profiles: { id: string; name: string; model: string; capabilities?: { efforts: string[]; tools?: boolean } }[]; workflow: { defaultProfileId: string | null } }>('/model-hub'),
   cancelWorkPlan: (id: string) => request<{ plan: WorkPlan }>(`/work/plans/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' }),
   mobilePair: () => request<{ code: string; expiresAt: string }>('/mobile/pair', { method: 'POST', body: '{}' }),
@@ -196,7 +206,6 @@ export const api = {
   revokeMobileDevice: (id: string) => request<{ ok: boolean }>(`/mobile/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   updateWorkPolicy: (policy: WorkPolicy) => request<{ policy: WorkPolicy }>('/work/policy', { method: 'PUT', body: JSON.stringify(policy) }),
   modelUsage: (days: number | 'all') => request<ModelUsageReport>("/model-usage?days=" + days),
-  reportPdf: (id: string) => request<Blob>(`/tasks/${encodeURIComponent(id)}/report.pdf`, {}, false, 'blob'),
   readShare: (token: string) => request<{ report: PublicReport }>('/public/shares/read', { method: 'POST', body: JSON.stringify({ token }), referrerPolicy: 'no-referrer', cache: 'no-store' }, true),
   visitShare: (token: string, visitorToken: string) => request<{ ok: boolean }>('/public/shares/visit', { method: 'POST', body: JSON.stringify({ token, visitorToken }), referrerPolicy: 'no-referrer', cache: 'no-store' }, true),
   shares: (id: string) => request<{shares: ShareItem[]}>(`/tasks/${encodeURIComponent(id)}/shares`, {}, true),
@@ -233,6 +242,7 @@ export const api = {
   cancel: (id: string) => request<TaskResponse>(`/tasks/${id}/cancel`, { method: 'POST', body: '{}' }),
   wallet: () => request<{ wallet: Wallet; walletVersion?: number; transactions: Transaction[] }>('/wallet'),
   settings: (input: Partial<Settings> & { apiKey?: string; clearKey?: boolean }) => request<{ settings: Settings }>('/settings', { method: 'PUT', body: JSON.stringify(input) }),
+  getSettings: () => request<{ settings: Settings }>('/settings'),
   testSettings: () => request<{ ok: boolean; message: string }>('/settings/test', { method: 'POST', body: '{}' }),
   models: (input: { baseUrl: string; apiKey?: string }, signal?: AbortSignal) => request<ModelCatalog>('/settings/models', { method: 'POST', body: JSON.stringify(input), signal }),
 };

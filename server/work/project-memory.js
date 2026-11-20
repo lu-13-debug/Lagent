@@ -17,11 +17,37 @@ export const MEMORY_LIMITS = Object.freeze({
   scopeChars: 200,
   tags: 10,
   tagChars: 40,
+  reflectionChars: 120,
+  maxReflections: 200,
+  playbookItems: 3,
+  playbookChars: 600,
 });
 
 const text = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
 const textList = (value, max, chars) =>
   Array.isArray(value) ? value.filter(item => typeof item === 'string' && item.trim()).slice(0, max).map(item => text(item, chars)) : [];
+
+// 没有模型时的失败反思：先按可观测信号给一条可执行教训，再附上原因片段。
+const FAILURE_LESSONS = [
+  [/超时|timeout|timed out/i, '下次缩小单步范围，必要时拆分任务或调高超时'],
+  [/回合|max_turns|步数|step limit/i, '下次把任务拆小，先完成一小块再继续，避免一步用完回合'],
+  [/预算|token|额度/i, '下次先检索再局部读取，避免整文件读取把预算用尽'],
+  [/找不到|不存在|ENOENT|not found|no such file/i, '下次先确认路径、命令和依赖存在，再开始改'],
+  [/权限|拒绝|denied|EACCES|EPERM/i, '下次先确认权限档位和目标目录，不要绕过权限重试'],
+  [/验收|测试|verify|test|assert/i, '下次改完立即跑验收命令，修到通过再收尾'],
+  [/截断|truncat|too large|过大/i, '下次缩小输入或分段处理，避免一次提交过大内容'],
+];
+
+/** 从失败摘要生成 ≤120 字的反思，供下次同执行器任务前置注入。 */
+export function deriveFailureLesson({ summary = '', status = '' } = {}) {
+  const raw = String(summary || '').replace(/\s+/g, ' ').trim();
+  const match = FAILURE_LESSONS.find(([pattern]) => pattern.test(raw));
+  const base = match ? match[1] : status === 'blocked'
+    ? '下次先确认阻塞项（数据、权限或依赖）已就绪，再重新执行'
+    : '下次先复现失败，做最小改动后立即跑验收，再收尾';
+  const reason = raw ? `（${text(raw, 60)}）` : '';
+  return text(`${base}${reason}`, MEMORY_LIMITS.reflectionChars);
+}
 
 // 没有向量库时的轻量语义近似：英文按词、中文按二元组切。
 // 比 includes 整句好得多——用户搜「登录失败」也能命中「token 校验导致登录 401」。
@@ -121,6 +147,136 @@ export function createProjectMemory(db, { now = () => new Date().toISOString() }
       .filter(entry => entry.projectId === projectId)
       .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
     for (const row of rows.slice(MEMORY_LIMITS.maxEntries)) db.delete('project-memory', row.id);
+  }
+
+  const reflections = projectId => db
+    .list('project-memory')
+    .filter(entry => entry.projectId === projectId && entry.kind === 'reflection');
+
+  // 反思单独限流：它比普通记忆短，但更新频繁；只保留最近 200 条。
+  function pruneReflections(projectId) {
+    const rows = reflections(projectId)
+      .sort((left, right) => String(right.updatedAt || right.createdAt || '').localeCompare(String(left.updatedAt || left.createdAt || '')));
+    for (const row of rows.slice(MEMORY_LIMITS.maxReflections)) db.delete('project-memory', row.id);
+  }
+
+  /**
+   * 失败后写一条反思：同执行器、同失败类型、同教训只累加次数，不堆流水账。
+   * 反思不被 update/remove 之外的路径改写，保证 playbook 条目只增、只合并、只淘汰。
+   */
+  function reflect(projectId, input = {}) {
+    if (typeof projectId !== 'string' || !projectId.trim()) throw Object.assign(new Error('项目 id 无效'), { status: 400 });
+    const lesson = text(input.summary || input.lesson, MEMORY_LIMITS.reflectionChars);
+    if (!lesson) return null;
+    const executorId = text(input.executorId, 60) || null;
+    const failureCode = text(input.failureCode, 40) || 'failed';
+    const files = textList(input.files, MEMORY_LIMITS.files, 200);
+    const duplicate = reflections(projectId).find(row => row.executorId === executorId && row.failureCode === failureCode && row.lesson === lesson);
+    if (duplicate) {
+      const next = {
+        ...duplicate,
+        occurrences: (duplicate.occurrences || 1) + 1,
+        negative: (duplicate.negative || 1) + 1,
+        updatedAt: now(),
+      };
+      db.put('project-memory', next);
+      pruneReflections(projectId);
+      return next;
+    }
+    const entry = {
+      id: randomUUID(),
+      projectId,
+      ticketId: text(input.ticketId, 80) || null,
+      projectChatId: text(input.projectChatId, 80) || null,
+      executorId,
+      title: text(input.title ? `失败反思 · ${input.title}` : '失败反思', MEMORY_LIMITS.titleChars),
+      status: text(input.status, 40) || 'failed',
+      kind: 'reflection',
+      failureCode,
+      lesson,
+      summary: lesson,
+      files,
+      improvements: [],
+      openQuestions: [],
+      scope: scopeOf(input, files),
+      tags: ['reflection', failureCode, executorId].filter(Boolean).slice(0, MEMORY_LIMITS.tags),
+      confidence: confidenceOf(input.confidence),
+      source: 'local',
+      model: null,
+      occurrences: 1,
+      positive: 0,
+      negative: 1,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    db.put('project-memory', entry);
+    pruneReflections(projectId);
+    return entry;
+  }
+
+  /**
+   * 任务成功后给同执行器、同目录的反思记一次正例；同一天只记一次，避免刷分。
+   * 这不会改反思正文，只增加权重信号。
+   */
+  function reinforce(projectId, { executorId = '', success = false, scopes = [] } = {}) {
+    if (typeof projectId !== 'string' || !projectId.trim() || !success) return 0;
+    const today = now().slice(0, 10);
+    let changed = 0;
+    for (const row of reflections(projectId)) {
+      if (executorId && row.executorId && row.executorId !== executorId) continue;
+      if (scopes.length && row.scope && !scopeMatches(row.scope, scopes)) continue;
+      if (row.lastPositiveOn === today) continue;
+      db.put('project-memory', {
+        ...row,
+        positive: (row.positive || 0) + 1,
+        lastPositiveOn: today,
+        updatedAt: now(),
+      });
+      changed += 1;
+    }
+    return changed;
+  }
+
+  const reflectionWeight = row => {
+    const positive = row.positive || 0;
+    const negative = row.negative || 1;
+    let weight = (1 + positive * 2) / (1 + negative);
+    if (positive > 0 && negative === 0) weight *= 0.5;
+    weight += Math.min(5, row.occurrences || 1) * 0.2 + recencyBoost(row);
+    return weight;
+  };
+
+  /** 取同执行器最值得前置的失败教训；按目标与目录做轻量加权。 */
+  function playbook(projectId, { executorId = '', goal = '', scopes = [], limit = MEMORY_LIMITS.playbookItems } = {}) {
+    if (typeof projectId !== 'string' || !projectId.trim()) return [];
+    const terms = tokenizeQuery(goal);
+    const size = Math.min(Math.max(Number(limit) || MEMORY_LIMITS.playbookItems, 1), 10);
+    return reflections(projectId)
+      .filter(row => !executorId || !row.executorId || row.executorId === executorId)
+      .map(row => {
+        let score = reflectionWeight(row);
+        if (terms.length) {
+          const lexical = scoreMemoryEntry({ ...row, summary: row.lesson || row.summary }, terms, { scopes });
+          if (lexical !== null) score += lexical;
+        }
+        if (scopes.length && row.scope && scopeMatches(row.scope, scopes)) score += 4;
+        return { row, score };
+      })
+      .sort((left, right) => right.score - left.score || String(right.row.updatedAt || '').localeCompare(String(left.row.updatedAt || '')))
+      .slice(0, size)
+      .map(item => item.row);
+  }
+
+  function playbookDigest(projectId, options = {}) {
+    const rows = playbook(projectId, options);
+    if (!rows.length) return '';
+    const lines = rows.map(row => {
+      const times = (row.occurrences || 1) > 1 ? `（已出现 ${row.occurrences} 次）` : '';
+      const credit = row.positive ? `已验证 ${row.positive} 次` : '尚未验证';
+      return `- ${row.executorId || 'Agent'}：${row.lesson || row.summary}${times} · ${credit}`;
+    });
+    const body = ['【失败教训 · 同执行器上次踩过的坑】', ...lines].join('\n');
+    return body.length > MEMORY_LIMITS.playbookChars ? `${body.slice(0, MEMORY_LIMITS.playbookChars)}…` : body;
   }
 
   // 同一项目里「标题 + 摘要 + 文件」完全一致时合并，而不是堆一条新的流水账。
@@ -251,12 +407,18 @@ export function createProjectMemory(db, { now = () => new Date().toISOString() }
   /** 最近若干条 + 跨会话还没解决的问题，拼成给模型/执行器看的一段话。 */
   function digest(projectId, { limit = 6, goal = '', scopes = [] } = {}) {
     const relevant = Boolean(String(goal || '').trim() || (Array.isArray(scopes) && scopes.length));
-    let rows = relevant ? search(projectId, { query: goal, scopes, limit }) : list(projectId, limit);
+    const history = () => db
+      .list('project-memory')
+      .filter(entry => entry.projectId === projectId && entry.kind !== 'reflection')
+      .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
+      .slice(0, Math.min(Math.max(Number(limit) || 6, 1), MEMORY_LIMITS.maxEntries));
+    const searches = () => search(projectId, { query: goal, scopes, limit }).filter(row => row.kind !== 'reflection');
+    let rows = relevant ? searches() : history();
     const relevantHit = relevant && rows.length > 0;
     // 命中不到相关条目时退回最近记录：总比让执行器以为项目没有历史要好。
-    if (!rows.length) rows = list(projectId, limit);
+    if (!rows.length) rows = history();
     if (!rows.length) return '';
-    const total = db.list('project-memory').filter(entry => entry.projectId === projectId).length;
+    const total = db.list('project-memory').filter(entry => entry.projectId === projectId && entry.kind !== 'reflection').length;
     const lines = [];
     for (const row of rows) {
       const who = row.executorId || 'Agent';
@@ -280,7 +442,7 @@ export function createProjectMemory(db, { now = () => new Date().toISOString() }
     return body.length > MEMORY_LIMITS.digestChars ? `${body.slice(0, MEMORY_LIMITS.digestChars)}…` : body;
   }
 
-  return { list, add, update, remove, digest, search };
+  return { list, add, update, remove, digest, search, reflect, reinforce, playbook, playbookDigest };
 }
 
 /** 不依赖模型的兜底总结：从执行报告里提取「做了什么」，文件清单来自 git 快照。 */

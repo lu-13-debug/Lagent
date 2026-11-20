@@ -122,13 +122,15 @@ export function createPhoneAuth({ accounts, env = process.env, now = Date.now, s
     if (accounts.phoneCodeCount({ phoneHash, since: current - 3600000 }) >= LIMITS.phoneHour) throw authError('该手机号发送次数过多，请稍后再试', 429);
     if (accounts.phoneCodeCount({ phoneHash, since: current - 86400000 }) >= LIMITS.phoneDay) throw authError('该手机号今日发送次数已达上限', 429);
     if (ipHash && accounts.phoneCodeCount({ ipHash, since: current - 3600000 }) >= LIMITS.ipHour) throw authError('当前网络发送次数过多，请稍后再试', 429);
-    if (deviceHash && countAudit(`action='sms_send' AND device_hash='${deviceHash.replace(/'/g, "''")}'`, current - 3600000) >= LIMITS.deviceHour) throw authError('当前设备发送次数过多，请稍后再试', 429);
+    if (deviceHash) {
+      const deviceSends = accounts.db.prepare("SELECT COUNT(*) AS n FROM auth_audit WHERE action='sms_send' AND device_hash=? AND created_at>=?").get(deviceHash, current - 3600000).n;
+      if (deviceSends >= LIMITS.deviceHour) throw authError('当前设备发送次数过多，请稍后再试', 429);
+    }
     const sentToday = countAudit(`action='sms_send' AND result='ok'`, current - 86400000);
     if (sentToday >= dailyBudget) throw authError('今日短信发送量已达上限，请稍后再试', 429);
-    const last = accounts.lastPhoneCodeAt(phoneHash, '');
     // 重发冷却按手机号统一计算，不区分用途，避免换用途绕过。
     const lastAny = accounts.db.prepare('SELECT created_at FROM phone_codes WHERE phone_hash=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(phoneHash)?.created_at || 0;
-    if (Math.max(last, lastAny) > current - RESEND_MS) throw Object.assign(authError('发送过于频繁，请 60 秒后再试', 429), { retryAfter: 60 });
+    if (lastAny > current - RESEND_MS) throw Object.assign(authError('发送过于频繁，请 60 秒后再试', 429), { retryAfter: 60 });
   }
 
   async function sendCode({ phone, purpose, ip, deviceHash = null, captchaToken = null }) {

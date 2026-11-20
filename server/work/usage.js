@@ -12,7 +12,7 @@ const day = value => {
   return iso ? new Date(Date.parse(iso) + 8 * 3600000).toISOString().slice(0, 10) : null;
 };
 
-export function usageEntry({ ticketId, executorId, projectId, calls, tokensIn, tokensOut, cacheReadTokens, cacheWriteTokens, totalTokens, durationMs, costEstimate, model, source, now } = {}) {
+export function usageEntry({ ticketId, executorId, projectId, calls, tokensIn, tokensOut, cacheReadTokens, cacheWriteTokens, totalTokens, durationMs, costEstimate, model, source, role, now } = {}) {
   return {
     id: randomUUID(),
     ticketId: text(ticketId),
@@ -20,6 +20,8 @@ export function usageEntry({ ticketId, executorId, projectId, calls, tokensIn, t
     projectId: text(projectId),
     model: text(model),
     source: text(source) || 'ticket',
+    // execution = 真正干活的调用；coordination = 规划、分派、汇总等协调开销。
+    role: role === 'coordination' ? 'coordination' : 'execution',
     calls: integer(calls),
     tokensIn: integer(tokensIn),
     tokensOut: integer(tokensOut),
@@ -77,7 +79,7 @@ function extractUsage(task, executorId) {
   return {};
 }
 
-export function recordTicketUsage(store, { ticket, assignment, task, executorId, projectId, now } = {}) {
+export function recordTicketUsage(store, { ticket, assignment, task, executorId, projectId, role, now } = {}) {
   const usage = extractUsage(task, executorId);
   const entry = usageEntry({
     ticketId: ticket?.id,
@@ -85,16 +87,25 @@ export function recordTicketUsage(store, { ticket, assignment, task, executorId,
     projectId: projectId || '',
     calls: 1,
     ...usage,
+    role: role || task?.role || assignment?.role,
     now
   });
   store.put('work-usage', entry);
   return entry;
 }
 
+// 按 ticketId 直接查库：以前每次预算检查都要把整张 work-usage 读成对象再过滤。
+export function ticketsTokensUsed(store, ticketIds) {
+  const ids = [...new Set((ticketIds || []).filter(id => typeof id === 'string' && id))];
+  if (!ids.length) return 0;
+  const rows = typeof store.listWhere === 'function'
+    ? store.listWhere('work-usage', 'ticketId', ids)
+    : store.list('work-usage').filter(row => ids.includes(row.ticketId));
+  return rows.reduce((sum, row) => sum + integer(row.totalTokens), 0);
+}
+
 export function ticketTokensUsed(store, ticketId) {
-  return store.list('work-usage')
-    .filter(row => row.ticketId === ticketId)
-    .reduce((sum, row) => sum + integer(row.totalTokens), 0);
+  return ticketsTokensUsed(store, [ticketId]);
 }
 
 export function checkTokenBudget(store, ticketId, budget) {
@@ -122,6 +133,7 @@ export function summarizeUsage(store, { projectId, executorId, from, to, days = 
   const inRange = date => date && date <= toDay && (!fromDay || date >= fromDay);
   const budget = Number.isSafeInteger(budgetTokens) && budgetTokens > 0 ? budgetTokens : null;
   const totals = counters();
+  const byRole = { execution: counters(), coordination: counters() };
   const maps = {
     byExecutor: new Map(),
     byProject: new Map(),
@@ -136,6 +148,7 @@ export function summarizeUsage(store, { projectId, executorId, from, to, days = 
     if (!inRange(date)) continue;
     const call = { ...raw, totalTokens: integer(raw.totalTokens || raw.tokensIn + raw.tokensOut) };
     add(totals, call);
+    add(byRole[call.role === 'coordination' ? 'coordination' : 'execution'], call);
     if (!maps.byExecutor.has(call.executorId)) maps.byExecutor.set(call.executorId, { executorId: call.executorId, ...counters() });
     add(maps.byExecutor.get(call.executorId), call);
     const projectKey = call.projectId || '';
@@ -154,9 +167,14 @@ export function summarizeUsage(store, { projectId, executorId, from, to, days = 
     .map(row => budget
       ? { ...row, ratio: row.totalTokens / budget, warning: row.totalTokens >= budget * 0.8 }
       : row);
+  const coordinationShare = totals.totalTokens ? byRole.coordination.totalTokens / totals.totalTokens : 0;
   const result = {
     range: { days, from: fromDay, to: toDay, timeZone: 'Asia/Shanghai' },
     totals,
+    // 协调开销单独可见：多 Agent 是否值得，先看这一项占比。
+    byRole,
+    coordination: { ...byRole.coordination, share: Math.round(coordinationShare * 1000) / 1000 },
+    execution: { ...byRole.execution, share: Math.round((1 - coordinationShare) * 1000) / 1000 },
     budget: budget
       ? {
           maxTokensPerTicket: budget,

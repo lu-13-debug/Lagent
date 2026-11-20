@@ -9,12 +9,19 @@ directories:
 files:
   - dist/**/*
   - server/**/*.js
+  - server/**/*.json
+  - server/tools/**/*
   - '!server/**/*.test.js'
   - desktop/**/*
   - '!desktop/**/*.test.cjs'
+  - scripts/window-bridge.ps1
   - build/icon.png
   - build/cloud-config.json
   - package.json
+# 子进程要直接执行这些文件，放在 asar 里会因路径不可执行而失败。
+asarUnpack:
+  - scripts/window-bridge.ps1
+  - server/tools/**
 win:
   icon: build/icon.ico
   target:

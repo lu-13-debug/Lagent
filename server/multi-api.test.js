@@ -16,7 +16,7 @@ test('模型中心可经应用配置并启动真实阶段任务，PDF重试不�
   const base = `http://127.0.0.1:${server.address().port}`;
   const api = async (route, method = 'GET', body) => { const response = await fetch(base + '/api' + route, { method, headers: body ? { 'content-type': 'application/json' } : {}, ...(body ? { body: JSON.stringify(body) } : {}) }); return { status: response.status, ...await response.json() }; };
   const hub = await api('/model-hub'); assert.equal(hub.status, 200, hub.error);
-  const saved = await api('/model-credentials', 'POST', { name: '测试凭据', provider: 'test', baseUrl: 'https://test.example/v1', protocol: 'chat-completions', apiKey: 'fake-api-private-key' }); assert.equal(saved.status, 200, saved.error);
+  const saved = await api('/model-credentials', 'POST', { name: '测试凭据', provider: 'test', baseUrl: 'https://test.example/v1', protocol: 'chat-completions', apiKey: 'fake-test-key' });
   const profile = await api('/model-profiles', 'POST', { name: '阶段模型', credentialId: saved.credential.id, model: 'mock-model' }); assert.equal(profile.status, 200, profile.error);
   const config = await api('/workflow-config', 'PUT', { ...hub.workflow, defaultProfileId: profile.profile.id }); assert.equal(config.status, 200, config.error);
   const boot = await api('/bootstrap'); assert.equal(boot.settings.hasKey, true); assert.equal(boot.settings.workflowEnabled, true);
@@ -30,4 +30,26 @@ test('模型中心可经应用配置并启动真实阶段任务，PDF重试不�
   assert.equal(pdfCalls, 1); assert.equal((await api('/wallet')).wallet.spent, 20);
   const changed = app.locals.store.get('task', task.id); changed.report.summary += ' 已更改'; app.locals.store.put('task', changed);
   const stale = await fetch(base + `/api/tasks/${task.id}/report.pdf`); assert.equal(stale.status, 409); assert.equal(pdfCalls, 1);
+});
+
+test('默认模型绑定 Key 池时，运行时会话仍视为已配置', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'lagent-pool-api-'));
+  const app = createApp({ dataDir: dir, credentialMasterKey: Buffer.alloc(32, 9).toString('base64') });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); app.locals.close(); await rm(dir, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const api = async (route, method = 'GET', body) => { const response = await fetch(base + '/api' + route, { method, headers: body ? { 'content-type': 'application/json' } : {}, ...(body ? { body: JSON.stringify(body) } : {}) }); return { status: response.status, ...await response.json() }; };
+  const hub = await api('/model-hub');
+  const saved = await api('/model-credentials', 'POST', { name: '池凭据', provider: 'test', baseUrl: 'https://pool.example/v1', protocol: 'chat-completions', apiKey: 'fake-test-key' });
+  assert.equal(saved.status, 200, saved.error);
+  const pool = await api('/provider-pools', 'POST', { name: '默认池', members: [{ credentialId: saved.credential.id }] });
+  assert.equal(pool.status, 200, pool.error);
+  const profile = await api('/model-profiles', 'POST', { name: '池配置', poolId: pool.pool.id, model: 'pool-model' });
+  assert.equal(profile.status, 200, profile.error);
+  assert.equal((await api('/workflow-config', 'PUT', { ...hub.workflow, defaultProfileId: profile.profile.id })).status, 200);
+  const boot = await api('/bootstrap');
+  assert.equal(boot.settings.hasKey, true, 'Key 池配置不能被当成未配置');
+  assert.equal(boot.settings.workflowEnabled, true);
+  assert.equal(boot.settings.model, 'pool-model');
 });

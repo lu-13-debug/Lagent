@@ -24,7 +24,7 @@ function fixture(t) {
   const engine = createWorkEngine(store, createExecutorRegistry([analysis, codex]), () => {}, {
     workspace: dir,
     policy: { allowedExecutors: ['analysis', 'codex'] },
-    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' }
+    env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' }
   });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   return { dir, store, engine };

@@ -13,5 +13,5 @@
   document.documentElement.dataset.view = view;
   if (theme !== 'system') document.documentElement.dataset.themeFix = '';
   var meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', dark ? '#0d1110' : '#f2f4f3');
+  if (meta) meta.setAttribute('content', dark ? '#101010' : '#FBFAF8');
 }());

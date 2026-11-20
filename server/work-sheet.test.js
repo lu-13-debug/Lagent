@@ -75,6 +75,18 @@ test('计划交接单汇总执行者、结论、验收、改动与下一步', t 
   assert.match(markdown, /旧 token 是否还要兼容/);
 });
 
+test('同一工单有多份报告时，交接单与指挥汇总都取最新一份', t => {
+  const { engine, store, dir } = fixture(t);
+  seed(store, dir);
+  // 重试/返工会为同一工单追加报告；Store.list 按写入倒序返回，最新一份应在最前。
+  store.put('work-report', { id: 'report-1-retry', ticketId: 'ticket-1', kind: 'ready', summary: '第二次执行的结论', createdAt: '2026-11-15T11:00:00.000Z' });
+  const sheet = engine.planSheet('plan-1');
+  assert.equal(sheet.rows[0].summary, '第二次执行的结论');
+  assert.match(sheet.markdown, /第二次执行的结论/);
+  assert.doesNotMatch(sheet.markdown, /已修复 token 过期/, '交接单不能把旧结论当成当前结论');
+  assert.equal(engine.commanderReport('plan-1').rows[0].summary, '第二次执行的结论');
+});
+
 test('计划不存在时交接单返回 404', t => {
   const { engine } = fixture(t);
   assert.throws(() => engine.planSheet('missing'), /计划不存在/);

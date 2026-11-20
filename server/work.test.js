@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -33,6 +33,8 @@ function fixture(t, options = {}) {
   const startInputs = [];
   let engine;
   const executor = {
+    concurrency: [],
+    setConcurrency(value) { this.concurrency.push(value); },
     start(ticket, assignment, input) {
       starts.push(assignment.id);
       startInputs.push(input);
@@ -46,7 +48,8 @@ function fixture(t, options = {}) {
     approve(task) { store.put('task', { ...task, status: 'running' }); },
     stop(task) { store.put('task', { ...task, status: 'cancelled' }); }
   };
-  const open = () => { engine = createWorkEngine(store, options.executorFactory ? options.executorFactory(executor) : executor, event => events.push(event), { ...(options.planner ? { planner: options.planner } : {}) }); };
+  // 这些用例直接验证执行器本身；默认的「外部 Agent 必须受管」由 lagent-enforcement 覆盖。
+  const open = () => { engine = createWorkEngine(store, options.executorFactory ? options.executorFactory(executor) : executor, event => events.push(event), { env: { ...process.env, LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' }, ...(options.planner ? { planner: options.planner } : {}), ...(options.windowBridge ? { windowBridge: options.windowBridge } : {}) }); };
   open();
   // 这些用例验证的是「先批准再执行」的审批链路，需要显式打开该策略；产品默认已改成直接执行。
   engine.updatePolicy({ requireApproval: true });
@@ -94,8 +97,9 @@ test('Work契约字段、命令幂等、输入校验及严格投影', t => {
   assert.throws(() => f.engine.command({ text: '不同指令', clientRequestId: 'once', datasetId: 'dataset-one' }), { status: 409 });
   assert.deepEqual(Object.keys(ticket).sort(), ['acceptance', 'attention', 'chainRootId', 'contract', 'createdAt', 'datasetId', 'executor', 'handoff', 'handoffChildId', 'handoffDepth', 'handoffSummary', 'id', 'parentTicketId', 'planId', 'planStep', 'planTotal', 'preview', 'source', 'stage', 'status', 'summary', 'title', 'updatedAt', 'verify']);
   const bootstrap = f.engine.bootstrap();
-  assert.deepEqual(Object.keys(bootstrap).sort(), ['activeProfile', 'agents', 'attention', 'capabilities', 'datasets', 'plans', 'policy', 'profiles', 'projects', 'queue', 'tickets', 'tools', 'workspace']);
+  assert.deepEqual(Object.keys(bootstrap).sort(), ['activeProfile', 'agents', 'attention', 'capabilities', 'conversations', 'datasets', 'lagent', 'plans', 'policy', 'profiles', 'projects', 'queue', 'tickets', 'tools', 'workspace']);
   assert.deepEqual(bootstrap.projects, []);
+  assert.deepEqual(bootstrap.conversations, []);
   assert.equal(bootstrap.capabilities.work, true);
   assert.equal(bootstrap.policy.acceptMode, 'explicit');
   assert.deepEqual(Object.keys(bootstrap.datasets[0]).sort(), ['id', 'name', 'rowCount', 'source']);
@@ -959,6 +963,42 @@ test('E10 规划建议经引擎校验且不创建工单', async t => {
   await assert.rejects(() => f.engine.suggestPlan({ goal: '目标', executors: ['codex'] }), { status: 400 });
 });
 
+test('E10 前序步骤把完整报告传给后续步骤，而不是只传 300 字摘要', async t => {
+  const f = fixture(t, { planner: async () => ({ steps: [
+    { executorId: 'analysis', text: '先审查', datasetId: 'dataset-one' },
+    { executorId: 'analysis', text: '再实现', datasetId: 'dataset-one', dependsOn: [0] }
+  ] }) });
+  const plan = f.engine.plan({ goal: '审查后实现', steps: [
+    { executorId: 'analysis', text: '先审查', datasetId: 'dataset-one' },
+    { executorId: 'analysis', text: '再实现', datasetId: 'dataset-one', dependsOn: [0] }
+  ] });
+  const first = plan.steps[0].ticketId;
+  f.engine.action(first, 'approve');
+  await waitFor(() => f.engine.detail(first).ticket.status === 'working', '第一步未开始');
+  const task = f.store.get('task', f.engine.detail(first).assignments[0].sessionId);
+  const longTail = '审查结论尾部：必须修复公告长尾筛选';
+  f.store.put('task', { ...task, status: 'completed', report: { id: `report-${first}`, summary: `${'审查细节'.repeat(900)}\n${longTail}` } });
+  await waitFor(() => f.engine.detail(first).ticket.status === 'completed', '第一步未完成');
+  const artifact = readFileSync(join(tmpdir(), 'lagent-runs', plan.id, '01-analysis.md'), 'utf8');
+  assert.match(artifact, /审查结论尾部/);
+  assert.ok(artifact.length > 3000, '步骤产物不能只剩摘要开头');
+  t.after(() => rmSync(join(tmpdir(), 'lagent-runs', plan.id), { recursive: true, force: true }));
+});
+
+test('E10 窗口桥不可用时仍能生成规划建议', async t => {
+  let calls = 0;
+  const f = fixture(t, {
+    windowBridge: { listWindows: async () => { throw Object.assign(new Error('窗口操作失败'), { status: 502, code: 'bridge_failed' }); } },
+    planner: async () => { calls++; return { steps: [
+      { executorId: 'analysis', text: '第一步检查', datasetId: 'dataset-one' },
+      { executorId: 'analysis', text: '第二步处理', datasetId: 'dataset-one', dependsOn: [0] }
+    ] }; }
+  });
+  const suggestion = await f.engine.suggestPlan({ goal: '检查并处理', executors: ['analysis'] });
+  assert.equal(suggestion.steps.length, 2);
+  assert.equal(calls, 1);
+});
+
 test('E10 规划输出非法或规划器缺失时拒绝', async t => {
   const bad = fixture(t, { planner: async () => ({ steps: [{ executorId: 'codex', text: '不允许' }, { executorId: 'analysis', text: '第二步' }] }) });
   await assert.rejects(() => bad.engine.suggestPlan({ goal: '目标', executors: ['analysis'] }), { status: 502 });
@@ -1056,6 +1096,74 @@ test('P1 计划步骤 reject 后可 resume，失败计划可 retry 复活', asyn
   assert.equal(f.engine.detail(failed.steps[1].ticketId).ticket.status, 'awaiting_review');
   await completeWork(f, failed.steps[1].ticketId);
   assert.equal(f.engine.getPlan(failed.id).status, 'completed');
+});
+
+test('CLI 完成摘要优先使用执行器报告正文，而不是通用「执行完成」', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-cli-summary-'));
+  const store = new Store(dir);
+  const executor = {
+    id: 'claude-acp', name: 'ACP', kind: 'cli', available: true, requiresDataset: false, capabilities: ['cli'],
+    start(ticket, assignment) {
+      const task = { id: assignment.id, status: 'running' };
+      store.put('task', task);
+      return task;
+    },
+    get: id => id && store.get('task', id),
+    stop() {},
+    resume() {}
+  };
+  const engine = createWorkEngine(store, createExecutorRegistry([executor]), () => {}, { env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' } });
+  t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
+  engine.updatePolicy({ requireApproval: false, allowedExecutors: ['claude-acp'] });
+  const ticket = engine.command({ text: '只读评审', executorId: 'claude-acp' });
+  if (engine.detail(ticket.id).ticket.status === 'awaiting_review') engine.action(ticket.id, 'approve');
+  await waitFor(() => engine.detail(ticket.id).ticket.status === 'working', '未进入执行');
+  const assignment = engine.detail(ticket.id).assignments[0];
+  store.put('task', { ...store.get('task', assignment.sessionId), status: 'completed', report: { summary: '评审正文：发现 2 个问题' } });
+  await waitFor(() => engine.detail(ticket.id).ticket.status === 'completed', '未完成');
+  assert.equal(engine.detail(ticket.id).ticket.summary, '评审正文：发现 2 个问题');
+});
+
+test('策略并发变化会下发给执行器，恢复默认时也跟着回退', t => {
+  const f = fixture(t);
+  assert.equal(f.executor.concurrency.at(-1), 2, '引擎启动时按默认策略下发一次');
+  f.engine.updatePolicy({ budgets: { maxConcurrent: 4 } });
+  assert.equal(f.executor.concurrency.at(-1), 4);
+  f.engine.resetProfile({});
+  assert.equal(f.executor.concurrency.at(-1), 2, '恢复默认策略后并发回到 2');
+});
+
+test('并发满退回 waiting 的计划步骤会在名额释放后自动继续', async t => {
+  const f = fixture(t);
+  f.engine.updatePolicy({ requireApproval: false, budgets: { maxConcurrent: 1 } });
+  const step = () => ({ executorId: 'analysis', text: '步骤', datasetId: 'dataset-one' });
+  const first = f.engine.plan({ goal: '先占住名额', steps: [step(), { ...step(), dependsOn: [0] }] });
+  await waitFor(() => f.engine.detail(first.steps[0].ticketId).ticket.status === 'working', '第一个计划未开始');
+  const second = f.engine.plan({ goal: '被并发挡住', steps: [step(), { ...step(), dependsOn: [0] }] });
+  await waitFor(() => f.engine.detail(second.steps[0].ticketId).ticket.status === 'waiting', '第二个计划未退回等待');
+  // 退回等待只能改状态，不能把原始指令弄丢；否则恢复时只剩空 prompt，永远起不来。
+  assert.equal(f.store.get('work-control', second.steps[0].ticketId)?.command, '步骤');
+  await completeWork(f, first.steps[0].ticketId);
+  await completeWork(f, first.steps[1].ticketId);
+  await waitFor(() => f.engine.detail(second.steps[0].ticketId).ticket.status === 'working', '名额释放后第二个计划仍未启动');
+});
+
+test('P1 重试时可以补回合预算，避免大任务再次被 error_max_turns 截断', async t => {
+  const f = fixture(t);
+  const ticket = f.engine.command({ text: '长时间的实现任务' });
+  f.engine.action(ticket.id, 'approve');
+  assert.equal(f.startInputs[0].executorInput?.maxTurns, undefined, '首次执行不应凭空多出回合上限');
+  const assignment = f.engine.detail(ticket.id).assignments[0];
+  f.store.put('task', { ...f.store.get('task', assignment.sessionId), status: 'failed', error: 'error_max_turns' });
+  await waitFor(() => f.engine.detail(ticket.id).ticket.status === 'failed', '工单未进入失败状态');
+  f.engine.action(ticket.id, 'retry', { maxTurns: 120 });
+  assert.equal(f.startInputs.at(-1).executorInput.maxTurns, 120);
+  // 越界的回合数不写进执行输入，避免把非法值传给 CLI。
+  const retryAssignment = f.engine.detail(ticket.id).assignments[0];
+  f.store.put('task', { ...f.store.get('task', retryAssignment.sessionId), status: 'failed', error: 'error_max_turns' });
+  await waitFor(() => f.engine.detail(ticket.id).ticket.status === 'failed', '重试后的工单未再次失败');
+  f.engine.action(ticket.id, 'retry', { maxTurns: 121 });
+  assert.equal(f.startInputs.at(-1).executorInput.maxTurns, 120);
 });
 
 test('P1 重启恢复活跃计划，补齐崩溃前未推进的下一步', async t => {

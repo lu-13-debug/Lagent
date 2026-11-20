@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Store } from './store.js';
 import { createWorkEngine } from './work/engine.js';
 import { createExecutorRegistry } from './work/executors/index.js';
-import { recordTicketUsage, summarizeUsage, checkTokenBudget } from './work/usage.js';
+import { recordTicketUsage, summarizeUsage, checkTokenBudget, ticketsTokensUsed } from './work/usage.js';
 
 test('工单执行后记录用量，可按项目/执行器/天汇总', () => {
   const dir = mkdtempSync(join(tmpdir(), 'lagent-usage-'));
@@ -36,6 +36,10 @@ test('Token 预算硬闸在执行前拦截', () => {
   assert.equal(ok.used, 1000);
   const blocked = checkTokenBudget(store, 't1', 1000);
   assert.equal(blocked.ok, false);
+  // 批量统计只查相关工单，不会把其它工单的用量算进来。
+  assert.equal(ticketsTokensUsed(store, ['t1', 'missing']), 1000);
+  assert.equal(store.listWhere('work-usage', 'ticketId', ['t1']).length, 1);
+  assert.throws(() => store.listWhere('work-usage', 'ticketId; DROP TABLE entities', 'x'), /无效的字段名/);
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -88,6 +92,27 @@ test('用量汇总带预算与 80% 告警', () => {
   const withoutBudget = summarizeUsage(store, { days: 'all' });
   assert.equal(withoutBudget.budget, null);
   assert.equal(withoutBudget.byTicket.find(row => row.ticketId === 't1').warning, undefined);
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('用量按执行与协调拆分，协调占比可单独查看', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-usage-role-'));
+  const store = new Store(dir);
+  recordTicketUsage(store, {
+    ticket: { id: 't1' }, assignment: { executor: 'model', role: 'coordination' },
+    task: { report: { aiUsage: { inputTokens: 80, outputTokens: 20, totalTokens: 100 } } }, executorId: 'model'
+  });
+  recordTicketUsage(store, {
+    ticket: { id: 't2' }, assignment: { executor: 'model' },
+    task: { report: { aiUsage: { inputTokens: 240, outputTokens: 60, totalTokens: 300 } } }, executorId: 'model'
+  });
+  const summary = summarizeUsage(store, { days: 'all' });
+  assert.equal(summary.totals.totalTokens, 400);
+  assert.equal(summary.coordination.totalTokens, 100);
+  assert.equal(summary.execution.totalTokens, 300);
+  assert.equal(summary.coordination.share, 0.25);
+  assert.equal(summary.byRole.coordination.calls, 1);
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });

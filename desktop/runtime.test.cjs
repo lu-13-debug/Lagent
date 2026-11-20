@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { desktopPaths, allowedNavigation, safeExternalUrl } = require('./runtime.cjs');
+const { desktopPaths, allowedNavigation, isPdfViewerUrl, safeExternalUrl } = require('./runtime.cjs');
 
 test('desktop runtime stores database under userData instead of installed program', () => {
   const p = desktopPaths('C:\\Users\\Test\\AppData\\Roaming\\Lagent');
@@ -15,6 +15,14 @@ test('desktop navigation is limited to the exact local service origin', () => {
   assert.equal(allowedNavigation('https://example.com', origin), false);
   assert.equal(allowedNavigation('javascript:alert(1)', origin), false);
   assert.equal(allowedNavigation('file:///C:/Windows/system.ini', origin), false);
+});
+test('内置 PDF 查看器的扩展页面放行，其他扩展与协议仍不放行', () => {
+  assert.equal(isPdfViewerUrl('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html?file=x'), true);
+  assert.equal(isPdfViewerUrl('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/9e0a405d-282a-4feb-ab51-09e22f45729b'), true);
+  assert.equal(isPdfViewerUrl('chrome-extension://abcdefghijklmnop/index.html'), false);
+  assert.equal(isPdfViewerUrl('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai.evil.example/x'), false);
+  assert.equal(isPdfViewerUrl('http://127.0.0.1:4100/pdf'), false);
+  assert.equal(isPdfViewerUrl(''), false);
 });
 test('external links cannot launch system protocols or credential-bearing URLs', () => {
   assert.equal(safeExternalUrl('https://example.com/docs'), 'https://example.com/docs');

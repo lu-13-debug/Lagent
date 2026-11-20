@@ -1,21 +1,37 @@
 ﻿import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { workError } from '../domain.js';
 import { resolveLocalCommand } from '../providers.js';
 
-const MAX_OUTPUT = 256 * 1024;
+// 单条 ACP 事件可能包含很大的工具输出；256KiB 连一次目录列举都能撑爆，
+// 结果是整段复审被判失败。缓冲区放到 8MiB，只对「保留的正文」设小上限。
+const MAX_OUTPUT = 8 * 1024 * 1024;
+// 结论最多保留 64KiB：最终只取 8KiB，留够余地又不让数组无限增长。
+const MAX_TEXT = 64 * 1024;
 const MAX_FILE_BYTES = 512 * 1024;
 
 // 把 ACP 请求的绝对路径限制在项目目录内，越界一律拒绝。
-function resolveInside(workspace, target) {
+// 除了词法比较，还要跟随已存在的祖先做 realpath：项目内指向外部的符号链接
+// 不能成为读写通道（node_modules 或恶意仓库里都可能带这种链接）。
+export function resolveInside(workspace, target) {
   if (typeof target !== 'string' || !target) return null;
   const base = path.resolve(workspace);
   const resolved = path.resolve(base, target);
   const relative = path.relative(base, resolved);
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return resolved === base ? resolved : null;
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  let baseReal;
+  try { baseReal = realpathSync(base); } catch { baseReal = base; }
+  let probe = resolved;
+  while (!existsSync(probe) && path.dirname(probe) !== probe) probe = path.dirname(probe);
+  if (!existsSync(probe)) return null;
+  let probeReal;
+  try { probeReal = realpathSync(probe); } catch { return null; }
+  const real = path.resolve(probeReal, path.relative(probe, resolved));
+  const realRelative = path.relative(baseReal, real);
+  if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) return null;
   return resolved;
 }
 
@@ -54,6 +70,8 @@ export function createAcpExecutor({
   const available = Boolean(resolved && existsSync(resolved.command));
   const controllers = new Map();
   const tasks = new Map();
+  // 长期运行时只保留最近的任务快照；已结束的记录以 store 为准。
+  const trimTasks = () => { if (tasks.size <= 200) return; for (const [idValue, row] of tasks) { if (tasks.size <= 200) break; if (!['running', 'awaiting_approval'].includes(row.status)) tasks.delete(idValue); } };
 
   function removeController(idValue) {
     const controller = controllers.get(idValue);
@@ -70,7 +88,16 @@ export function createAcpExecutor({
     tasks.set(task.id, task);
     store.put('task', task);
 
-    const controller = { child: null, done: false, buffer: '', nextId: 1, pending: new Map(), permissions: new Map(), updates: [], sessionId: null, timer: null };
+    const controller = { child: null, done: false, buffer: '', nextId: 1, pending: new Map(), permissions: new Map(), updates: [], textBytes: 0, oversized: false, sessionId: null, timer: null };
+    const pushUpdate = text => {
+      controller.updates.push(text);
+      controller.textBytes += text.length;
+      // 只保留尾部：结论在最后，早期的大段工具输出没有保留价值。
+      while (controller.textBytes > MAX_TEXT && controller.updates.length > 1) {
+        controller.textBytes -= controller.updates[0].length;
+        controller.updates.shift();
+      }
+    };
     controllers.set(task.id, controller);
     controller.child = (spawnImpl || spawnCommand)(resolved.command, [...(resolved.args || []), ...args], resolved.shell);
     const child = controller.child;
@@ -90,6 +117,7 @@ export function createAcpExecutor({
       clearTimeout(controller.timer);
       const finished = { ...task, ...detail, status, completedAt: new Date().toISOString() };
       tasks.set(task.id, finished);
+      trimTasks();
       store.put('task', finished);
       removeController(task.id);
     };
@@ -242,7 +270,7 @@ export function createAcpExecutor({
         }
         const text = update.content?.type === 'text' ? update.content.text : kind === 'agent_message_chunk' ? update.content?.text : '';
         if (typeof text === 'string' && text) {
-          controller.updates.push(text);
+          pushUpdate(text);
           // 正文也是分片流下来的：同样合并，否则结论会被拆成「name:」「`lagent` version:」这样一串碎片。
           record({ kind: 'note', text, append: true });
         }
@@ -251,18 +279,31 @@ export function createAcpExecutor({
     child.stdout?.on('data', chunk => {
       if (controller.done) return;
       controller.buffer += String(chunk);
-      if (controller.buffer.length > MAX_OUTPUT) { finish('failed', { error: 'ACP 输出超过上限' }); return; }
       let newline;
       while ((newline = controller.buffer.indexOf('\n')) >= 0) {
         const line = controller.buffer.slice(0, newline).trim();
         controller.buffer = controller.buffer.slice(newline + 1);
+        // 单条事件过大时丢掉这条，而不是让整段任务失败；后续事件仍可正常解析。
+        if (line.length > MAX_OUTPUT) {
+          if (!controller.oversized) record({ kind: 'note', text: 'ACP 单条事件过大，已忽略该条输出' });
+          controller.oversized = true;
+          continue;
+        }
         if (line) handleLine(line);
+      }
+      if (controller.buffer.length > MAX_OUTPUT) {
+        // 迟迟没有换行说明这条事件本身超大；丢弃半截缓冲，避免无上限占用内存。
+        if (!controller.oversized) record({ kind: 'note', text: 'ACP 单条事件过大，已忽略该条输出' });
+        controller.oversized = true;
+        controller.buffer = '';
       }
     });
     child.stderr?.on('data', () => { /* 诊断不落库，避免密钥/路径泄漏。 */ });
     child.once?.('error', () => finish('failed', { error: 'ACP Agent 启动失败' }));
     child.once?.('close', code => {
-      if (!controller.done) finish(code === 0 ? 'failed' : 'failed', { error: `ACP Agent 退出（${code ?? 'unknown'}）` });
+      // 正常完成时 session/prompt 已返回并调用 finish('completed')；走到这里仍未 finish，
+      // 说明会话没拿到结果，即使退出码为 0 也只能算失败。
+      if (!controller.done) finish('failed', { error: `ACP Agent 退出（${code ?? 'unknown'}）` });
     });
     controller.timer = setTimeout(() => finish('failed', { error: 'ACP Agent 执行超时' }), Math.max(1, timeoutMs));
     controller.timer.unref?.();
@@ -308,6 +349,7 @@ export function createAcpExecutor({
       if (task) {
         const stopped = { ...task, status: 'cancelled', completedAt: new Date().toISOString() };
         tasks.set(task.id, stopped);
+        trimTasks();
         store.put('task', stopped);
       }
       if (task?.id) removeController(task.id);

@@ -3,6 +3,7 @@ import { BookOpen, Bot, MessageSquare, Play, RefreshCw, ShieldCheck, Sparkles, S
 import { api } from '../api';
 import type { WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveSession, WorkMcpServer, WorkProject, WorkRoutine, WorkRoutineKind, WorkRoutineSchedule, WorkTeamRoom } from '../superagent';
 import { Spinner } from './ui';
+import { STATUS_LABELS } from '../status';
 
 type Tab = 'library' | 'routines' | 'mcp' | 'im' | 'rooms' | 'live';
 type Notify = (message: string, error?: boolean) => void;
@@ -16,10 +17,10 @@ const TABS: { id: Tab; label: string; icon: typeof BookOpen }[] = [
   { id: 'live', label: '实时观察', icon: Play }
 ];
 
+// 工单状态统一来自 src/status.ts，这里只补实时观察/团队房间自己的状态词。
 const statusNames: Record<string, string> = {
-  queued: '排队中', working: '执行中', awaiting_review: '待确认', blocked: '受阻', failed: '失败',
-  waiting: '等待依赖', completed: '已完成', cancelled: '已取消', live: '观察中', paused: '已暂停',
-  takeover: '已接管', error: '异常', open: '进行中', active: '进行中'
+  ...STATUS_LABELS,
+  live: '观察中', paused: '已暂停', takeover: '已接管', error: '异常', open: '进行中', active: '进行中'
 };
 
 function projectName(projects: WorkProject[], id: string | null) {

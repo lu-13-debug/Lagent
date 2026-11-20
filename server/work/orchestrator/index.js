@@ -34,10 +34,23 @@ export function createOrchestrator({
   const runs = createRunStore({ store, clock: now });
   const publish = event => { try { emit({ ...event, scope: 'run' }); } catch { /* 事件失败不能影响执行 */ } };
 
+  // 编排挑人必须和引擎的 guard 用同一份策略，否则会挑到未获允许的执行器，
+  // 派发时被引擎 403 打断整条运行。
+  function allowedByPolicy() {
+    try {
+      const allowed = engine.bootstrap?.()?.policy?.allowedExecutors;
+      return Array.isArray(allowed) ? new Set(allowed) : null;
+    } catch {
+      return null;
+    }
+  }
+
   function agentsUsable() {
+    const allowed = allowedByPolicy();
     return listAgents()
       .filter(agent => agent.status === 'available' || agent.available === true)
-      .map(agent => agent.id);
+      .map(agent => agent.id)
+      .filter(id => !allowed || allowed.has(id));
   }
 
   // 项目根目录：产出校验要拿它当基准。
@@ -120,6 +133,8 @@ export function createOrchestrator({
       executorId,
       title: `编排 · ${executorId}${writable ? '' : '（只读）'}`,
       writable,
+      // 编排的每个 Agent 执行上下文只用于执行与追溯，不作为独立对话出现在项目页。
+      hidden: true,
       ...(host ? { parentChatId: host.id } : {})
     });
     publish({ type: 'run-chat', runId: run.id, payload: { chatId: created.chat.id, executorId } });
@@ -170,6 +185,8 @@ export function createOrchestrator({
       const missing = Object.keys(step.need || {}).filter(key => step.need[key]).join('/');
       runs.note(run, 'decision', `「${step.role}」找不到具备 ${missing} 能力的 Agent，已跳过。`);
       runs.updateStep(run, step.index, { status: 'skipped', summary: `没有 Agent 具备 ${missing} 能力`, endedAt: now() });
+      // 整条运行都被跳过时没有后续步骤会顺手保存，这里必须自己落盘。
+      runs.save(run);
       publish({ type: 'run-step', runId: run.id, payload: { index: step.index, status: 'skipped' } });
       return { status: 'skipped', summary: '没有可用 Agent' };
     }
@@ -196,7 +213,8 @@ export function createOrchestrator({
     publish({ type: 'run-step', runId: run.id, payload: { index: step.index, status: 'running', executorId, ticketId: ticket.id } });
 
     // 运行级审批已经通过，逐步的工单直接放行；执行器内部的危险操作仍会自己弹窗。
-    engine.action(ticket.id, 'approve');
+    // 策略未要求审批时 engine.command 已经把工单推进到 queued/working，此时再 approve 会 409。
+    if (ticket.status === 'awaiting_review') engine.action(ticket.id, 'approve');
     const result = await waitTicket(ticket.id);
 
     let stepStatus = result.status === 'completed' ? 'done' : 'failed';
@@ -406,6 +424,12 @@ export function createOrchestrator({
       runs.setStatus(run, RUN_STATUS.failed);
       run.error = describeGap(gap);
       runs.note(run, 'note', '运行结束，但产出不完整');
+    } else if (run.steps.some(step => step.status === 'skipped')) {
+      // 有步骤没人能接却把运行标成完成，会让人以为事情做完了。
+      const skipped = run.steps.filter(step => step.status === 'skipped');
+      const reason = `${skipped.map(step => `「${step.role}」`).join('、')}没有可用的 Agent，已跳过；请到「设置 → 工作策略」允许相应执行器后重试。`;
+      runs.setStatus(run, RUN_STATUS.failed, reason);
+      runs.note(run, 'note', reason);
     } else if (run.status !== RUN_STATUS.failed) {
       runs.setStatus(run, RUN_STATUS.completed);
       runs.note(run, 'note', '运行结束');

@@ -80,11 +80,16 @@ export function createImNotifier({ store, engine, ownerId = 'local', fetchImpl =
     };
   }
 
+  // 公开根地址有两个来源：指挥台自己的 LAGENT_PUBLIC_URL，以及云端部署使用的
+  // PUBLIC_URL（compose.yaml 由 LAGENT_DOMAIN 生成）。二者都视为可信配置，
+  // 否则容器部署里审批链接会因为没有 base URL 而缺失。
+  const publicBaseUrl = config => config.baseUrl || env.LAGENT_PUBLIC_URL || env.PUBLIC_URL || '';
+
   function list() {
     const config = load();
     return {
       kinds: [...CHANNEL_KINDS],
-      baseUrl: config.baseUrl || env.LAGENT_PUBLIC_URL || '',
+      baseUrl: publicBaseUrl(config),
       channels: config.channels.map(publicChannel)
     };
   }
@@ -133,7 +138,7 @@ export function createImNotifier({ store, engine, ownerId = 'local', fetchImpl =
   }
 
   function baseUrlOf(config) {
-    return (config.baseUrl || env.LAGENT_PUBLIC_URL || '').replace(/\/+$/, '');
+    return publicBaseUrl(config).replace(/\/+$/, '');
   }
 
   function signAction(ticketId, action, { ttlMs = ACTION_TTL_MS } = {}) {

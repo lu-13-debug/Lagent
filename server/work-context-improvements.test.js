@@ -94,3 +94,29 @@ test('记忆检索：中文二元组命中，并按目录范围加权', () => {
   assert.match(digest, /登录接口修复/);
   assert.doesNotMatch(digest, /首页样式/);
 });
+test('Library 三层预算：先保工作约定，再技能，最后低密度 MCP 清单', () => {
+  const library = {
+    instructions: ['规则一：先跑测试', '规则二：只改 server/**'],
+    skills: Array.from({ length: 20 }, (_, index) => `skill-${index}-${'说'.repeat(20)}`),
+    mcpServers: Array.from({ length: 20 }, (_, index) => `server-${index}`),
+  };
+  const text = buildLibraryContext(library, { executorId: 'codex', maxChars: 300 });
+  assert.ok([...text].length <= 300, `实际长度 ${[...text].length}`);
+  assert.match(text, /规则一/);
+  assert.match(text, /规则二/);
+  assert.doesNotMatch(text, /server-19/);
+  assert.match(buildLibraryContext({ instructions: [], skills: [], mcpServers: ['github'] }, { maxChars: 1200 }), /可用 MCP 服务：github/);
+});
+
+test('Library 三层预算：高密度内容占满时直接丢掉低密度层，不做硬切', () => {
+  const text = buildLibraryContext({
+    instructions: [`规则：${'必须保留'.repeat(80)}`],
+    skills: ['review'],
+    mcpServers: ['github'],
+  }, { executorId: 'codex', maxChars: 240 });
+  assert.ok([...text].length <= 240);
+  assert.match(text, /必须保留/);
+  assert.doesNotMatch(text, /登记技能/);
+  assert.doesNotMatch(text, /可用 MCP 服务/);
+  assert.ok(text.endsWith('…'));
+});

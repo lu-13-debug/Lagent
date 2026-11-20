@@ -50,7 +50,7 @@ export function createTeamRoomService(db, { engine, now = () => new Date().toISO
       const ticket = detail?.ticket;
       if (!ticket) continue;
       messages.push({ id: `ticket-${ticket.id}`, kind: 'status', agent: step.executorId || ticket.executor || '', at: ticket.updatedAt || ticket.createdAt, text: `${step.index + 1}. ${ticket.title} · ${ticket.status}${ticket.summary ? `：${ticket.summary}` : ''}` });
-      for (const report of (detail.reports || []).slice(-2)) {
+      for (const report of (detail.reports || []).slice(0, 2)) {
         messages.push({ id: `report-${report.id}`, kind: 'report', agent: step.executorId || '', at: report.createdAt, text: String(report.summary || '').slice(0, 600) });
       }
       if (ticket.attention?.question) {

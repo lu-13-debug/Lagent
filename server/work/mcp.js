@@ -155,7 +155,7 @@ export function createMcpHandler({ engine, windowBridge, actor = 'mcp' } = {}) {
     }, async input => {
       const detail = engine.detail(requiredString(input, 'id'));
       const reports = Array.isArray(detail?.reports) ? detail.reports : [];
-      const latest = reports[reports.length - 1] || null;
+      const latest = reports[0] || null;
       return textResult({
         ticketId: detail?.ticket?.id || null,
         status: detail?.ticket?.status || null,

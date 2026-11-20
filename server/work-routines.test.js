@@ -103,6 +103,32 @@ test('停滞跟进只为超时工单创建建议', t => {
   assert.match(result.tickets[0].attention.question, /疑似停滞/);
 });
 
+test('单条例行任务的项目失效不会中断整轮调度', t => {
+  const f = fixture(t);
+  const broken = f.routines.save({ name: '坏监控', projectId: f.project.id, executorId: 'codex', kind: 'task', promptTemplate: 'x', enabled: true, schedule: { kind: 'file', path: 'a.txt' } });
+  f.store.put('work-routine', { ...f.store.get('work-routine', broken.routine.id), projectId: 'missing-project', updatedAt: '2099-01-02T00:00:00.000Z' });
+  const good = f.routines.save({ name: '好例程', projectId: f.project.id, executorId: 'codex', kind: 'task', promptTemplate: '检查', enabled: true, schedule: { kind: 'interval', intervalMs: 3600000 } });
+  f.store.put('work-routine', { ...f.store.get('work-routine', good.routine.id), nextAt: f.now() - 1, updatedAt: '2099-01-01T00:00:00.000Z' });
+  const ticked = f.routines.tick();
+  assert.equal(ticked.ran, 1, '坏记录之后的例程仍要执行');
+  assert.ok(f.routines.get(good.routine.id).lastRunAt);
+  assert.match(f.store.get('work-routine', broken.routine.id).lastError, /不存在|项目/);
+});
+
+test('自动执行失败的原因会保留在例行任务上，而不是被清空', t => {
+  const f = fixture(t);
+  const saved = f.routines.save({ name: '自动失败', projectId: f.project.id, executorId: 'codex', kind: 'task', promptTemplate: '检查', mode: 'auto', enabled: true, schedule: { kind: 'manual' } });
+  const original = f.engine.action;
+  f.engine.action = () => { throw new Error('执行器不可用'); };
+  try {
+    const result = f.routines.runNow(saved.routine.id);
+    assert.match(result.lastError, /自动执行失败/);
+    assert.match(f.routines.get(saved.routine.id).lastError, /执行器不可用/);
+  } finally {
+    f.engine.action = original;
+  }
+});
+
 test('Routine 校验间隔与必填字段', t => {
   const f = fixture(t);
   assert.throws(() => f.routines.save({ name: 'x', projectId: f.project.id, executorId: 'codex', kind: 'task', promptTemplate: 'x', schedule: { kind: 'interval', intervalMs: 1000 } }), { status: 400 });

@@ -14,36 +14,47 @@ function harness(t, options = {}) {
   const events = [];
   let counter = 0;
   // 假执行器：只是把工单写成「已完成」，用来验证编排的顺序、路由与返工逻辑。
+  const approvals = [];
+  const complete = (id, ticket, status) => {
+    store.put('work-ticket', { ...ticket, status });
+    store.put('work-report', {
+      id: `report-${id}`,
+      ticketId: id,
+      kind: status === 'completed' ? 'ready' : 'failed',
+      // 每次失败的报告文字都不一样，模拟「返工后确实有变化」；需要模拟「毫无变化」时用 options.summary。
+      summary: options.summary
+        ? options.summary(ticket, status)
+        : status === 'completed'
+          ? `做完了：${ticket.title.slice(0, 20)}`
+          : `命令退出码 1：测试失败（第 ${counter} 次）`
+    });
+  };
   const engine = {
+    bootstrap() {
+      return { policy: { allowedExecutors: options.allowedExecutors || ['claude-code', 'model', 'terminal'] } };
+    },
     command(input) {
       const id = `ticket-${++counter}`;
+      // autoStart 模拟策略未要求审批：engine.command 直接开跑并返回 queued。
+      const status = options.autoStart ? 'queued' : 'awaiting_review';
       store.put('work-ticket', {
         id,
         title: (typeof input.title === 'string' && input.title.trim() ? input.title.trim() : input.text).slice(0, 100),
         text: input.text,
-        status: 'awaiting_review',
+        status,
         executor: input.executorId,
         ...(input.projectChatId ? { projectChatId: input.projectChatId } : {})
       });
-      return { id, status: 'awaiting_review' };
+      if (options.autoStart) setTimeout(() => complete(id, store.get('work-ticket', id), 'completed'), 10).unref?.();
+      return { id, status };
     },
     action(id, action) {
+      approvals.push({ id, action });
       if (action !== 'approve') return { id };
       const ticket = store.get('work-ticket', id);
       const outcome = options.outcome || (() => 'completed');
       const status = outcome(ticket);
-      store.put('work-ticket', { ...ticket, status });
-      store.put('work-report', {
-        id: `report-${id}`,
-        ticketId: id,
-        kind: status === 'completed' ? 'ready' : 'failed',
-        // 每次失败的报告文字都不一样，模拟「返工后确实有变化」；需要模拟「毫无变化」时用 options.summary。
-        summary: options.summary
-          ? options.summary(ticket, status)
-          : status === 'completed'
-            ? `做完了：${ticket.title.slice(0, 20)}`
-            : `命令退出码 1：测试失败（第 ${counter} 次）`
-      });
+      complete(id, ticket, status);
       return { id, status };
     },
     getProject(id) {
@@ -74,7 +85,7 @@ function harness(t, options = {}) {
       // LibSQL 的文件句柄在 Windows 上可能还没释放，临时目录留给系统清理。
     }
   });
-  return { orchestrator, store, events };
+  return { orchestrator, store, events, approvals };
 }
 
 async function settle(orchestrator, runId) {
@@ -290,6 +301,36 @@ test('能力路由：没人能接的一步标成跳过，并说清缺哪种能�
   assert.ok(done.board.some(item => /找不到具备 browser 能力/.test(item.text)));
   // 其它步骤照常有人接，工单也照常派。
   assert.ok(store.list('work-ticket').length >= 2);
+});
+
+test('策略未要求审批时，编排不会对已自动开跑的工单重复 approve', async t => {
+  const { orchestrator, approvals } = harness(t, { autoStart: true });
+  const created = await orchestrator.start({ goal: '修复首页按钮在窄屏溢出' });
+  for (let i = 0; i < 100; i++) {
+    if (orchestrator.get(created.id).status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  await orchestrator.approve(created.id);
+  const done = await settle(orchestrator, created.id);
+  assert.equal(done.status, 'completed');
+  assert.deepEqual(approvals.filter(item => item.action === 'approve'), [], '工单已在执行，再 approve 会 409');
+});
+
+test('编排只挑当前策略允许的执行器，不会挑到会被引擎 403 的 Agent', async t => {
+  const { orchestrator, approvals } = harness(t, { allowedExecutors: ['terminal'] });
+  const created = await orchestrator.start({ goal: '修复首页按钮在窄屏溢出' });
+  for (let i = 0; i < 100; i++) {
+    if (orchestrator.get(created.id).status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  const planned = orchestrator.get(created.id);
+  assert.ok(planned.steps.every(step => step.executorId === null || step.executorId === 'terminal'), JSON.stringify(planned.steps.map(step => step.executorId)));
+  await orchestrator.approve(created.id);
+  const done = await settle(orchestrator, created.id);
+  assert.ok(!done.error || !/403/.test(done.error), '不应出现策略 403');
+  assert.equal(done.status, 'failed', '有步骤没 Agent 能接时不能标成完成');
+  assert.match(done.error, /没有可用的 Agent.*工作策略/s);
+  assert.ok(approvals.length > 0, '能派发的步骤仍要经过工单审批');
 });
 
 test('看门狗：一步长时间没有任何输出就停下来，而不是一直等', async t => {

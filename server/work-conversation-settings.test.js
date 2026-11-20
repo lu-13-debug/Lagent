@@ -29,7 +29,7 @@ function fixture(t, { id, kind = 'cli', policy, env } = {}) {
   const engine = createWorkEngine(store, createExecutorRegistry([executor]), () => {}, {
     workspace: dir,
     ...(policy ? { policy } : {}),
-    ...(env ? { env: { ...process.env, ...env } } : {})
+    ...(env ? { env: { LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1', ...process.env, ...env } } : { env: { ...process.env, LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' } })
   });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   return { engine, seen };

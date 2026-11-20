@@ -245,6 +245,19 @@ test('Store makes request-ID matching and freeze atomic even for independent tas
   assert.equal(store.get('task', duplicate.id), null);
 });
 
+test('recovering a task that skipped channel or seasonality during the run keeps the same optional steps', async t => {
+  const { api } = await setup(t); const b = await api('/api/bootstrap');
+  const c = await api('/api/tasks', 'POST', input(b.datasets[0].id));
+  await waitFor(api, c.task.id, 'awaiting_approval', 'plan');
+  assert.equal((await api(`/api/tasks/${c.task.id}/skip`, 'POST', { stepId: 'channel' })).status, 200);
+  assert.equal((await api(`/api/tasks/${c.task.id}/skip`, 'POST', { stepId: 'seasonality' })).status, 200);
+  await api(`/api/tasks/${c.task.id}/cancel`, 'POST', {});
+  const r = await retry(api, c.task.id);
+  assert.equal(r.status, 201, JSON.stringify(r));
+  assert.deepEqual(r.task.skippedSteps, ['channel', 'seasonality']);
+  assert.equal(r.task.steps.find(step => step.id === 'channel').status, 'skipped');
+});
+
 test('resume invalidates old insight summaries when optional analytical branches change', async t => {
   const { app, api } = await setup(t); const source = app.locals.store.list('task')[0];
   source.status = 'failed'; source.steps[6].status = 'failed'; source.steps[7].status = 'pending'; app.locals.store.put('task', source);

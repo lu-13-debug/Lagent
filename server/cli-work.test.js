@@ -81,7 +81,7 @@ test('E2 Work CLI approval freezes input and projects sanitized report/SSE', asy
       ]));
     }
   });
-  const engine = createWorkEngine(store, createExecutorRegistry([codex, claude]), event => events.push(event), { policy: { allowedExecutors: ['codex', 'claude-code'], requireApproval: true }, env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1' } });
+  const engine = createWorkEngine(store, createExecutorRegistry([codex, claude]), event => events.push(event), { policy: { allowedExecutors: ['codex', 'claude-code'], requireApproval: true }, env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' } });
   t.after(() => {
     engine.close();
     store.close();

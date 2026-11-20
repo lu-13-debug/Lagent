@@ -30,7 +30,9 @@ test('parser rejects ambiguous tables, negative amounts, invalid time and confli
 
 test('parser accepts the documented 200000 row boundary without argument stack overflow', async t => {
   const csv = 'user_id,event_time\n' + Array.from({ length: 200000 }, (_, i) => `u${i},2026-10-01`).join('\n');
-  const budget = Number(process.env.LAGENT_PARSE_BUDGET_MS || 20000);
+  // 完整套件会并行跑多个文件，CPU 争用下同一份解析会比单跑慢 2–3 倍；
+  // 阈值只用来兜住数量级退化，不把并行调度当成性能回归。
+  const budget = Number(process.env.LAGENT_PARSE_BUDGET_MS || 30000);
   const started = performance.now();
   const dataset = await parser.parseFiles([{ originalname: 'activity.csv', buffer: Buffer.from(csv) }]);
   const elapsedMs = Math.round(performance.now() - started);

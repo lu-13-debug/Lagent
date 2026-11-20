@@ -19,6 +19,14 @@ export function validateSubagents(rows,{stageId,profiles=[],judgeId,effort,skill
  });
 }
 const text=(v,max)=>typeof v==='string'?[...v].slice(0,max).join(''):'';
-export function projectSubagentResult(result,validRefs=new Set()){
- return {summary:text(result?.summary,1000),findings:(Array.isArray(result?.findings)?result.findings:[]).filter(f=>f&&typeof f.title==='string'&&f.title.trim()&&Array.isArray(f.evidenceRefs)&&f.evidenceRefs.length&&f.evidenceRefs.every(id=>validRefs.has(id))).slice(0,8).map(f=>({title:text(f.title,100),detail:text(f.detail,400),evidenceRefs:[...f.evidenceRefs]})),recommendations:(Array.isArray(result?.recommendations)?result.recommendations:[]).filter(v=>typeof v==='string').slice(0,8).map(v=>text(v,300))};
+const projectTrace=trace=>trace&&typeof trace==='object'&&!Array.isArray(trace)?{taskId:text(trace.taskId,100),stageId:text(trace.stageId,40),kind:'subagent',calls:Number.isSafeInteger(trace.calls)&&trace.calls>=0?trace.calls:0,log:'model-call'}:null;
+const projectFailure=failure=>{
+ if(!failure||typeof failure!=='object'||Array.isArray(failure))return null;
+ const code=text(failure.code,40),reason=text(failure.reason,200);
+ return code||reason?{...(code?{code}:{}),...(reason?{reason}:{})}:null;
+};
+/** 子 Agent 只回三段：结论、证据指针、失败原因；完整调用留在 model-call 账本，用 trace 指过去。 */
+export function projectSubagentResult(result,validRefs=new Set(),{trace=null}={}){
+ const projectedTrace=projectTrace(trace),failure=projectFailure(result?.failure);
+ return {summary:text(result?.summary,1000),findings:(Array.isArray(result?.findings)?result.findings:[]).filter(f=>f&&typeof f.title==='string'&&f.title.trim()&&Array.isArray(f.evidenceRefs)&&f.evidenceRefs.length&&f.evidenceRefs.every(id=>validRefs.has(id))).slice(0,8).map(f=>({title:text(f.title,100),detail:text(f.detail,400),evidenceRefs:[...f.evidenceRefs]})),recommendations:(Array.isArray(result?.recommendations)?result.recommendations:[]).filter(v=>typeof v==='string').slice(0,8).map(v=>text(v,300)),...(projectedTrace?{trace:projectedTrace}:{}),...(failure?{failure}:{})};
 }

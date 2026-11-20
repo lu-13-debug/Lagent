@@ -196,7 +196,7 @@ export function localAgentExecutor(profileName, {
   store,
   cwd,
   binary,
-  timeoutMs = Number(process.env.LAGENT_CLI_TIMEOUT_MS) || 1_800_000,
+  timeoutMs = Number(process.env.LAGENT_CLI_TIMEOUT_MS) || 3_600_000,
   maxOutputBytes = 8 * 1024 * 1024,
   spawnImpl,
   environment = process.env
@@ -217,7 +217,7 @@ export function localAgentExecutor(profileName, {
     maxOutputBytes,
     spawnImpl,
     environment,
-    validateInput: input => normalizeCliInput(input, { defaultMaxTurns: 8, maxTurns: 60 }),
+    validateInput: input => normalizeCliInput(input, { defaultMaxTurns: 8, maxTurns: 120, maxPromptBytes: 64 * 1024 }),
     buildArgs,
     parseOutput: parseTextOutput,
     // 这些 CLI 只输出纯文本结论，没有结构化事件；把 stdout 当成它正在写的东西记录下来，

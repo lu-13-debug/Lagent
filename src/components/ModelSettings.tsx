@@ -126,9 +126,7 @@ export function SettingsModal({ settings, close, onSaved, notify }: {
   return <Modal title="模型设置" subtitle={hubEnabled ? '管理密钥、模型与 Skill；规划模型决定任务怎么拆分。' : '填写连接信息后可开始 AI 辅助分析。'} close={close} dismissible={!busy} wide>
     <div className="modal-body">
       <ModelHubSettings onWorkflowChanged={async () => {
-        const response = await fetch('/api/settings', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(30000) });
-        if (!response.ok) throw new Error('工作流已保存，但未能刷新模型状态，请关闭设置后刷新页面。');
-        const result = await response.json() as { settings: Settings };
+        const result = await api.getSettings().catch(() => { throw new Error('工作流已保存，但未能刷新模型状态，请关闭设置后刷新页面。'); });
         onSaved(result.settings);
       }} />
       {!hubEnabled && <>

@@ -94,8 +94,8 @@ test('团队协作：没有可用的外部 Agent 时拒绝执行', async t => { 
   );
 });
 
-test('团队协作：只在项目里开一条主对话，其他 Agent 挂成从属会话', async t => {
-  const { engine } = harness(t);
+test('团队协作：项目里只出现一条 Lagent 对话，各 Agent 作为同一会话里的 run 执行', async t => {
+  const { engine, store } = harness(t);
   const project = engine.importProject({ path: process.cwd(), name: 'demo' }).project;
   const result = await engine.collaborate({
     goal: '给播放器补一个音量记忆功能',
@@ -103,17 +103,235 @@ test('团队协作：只在项目里开一条主对话，其他 Agent 挂成从�
     agentIds: ['claude-code', 'codex']
   });
   const chats = engine.getProject(project.id).chats;
-  const roots = chats.filter(chat => !chat.parentChatId);
-  const children = chats.filter(chat => chat.parentChatId);
-  assert.equal(roots.length, 1, '一次协作只开一条主对话');
-  assert.equal(roots[0].executorId, 'model', '主对话是内置模型 Agent');
-  assert.equal(roots[0].title, '给播放器补一个音量记忆功能', '主对话标题用协作目标');
-  assert.ok(result.mainChatId === roots[0].id, '返回值告诉前端主对话是哪条');
-  assert.ok(children.length >= 1, '外部 Agent 各自挂一条从属会话');
-  for (const child of children) {
-    assert.equal(child.parentChatId, roots[0].id, '从属会话指向主对话');
-    assert.notEqual(child.executorId, 'model');
+  assert.equal(chats.length, 1, '项目页只显示一条对话');
+  assert.equal(chats[0].executorId, 'model', '这条对话的宿主是 Lagent');
+  assert.equal(chats[0].title, '给播放器补一个音量记忆功能', '对话标题用协作目标');
+  assert.ok(result.mainChatId === chats[0].id, '返回值告诉前端对话是哪条');
+  // 外部 Agent 的执行上下文被标成隐藏，只用于执行与续接，不再各自变成一条对话。
+  const hidden = store.list('work-project-chat').filter(chat => chat.projectId === project.id && chat.hidden === true);
+  for (const chat of hidden) {
+    assert.equal(chat.parentChatId, chats[0].id, '隐藏的执行上下文挂在 Lagent 对话下');
+    assert.notEqual(chat.executorId, 'model');
   }
+  // 所有步骤工单都归到同一个会话的同一轮里。
+  assert.ok(result.conversationId, '协作返回会话 id');
+  const conversation = engine.getConversation(result.conversationId).conversation;
+  assert.equal(conversation.host, 'lagent');
+  assert.equal(conversation.turns.length, 1, '一次协作只产生一轮');
+  const conversationTickets = conversation.ticketIds;
+  assert.ok(conversationTickets.length >= 2, '协调者与执行者的工单都在会话里');
+  for (const step of result.steps) {
+    assert.ok(conversationTickets.includes(step.ticketId), '每个步骤工单都归入会话');
+  }
+});
+
+test('会话派活：一条对话里多个 Agent 各一条 run，追问追加同一轮列表', async t => {
+  const { engine } = harness(t);
+  const { conversation } = engine.createConversation({ goal: '审查鉴权逻辑', title: '审查鉴权逻辑', agentIds: ['claude-code'] });
+  const first = await engine.conversationMessage(conversation.id, {
+    text: '检查会话固定与权限判断是否有漏洞',
+    mode: 'review',
+    agentIds: ['claude-code', 'codex'],
+    autoRun: false
+  });
+  // 强制主控：Lagent 分工 + 两个协作 Agent + Lagent 汇总，共 4 张工单。
+  assert.equal(first.tickets.length, 4, 'Lagent 分工、协作执行与汇总都派了活');
+  const loaded = engine.getConversation(conversation.id).conversation;
+  assert.equal(loaded.host, 'lagent');
+  assert.equal(loaded.turns.length, 1);
+  assert.equal(loaded.turns[0].mode, 'review');
+  assert.equal(loaded.turns[0].runs.length, 4);
+  assert.deepEqual([...loaded.participants].sort(), ['claude-code', 'codex', 'model']);
+  assert.equal(loaded.turns[0].runs[0].role, 'coordination');
+  assert.equal(loaded.turns[0].runs.at(-1).role, 'synthesis');
+  for (const ticket of first.tickets) {
+    assert.equal(ticket.conversationId, conversation.id);
+    assert.equal(ticket.turnId, loaded.turns[0].id);
+  }
+
+  // 汇总也由 Lagent 做，旧前端传别的 Agent 会被忽略。
+  const synthesis = engine.conversationSynthesize(conversation.id, loaded.turns[0].id, { agentId: 'codex' });
+  assert.equal(synthesis.ticket.role, 'synthesis');
+  assert.equal(synthesis.ticket.agentId, 'model', '汇总工单的执行者固定为 Lagent，忽略调用方传入的 agentId');
+  assert.equal(synthesis.ticket.conversationId, conversation.id);
+  const synthesised = engine.getConversation(conversation.id).conversation;
+  assert.equal(synthesised.turns[0].synthesisTicketId, synthesis.ticket.id);
+  assert.equal(synthesised.turns[0].synthesisAgentId, 'model');
+  assert.ok(synthesised.ticketIds.includes(synthesis.ticket.id));
+
+  // 追问还在同一个会话里，不另开对话。
+  const second = await engine.conversationMessage(conversation.id, {
+    text: '再补一个修复建议',
+    mode: 'auto',
+    agentIds: ['codex'],
+    autoRun: false
+  });
+  assert.equal(second.tickets.length, 3, '一次协作仍是 Lagent 分工 + 协作 + 汇总');
+  const after = engine.getConversation(conversation.id).conversation;
+  assert.equal(after.turns.length, 2);
+  assert.equal(after.turns[1].runs.length, 3);
+  const summaries = engine.bootstrap().conversations;
+  assert.ok(summaries.some(item => item.id === conversation.id), '会话出现在指挥台列表里');
+  assert.equal(summaries.find(item => item.id === conversation.id).turnCount, 2);
+});
+
+test('项目里同一任务的多条 Agent 对话合并成一条 Lagent 会话', async t => {
+  const { engine, store } = harness(t);
+  const project = engine.importProject({ path: process.cwd(), name: 'demo' }).project;
+  const first = engine.createProjectChat(project.id, { executorId: 'claude-code', title: '做导出按钮' }).chat;
+  const second = engine.createProjectChat(project.id, { executorId: 'codex', title: '做导出按钮' }).chat;
+  const stamp = first.createdAt;
+  store.put('work-project-chat', { ...store.get('work-project-chat', second.id), createdAt: stamp, updatedAt: stamp });
+  for (const [chat, executor] of [[first, 'claude-code'], [second, 'codex']]) {
+    const ticketId = `t-${executor}`;
+    store.put('work-ticket', {
+      id: ticketId, title: '做导出按钮', status: 'completed', executor,
+      createdAt: stamp, updatedAt: stamp, projectChatId: chat.id
+    });
+    store.put('work-project-chat', { ...store.get('work-project-chat', chat.id), lastTicketId: ticketId, updatedAt: stamp });
+  }
+  engine.recover();
+  const chats = engine.getProject(project.id).chats;
+  assert.equal(chats.length, 1, '项目页只保留一条可见对话');
+  assert.ok(chats[0].conversationId, '可见对话指向 Lagent 会话');
+  const conversation = engine.getConversation(chats[0].conversationId).conversation;
+  assert.equal(conversation.turns.length, 1, '同一任务只保留一轮');
+  assert.deepEqual(conversation.ticketIds.sort(), ['t-claude-code', 't-codex']);
+  assert.deepEqual(conversation.participants.sort(), ['claude-code', 'codex', 'model']);
+  const rows = store.list('work-project-chat').filter(chat => chat.projectId === project.id);
+  assert.equal(rows.filter(chat => chat.hidden === true).length, 1, '其余 Agent 对话标成隐藏');
+  // 再跑一次保持原样。
+  engine.recover();
+  assert.equal(engine.getProject(project.id).chats.length, 1);
+  assert.equal(engine.getConversation(chats[0].conversationId).conversation.turns.length, 1);
+});
+
+test('同一 Agent 多轮工单不会把别的 Agent 挤出会话', async t => {
+  const { engine, store } = harness(t);
+  const project = engine.importProject({ path: process.cwd(), name: 'demo' }).project;
+  const chat = engine.createProjectChat(project.id, { executorId: 'claude-code', title: '做导出按钮' }).chat;
+  const stamp = chat.createdAt;
+  // 一个任务跑了 8 轮 claude-code，另有 codex、claude-acp 各跑了一轮。
+  const rows = [];
+  for (let index = 0; index < 8; index += 1) rows.push(['claude-code', `t-cc-${index}`]);
+  rows.push(['codex', 't-codex'], ['claude-acp', 't-acp']);
+  for (const [executor, ticketId] of rows) {
+    store.put('work-ticket', {
+      id: ticketId, title: '做导出按钮', status: 'completed', executor,
+      createdAt: stamp, updatedAt: stamp, projectChatId: chat.id
+    });
+  }
+  engine.recover();
+  const conversation = engine.getConversation(engine.getProject(project.id).chats[0].conversationId).conversation;
+  const agents = conversation.turns[0].runs.map(run => run.agentId).sort();
+  assert.deepEqual(agents, ['claude-acp', 'claude-code', 'codex'], '每个 Agent 各保留一张最新工单');
+  assert.equal(conversation.turns[0].runs.length, 3);
+});
+
+test('已迁移会话里的残缺轮次会被修复成每个 Agent 一条', async t => {
+  const { engine, store } = harness(t);
+  const stamp = '2026-11-15T04:14:26.000Z';
+  const conversationId = 'conv-project-broken';
+  const turnId = 'turn-project-broken';
+  const runs = [];
+  for (let index = 0; index < 8; index += 1) {
+    const ticketId = `t-broken-cc-${index}`;
+    runs.push({ ticketId, agentId: 'claude-code', role: 'answer' });
+    store.put('work-ticket', {
+      id: ticketId, title: '数据可视化', status: 'completed', executor: 'claude-code',
+      createdAt: stamp, updatedAt: stamp, conversationId, turnId, agentId: 'claude-code', role: 'answer'
+    });
+  }
+  for (const [executor, ticketId] of [['codex', 't-broken-codex'], ['claude-acp', 't-broken-acp']]) {
+    store.put('work-ticket', {
+      id: ticketId, title: '数据可视化', status: 'completed', executor,
+      createdAt: stamp, updatedAt: stamp, conversationId, turnId, agentId: executor, role: 'answer'
+    });
+  }
+  store.put('work-conversation', {
+    id: conversationId, title: '数据可视化', goal: '数据可视化', host: 'lagent',
+    participants: ['claude-code'],
+    turns: [{ id: turnId, index: 0, prompt: '数据可视化', mode: 'review', agentIds: ['claude-code'], runs, createdAt: stamp }],
+    createdAt: stamp, updatedAt: stamp
+  });
+  engine.recover();
+  const conversation = engine.getConversation(conversationId).conversation;
+  const agents = conversation.turns[0].runs.map(run => run.agentId).sort();
+  assert.deepEqual(agents, ['claude-acp', 'claude-code', 'codex'], '被挤掉的 Agent 补回同一轮');
+  assert.equal(conversation.turns[0].runs.length, 3, '每个 Agent 只留一条');
+  assert.deepEqual(conversation.participants.sort(), ['claude-acp', 'claude-code', 'codex']);
+});
+
+test('同一任务先后两轮派活，已建好的两条会话会并成一条并保留两轮', async t => {
+  const { engine, store } = harness(t);
+  const project = engine.importProject({ path: process.cwd(), name: 'demo' }).project;
+  const first = engine.createProjectChat(project.id, { executorId: 'claude-code', title: '项目实现 · v2' }).chat;
+  const second = engine.createProjectChat(project.id, { executorId: 'codex', title: '项目实现 · v2' }).chat;
+  const base = Date.parse('2026-11-16T13:30:03.000Z');
+  const later = new Date(base + 150000).toISOString();
+  store.put('work-project-chat', { ...store.get('work-project-chat', first.id), createdAt: new Date(base).toISOString(), updatedAt: new Date(base).toISOString() });
+  store.put('work-project-chat', { ...store.get('work-project-chat', second.id), createdAt: later, updatedAt: later });
+  const seed = (chat, stamp, tag) => {
+    const conversationId = `conv-project-${chat.id}`;
+    const turnId = `turn-project-${chat.id}`;
+    const runs = [];
+    for (const executor of ['claude-code', 'codex', 'claude-acp']) {
+      const ticketId = `t-${tag}-${executor}`;
+      runs.push({ ticketId, agentId: executor, role: 'answer' });
+      store.put('work-ticket', {
+        id: ticketId, title: '项目实现 · v2', status: 'completed', executor,
+        createdAt: stamp, updatedAt: stamp, projectChatId: chat.id,
+        conversationId, turnId, agentId: executor, role: 'answer'
+      });
+    }
+    store.put('work-conversation', {
+      id: conversationId, title: '项目实现 · v2', goal: '项目实现 · v2', host: 'lagent', projectId: project.id,
+      participants: ['claude-code', 'codex', 'claude-acp'],
+      turns: [{ id: turnId, index: 0, prompt: '项目实现 · v2', mode: 'review', agentIds: ['claude-code', 'codex', 'claude-acp'], runs, createdAt: stamp }],
+      createdAt: stamp, updatedAt: stamp
+    });
+    store.put('work-project-chat', { ...store.get('work-project-chat', chat.id), conversationId, updatedAt: stamp });
+  };
+  seed(first, new Date(base).toISOString(), 'round1');
+  seed(second, later, 'round2');
+  engine.recover();
+  const chats = engine.getProject(project.id).chats;
+  assert.equal(chats.length, 1, '同一任务只留一条可见对话');
+  const conversation = engine.getConversation(chats[0].conversationId).conversation;
+  assert.equal(conversation.turns.length, 2, '两轮都保留，不是只留最新一轮');
+  const turnTickets = conversation.turns.map(turn => turn.runs.map(run => run.ticketId).sort());
+  assert.deepEqual(turnTickets[0], ['t-round1-claude-acp', 't-round1-claude-code', 't-round1-codex']);
+  assert.deepEqual(turnTickets[1], ['t-round2-claude-acp', 't-round2-claude-code', 't-round2-codex']);
+  const rows = store.list('work-conversation').filter(row => row.id.includes(first.id) || row.id.includes(second.id));
+  assert.equal(rows.length, 1, '被合并的旧会话已删除');
+});
+
+test('历史迁移把同一任务的多个单工单会话并回一条', async t => {
+  const { engine, store } = harness(t);
+  const base = Date.parse('2026-11-15T04:14:26.000Z');
+  const rows = [['t-a', 'claude-acp'], ['t-b', 'claude-code'], ['t-c', 'dsh']];
+  rows.forEach(([id, executor], index) => {
+    const stamp = new Date(base + index * 40).toISOString();
+    store.put('work-ticket', {
+      id, title: '只回复 OK', status: 'completed', executor, createdAt: stamp, updatedAt: stamp,
+      conversationId: `conv-ticket-${id}`, turnId: `turn-ticket-${id}`, agentId: executor, role: 'answer'
+    });
+    store.put('work-conversation', {
+      id: `conv-ticket-${id}`, title: '只回复 OK', goal: '只回复 OK', host: 'lagent', participants: [executor],
+      turns: [{ id: `turn-ticket-${id}`, index: 0, prompt: '只回复 OK', mode: 'auto', agentIds: [executor], runs: [{ ticketId: id, agentId: executor, role: 'answer' }], createdAt: stamp }],
+      createdAt: stamp, updatedAt: stamp
+    });
+  });
+  engine.recover();
+  const list = store.list('work-conversation');
+  const grouped = list.find(row => row.id.startsWith('conv-group-'));
+  assert.ok(grouped, '同题多 Agent 的占位会话被合成一条');
+  assert.deepEqual(grouped.turns[0].runs.map(run => run.ticketId).sort(), ['t-a', 't-b', 't-c']);
+  assert.equal(list.filter(row => row.id.startsWith('conv-ticket-')).length, 0, '占位会话已清理');
+  for (const id of ['t-a', 't-b', 't-c']) assert.equal(store.get('work-ticket', id).conversationId, grouped.id);
+  // 再跑一次不会重复合并。
+  engine.recover();
+  assert.equal(store.list('work-conversation').filter(row => row.id.startsWith('conv-group-')).length, 1);
 });
 
 test('对话消息可指定模型与思考强度，并落进执行器输入', async t => {

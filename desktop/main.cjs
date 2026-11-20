@@ -15,7 +15,7 @@ const { createUpdater } = require('./updater.cjs');
 const { runUpdate } = require('./update-ui.cjs');
 const { mkdirSync, appendFileSync, readFileSync, writeFileSync, existsSync, renameSync } = require('node:fs');
 const { pathToFileURL } = require('node:url');
-const { desktopPaths, allowedNavigation, safeExternalUrl, buildSupportDiagnostic, loadServerUrl, isConnectionSender, probeCloudServer, saveCloudConnection, isLocalServerUrl, probeLocalServer, saveLocalConnection } = require('./runtime.cjs');
+const { desktopPaths, allowedNavigation, isPdfViewerUrl, safeExternalUrl, buildSupportDiagnostic, loadServerUrl, isConnectionSender, probeCloudServer, saveCloudConnection, isLocalServerUrl, probeLocalServer, saveLocalConnection } = require('./runtime.cjs');
 
 app.setName('Lagent');
 app.setAppUserModelId('com.lagent.desktop');
@@ -153,7 +153,7 @@ function makeWindow(local) {
     title: local ? '连接 Lagent 服务' : 'Lagent · Agent 工作台',
     width: local ? 760 : 1500, height: local ? 760 : 960, minWidth: local ? 520 : 1000, minHeight: local ? 620 : 700,
     ...(state ? { ...state.bounds, minWidth: Math.min(1000, state.bounds.width), minHeight: Math.min(700, state.bounds.height) } : {}),
-    backgroundColor: local ? '#f6f8fb' : '#0d1110', show: false, autoHideMenuBar: true, icon: path.join(__dirname, '..', 'build', 'icon.png'),
+    backgroundColor: local ? '#fbfaf8' : '#101010', show: false, autoHideMenuBar: true, icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, spellcheck: false, preload: path.join(__dirname, local ? 'connection-preload.cjs' : 'desktop-preload.cjs') },
   });
   if (!local) {
@@ -174,7 +174,10 @@ function makeWindow(local) {
     if (local ? url !== connectionUrl : !allowedNavigation(url, cloudOrigin)) { event.preventDefault(); const safe = safeExternalUrl(url); if (safe) void shell.openExternal(safe); }
   });
   win.webContents.on('will-redirect', (event, url) => { if (local || !allowedNavigation(url, cloudOrigin)) event.preventDefault(); });
-  win.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame && (local ? event.url !== connectionUrl : !allowedNavigation(event.url, cloudOrigin))) event.preventDefault(); });
+  win.webContents.on('will-frame-navigate', event => {
+    if (event.isMainFrame || isPdfViewerUrl(event.url)) return;
+    if (local ? event.url !== connectionUrl : !allowedNavigation(event.url, cloudOrigin)) event.preventDefault();
+  });
   win.webContents.on('will-attach-webview', event => event.preventDefault());
   win.webContents.on('render-process-gone', (_event, details) => {
     log(`界面进程退出：${details.reason}`);

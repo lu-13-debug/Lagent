@@ -1,5 +1,5 @@
-// 从 build/icon.svg 生成 Windows 图标与网页 favicon。
-// 需要本机安装 Edge（Playwright channel: msedge）。
+// 从 build/icon.svg 生成 Windows 图标、PWA 图标与网页 favicon。
+// 优先使用本机 Edge（Playwright channel: msedge），不可用时回退内置 Chromium。
 // 用法：node scripts/generate-icons.mjs
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,10 +8,16 @@ import { chromium } from '@playwright/test';
 const root = path.resolve(import.meta.dirname, '..');
 const svgPath = path.join(root, 'build', 'icon.svg');
 const svg = fs.readFileSync(svgPath, 'utf8');
-const sizes = [16, 24, 32, 48, 64, 128, 256, 512];
+const sizes = [16, 24, 32, 48, 64, 128, 192, 256, 512];
 const outDir = path.join(root, 'build');
 
-const browser = await chromium.launch({ channel: 'msedge', headless: true });
+let browser;
+try {
+  browser = await chromium.launch({ channel: 'msedge', headless: true });
+} catch {
+  console.warn('msedge 不可用，回退到 Playwright 内置 Chromium。');
+  browser = await chromium.launch({ headless: true });
+}
 try {
   for (const size of sizes) {
     const page = await browser.newPage({ viewport: { width: size, height: size }, deviceScaleFactor: 1 });
@@ -35,6 +41,16 @@ try {
 fs.copyFileSync(path.join(outDir, 'icon-512.png'), path.join(outDir, 'icon.png'));
 // 托盘图标用彩色小图，深浅任务栏都可见。
 fs.copyFileSync(path.join(outDir, 'icon-32.png'), path.join(outDir, 'tray.png'));
+
+// PWA / 移动端图标与桌面图标同源，避免两套品牌。
+const publicDir = path.join(root, 'public');
+for (const [from, to] of [
+  ['icon-192.png', 'icon-192.png'],
+  ['icon-512.png', 'icon-512.png'],
+  ['icon-512.png', 'icon-512-maskable.png'],
+]) {
+  fs.copyFileSync(path.join(outDir, from), path.join(publicDir, to));
+}
 
 // favicon 使用同一套图形，网页按需缩放。
 const favicon = svg
@@ -66,4 +82,4 @@ for (const { size, data } of pngs) {
 }
 fs.writeFileSync(path.join(outDir, 'icon.ico'), Buffer.concat([header, ...entries, ...pngs.map(item => item.data)]));
 
-console.log('图标已生成：icon.ico / icon.png / icon-16..512.png / tray.png / public/favicon.svg');
+console.log('图标已生成：icon.ico / icon.png / icon-16..512.png / tray.png / public/favicon.svg / public/icon-192|512|512-maskable.png');

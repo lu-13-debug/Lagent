@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { workError } from './domain.js';
-import { ticketTokensUsed } from './usage.js';
+import { ticketsTokensUsed } from './usage.js';
 
 // 外部 Agent 用的作用域令牌：绑定项目、只读/可写、工具白名单、调用与 Token 预算、并发、有效期。
 // 明文令牌只在签发时返回一次；库里只保存 SHA-256 哈希。
@@ -80,9 +80,7 @@ export function createMcpTokenService({ store, engine, now = Date.now, onIssue, 
 
   function usedTokens(row) {
     const ticketIds = new Set(links().filter(link => link.tokenId === row.id).map(link => link.ticketId));
-    let total = 0;
-    for (const ticketId of ticketIds) total += ticketTokensUsed(store, ticketId);
-    return total;
+    return ticketsTokensUsed(store, [...ticketIds]);
   }
 
   function publicRow(row) {

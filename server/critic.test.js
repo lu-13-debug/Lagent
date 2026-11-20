@@ -34,3 +34,28 @@ test('计划阻塞、排除阶段与待确认事项不能伪造通过',()=>{
  const plan={questions:[{id:'q',question:'核对活跃',stageIds:['activity'],metricIds:['dau'],priority:'must',status:'blocked'}],steps:[],evidenceRequirements:[],confirmations:[{id:'c',topic:'范围',question:'确认范围',blocking:true}]};
  const verdict=api.critiquePlan(plan,{task:{skippedSteps:['activity']}});assert.equal(verdict.verdict,'reject');assert.ok(verdict.issues.some(i=>i.code==='CRITIC_CONFIRMATION'));
 });
+test('六类失败模式可归因，且不改原判定',()=>{
+ assert.deepEqual([...api.FAILURE_MODES],['step_repetition','missing_clarification','task_drift','information_withholding','incomplete_verification','incorrect_verification']);
+ const report={findings:[{title:'重复发现',evidenceRefs:[]},{title:'重复发现'}],figureRefs:['missing'],coverage:{daily:{truncated:true}},recommendations:['']};
+ const out=api.critiqueResult(report);
+ for(const mode of ['step_repetition','task_drift','information_withholding','incomplete_verification','incorrect_verification']) assert.ok(out.failureModes.includes(mode),`${mode} 应被归因`);
+ assert.equal(out.verdict,'reject');
+ const plan={questions:[],steps:[],evidenceRequirements:[],confirmations:[{id:'c',topic:'范围',question:'确认范围',blocking:true}]};
+ assert.equal(api.critiquePlan(plan,{task:{}}).issues.find(i=>i.code==='CRITIC_CONFIRMATION')?.failureMode,'missing_clarification');
+});
+test('验收失败不能被评审判定掩盖，证据等级可区分',()=>{
+ const report={findings:[],recommendations:[]};
+ const passed=api.critiqueResult(report,{verification:{status:'passed',command:'npm test',expect:'exit=0',exitCode:0,at:'2026-11-18T00:00:00.000Z'}});
+ assert.equal(passed.verdict,'pass');
+ assert.equal(passed.evidence.level,'verified');
+ assert.equal(passed.evidence.verification.exitCode,0);
+ const failed=api.critiqueResult(report,{verification:{status:'failed',command:'npm test',exitCode:1,output:'x'.repeat(1000),at:'2026-11-18T00:00:00.000Z'}});
+ assert.equal(failed.verdict,'reject');
+ assert.equal(failed.evidence.level,'failed');
+ assert.equal(failed.evidence.execution,'failed');
+ assert.ok(failed.issues.some(i=>i.code==='CRITIC_VERIFY_FAILED'&&i.severity==='blocking'));
+ assert.ok(failed.evidence.verification.output.length<=300);
+ const reviewed=api.critiqueResult(report,{});
+ assert.equal(reviewed.evidence.level,'reviewed');
+ assert.equal(api.critiqueResult(undefined).evidence.level,'unreviewed');
+});

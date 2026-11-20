@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { createTask, makeEvent } from './workflow.js';
 
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
-export const OPTIONAL_STEPS = Object.freeze(['retention', 'monetization', 'insights']);
+// 与 workflow.js 中运行期 skip() 的 optionalNames 保持一致，否则运行中跳过 channel/seasonality 的任务将无法恢复。
+export const OPTIONAL_STEPS = Object.freeze(['retention', 'monetization', 'channel', 'seasonality', 'insights']);
 export function skipStepsValue(value = []) {
-  if (!Array.isArray(value) || value.length > OPTIONAL_STEPS.length || value.some(id => !OPTIONAL_STEPS.includes(id))) fail('仅允许跳过 retention、monetization、insights 可选步骤');
+  if (!Array.isArray(value) || value.length > OPTIONAL_STEPS.length || value.some(id => !OPTIONAL_STEPS.includes(id))) fail(`仅允许跳过 ${OPTIONAL_STEPS.join('、')} 可选步骤`);
   return [...new Set(value)].sort();
 }
 export function requestIdentity(value, payload) {
@@ -33,7 +34,7 @@ export function recoverTask(source, dataset, input, model) {
   task.messages = structuredClone(source.messages || []);
   if (!task.messages.some(message => message.role === 'system' && message.content === notice.content)) task.messages.push(notice);
   if (input.strategy === 'resume') {
-    const analyticalBranchesChanged = ['retention', 'monetization'].some(id => Boolean(source.skippedSteps?.includes(id)) !== task.skippedSteps.includes(id));
+    const analyticalBranchesChanged = OPTIONAL_STEPS.filter(id => id !== 'insights').some(id => Boolean(source.skippedSteps?.includes(id)) !== task.skippedSteps.includes(id));
     // Reuse only a completed deterministic prefix. Reports/model calls always run again.
     for (const step of task.steps) {
       if (['report', 'verify'].includes(step.id)) break;

@@ -216,7 +216,7 @@ export async function runMultiWorkflow(workflow, initial, dataset, signal) {
         let retryNode;
         if(parentNode&&input.decision){if(!teamResults.has(input.resultId)||teamResults.get(input.resultId).subagentId!==input.subagentId)throw Error('只能验收对应角色的已有结果');retryNode=team.review(parentNode.id,input.resultId,input.decision);persistTeam();if(input.decision==='accept')return {...teamResults.get(input.resultId),status:'accepted'};}
         const childNode=retryNode||(parentNode?team.createNode(parentNode.id,{name:child.name,dependsOn:input.dependsOn}):null);
-        if(childNode&&!team.ready(childNode.id)){team.updateNode(childNode.id,'blocked');persistTeam();return {id:childNode.id,subagentId:child.id,status:'failed',summary:'依赖节点尚未完成',findings:[],recommendations:[],tokens:0};}
+        if(childNode&&!team.ready(childNode.id)){team.updateNode(childNode.id,'blocked');persistTeam();return {id:childNode.id,subagentId:child.id,status:'failed',summary:'依赖节点尚未完成',findings:[],recommendations:[],tokens:0,trace:{taskId:initial.id,stageId:step.id,kind:'subagent',calls:0,log:'model-call'},failure:{code:'DEPENDENCY_BLOCKED',reason:'依赖节点尚未完成'}};}
         persistTeam();
         const base={id:childNode?.id||crypto.randomUUID(),parentId:parentNode?.id,depth:childNode?.depth,subagentId:child.id,name:child.name,model:child.model};
         try {
@@ -245,8 +245,8 @@ export async function runMultiWorkflow(workflow, initial, dataset, signal) {
           if(childNode&&proposals.length)team.recordProposals(childNode.id,proposals);
           if(childNode)team.updateNode(childNode.id,'completed');
           const safeProposals=proposals.map(({id,kind,status,summary})=>({id,kind,status,summary}));
-          const delegation={...base,status:'completed',...projectSubagentResult(output,new Set(report.facts.map(f=>f.id))),proposals:safeProposals,tokens:output.calls.reduce((n,c)=>n+(c.usage?.totalTokens||0),0)};if(childNode)teamResults.set(childNode.id,delegation);persistTeam();return delegation;
-        } catch(error) {if(childNode)team.updateNode(childNode.id,childSignal.aborted?'cancelled':'failed');persistTeam();if(parentNode?(signal.aborted||team.signal.aborted):(childSignal.aborted||error.name==='AbortError'))throw error;return {...base,status:'failed',summary:'子智能体不可用',findings:[],recommendations:[],tokens:0,error:'子智能体执行失败，主阶段继续'};}
+          const delegation={...base,status:'completed',...projectSubagentResult(output,new Set(report.facts.map(f=>f.id)),{trace:{taskId:initial.id,stageId:step.id,calls:output.calls.length}}),proposals:safeProposals,tokens:output.calls.reduce((n,c)=>n+(c.usage?.totalTokens||0),0)};if(childNode)teamResults.set(childNode.id,delegation);persistTeam();return delegation;
+        } catch(error) {const aborted=childSignal.aborted||error?.name==='AbortError';if(childNode)team.updateNode(childNode.id,aborted?'cancelled':'failed');persistTeam();if(parentNode?(signal.aborted||team.signal.aborted):aborted)throw error;return {...base,status:'failed',summary:'子智能体不可用',findings:[],recommendations:[],tokens:0,error:'子智能体执行失败，主阶段继续',trace:{taskId:initial.id,stageId:step.id,kind:'subagent',calls:0,log:'model-call'},failure:{code:'SUBAGENT_FAILED',reason:'子智能体执行失败，主阶段继续'}};}
       };
       const agentOptions = { ...(teamRoot?{teamCall:teamHooks(teamRoot),signal:AbortSignal.any([signal,team.signal])}:{}), ...(captured.subagents?.length ? {subagents:captured.subagents,runSubagent}:{}), retrieval, onCall: onCallFor(stage), contract: strict ? contract : undefined, checks, stage: judgeStage, context, resolveContext: () => workflow.modelHub.context(captured), task, dataset, report, previous: judgePrevious, plan, signal:teamRoot?AbortSignal.any([signal,team.signal]):signal, fetchImpl: workflow.fetchImpl || context.fetchImpl, runTool };
       let result = await runAgent(agentOptions);

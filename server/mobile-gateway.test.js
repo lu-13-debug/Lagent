@@ -474,3 +474,20 @@ test('移动端投影包含审批预览、验收与契约，不泄露原始输�
   assert.doesNotMatch(serialized, new RegExp(secret));
   assert.doesNotMatch(serialized, /executorInput|commandRaw/);
 });
+
+test('一个账号生成配对码不会作废其他账号的未领取配对码', t => {
+  const now = Date.UTC(2026, 10, 6, 10, 0, 0);
+  const dir = tempDir('mobile-pair-owner-');
+  const gateway = new MobileGateway({
+    dataDir: dir,
+    now: () => now,
+    pairTtlMs: 5 * 60 * 1000,
+    deviceTtlMs: MOBILE_DEVICE_TTL_MS,
+    maxClaimAttempts: 5
+  });
+  t.after(() => { gateway.close(); rmSync(dir, { recursive: true, force: true }); });
+  const alice = gateway.createPair('owner-a');
+  gateway.createPair('owner-b');
+  const device = gateway.claim(alice.code, 'Alice 手机', nextActor());
+  assert.match(device.deviceToken, /^[A-Za-z0-9_-]{43}$/);
+});

@@ -1,24 +1,43 @@
+/* 中英分开取字形：拉丁用本机衬线，中文固定到宋体，避免系统回退成黑体。 */
+@font-face {
+  font-family: 'Lagent Serif';
+  src: local('Sitka Text'), local('Palatino Linotype'), local('Iowan Old Style'), local('Georgia');
+  font-weight: 400 600;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+1E00-1EFF, U+2000-206F, U+20A0-20CF;
+}
+@font-face {
+  font-family: 'Lagent Serif';
+  src: local('SimSun'), local('Songti SC'), local('STSong');
+  font-weight: 400 600;
+  font-display: swap;
+  unicode-range: U+2E80-2FFF, U+3000-303F, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+
 :root {
-  font-family: 'DM Sans','Segoe UI','Microsoft YaHei',sans-serif;
-  color: #28322e;
-  background: #f8f9fb;
+  --font-sans: 'IBM Plex Sans','PingFang SC','Microsoft YaHei','Noto Sans SC',system-ui,sans-serif;
+  --font-mono: 'IBM Plex Mono','Cascadia Code','Consolas',monospace;
+  --font-serif: var(--font-sans);
+  font-family: var(--font-sans);
+  color: #111111;
+  background: #fbfaf8;
   font-synthesis: none;
   font-weight: 400;
-  --bg: #f8f9fb;
-  --paper: #fff;
-  --ink: #28322e;
-  --muted: #59685f;
-  --faint: #657167;
-  --border: #e8ece9;
-  --accent: #2d654b;
-  --accent-soft: #eaf3ec;
+  --bg: #fbfaf8;
+  --paper: #ffffff;
+  --ink: #111111;
+  --muted: #4a4842;
+  --faint: #5c5952;
+  --border: #d6d3cc;
+  --accent: #111111;
+  --accent-soft: #efefef;
   --sidebar: 218px;
   --panel: 310px;
-  --radius: 12px;
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-base: 13px;
-  --text-lg: 15px;
+  --radius: 2px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
   --text-xl: 18px;
   --heading-sm: 22px;
   --heading-md: 25px;
@@ -1817,7 +1836,7 @@ button,.button,a {
   margin-top: 7px;
 }
 .step-expanded>span:first-child {
-  font-family: 'DM Sans',monospace;
+  font-family: var(--font-mono);
   color: var(--muted);
 }
 .agent-completion-note {
@@ -2890,7 +2909,7 @@ button,.button,a {
   display: flex;
   flex-direction: column;
   gap: 9px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--muted);
   margin-bottom: 21px;
   font-weight: 500;
@@ -3375,12 +3394,12 @@ button,.button,a {
   z-index: 100;
   max-width: min(90vw,600px);
   padding: 13px 14px;
-  border: 1px solid #d3e0c6;
+  border: 1px solid var(--line, #d3e0c6);
   border-radius: 9px;
-  background: #fffffff5;
+  background: var(--surface-1, #ffffff);
   box-shadow: 0 5px 30px #3333331a;
-  color: #909090;
-  font-size: var(--text-xs);
+  color: var(--muted, #59685f);
+  font-size: var(--text-sm);
   animation: fade-in .2s;
 }
 .toast>span {
@@ -3394,8 +3413,8 @@ button,.button,a {
   padding: 2px;
 }
 .toast-error {
-  border-color: #ecd9c7;
-  color: #b29471;
+  border-color: var(--danger, #a33a33);
+  color: var(--danger, #a33a33);
 }
 .app-loading {
   height: 100vh;
@@ -3567,7 +3586,7 @@ button,.button,a {
   color: var(--muted);
 }
 .field {
-  color: #7c7c7c;
+  color: var(--text-2, #5a5a5a);
 }
 .field input,.field textarea,.field select,.dataset-select-row>select {
   color: #6e6e6e;

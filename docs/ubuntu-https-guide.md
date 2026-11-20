@@ -1,6 +1,6 @@
 # Lagent 服务器部署与 HTTPS 从零教程
 
-本教程使用 **全新的 Ubuntu 24.04 LTS 服务器、Docker Compose 和 Caddy**，适用于 1.1.0 账号版。最终获得类似 `https://analysis.example.com` 的地址，用户在 Windows 软件里连接它，就能注册和登录。
+本教程使用 **全新的 Ubuntu 24.04 LTS 服务器、Docker Compose 和 Caddy**，适用于 1.2.0 账号版。最终获得类似 `https://analysis.example.com` 的地址，用户在 Windows 软件里连接它，就能注册和登录。
 
 请替换文中的域名、公网 IP 和 SSH 用户名。**第 2–7 步在服务器执行，第 8 步在 Windows 客户端操作。** GitHub 负责分发软件，账号服务运行在你的服务器上。
 
@@ -130,13 +130,13 @@ curl -fsS https://analysis.example.com/api/runtime
 curl -sS -o /dev/null -w '%{http_code}\n' https://analysis.example.com/api/bootstrap
 ```
 
-第一个应返回包含 `mode: cloud`、`authRequired: true`、`serviceName: Lagent`、`version: 1.1.0` 的 JSON。第二个未登录时应该为 **401**，表示业务接口受登录保护。
+第一个应返回包含 `mode: cloud`、`authRequired: true`、`serviceName: Lagent`，且 `version` 与所部署版本一致（当前 1.2.0）的 JSON。第二个未登录时应该为 **401**，表示业务接口受登录保护。
 
 再用浏览器打开该 HTTPS 地址，创建账号、上传数据、运行分析；退出后创建第二个账号，确认数据和额度独立。证书、注册和登录实际正常后，才算这台服务器部署成功。
 
 ## 8. 让 Windows 软件连接
 
-用户从 [1.1.0 发布页](https://github.com/lu-13-debug/Lagent/releases/tag/v1.1.0) 安装 EXE，首次填写你的服务根地址：
+用户从 [1.2.0 发布页](https://github.com/lu-13-debug/Lagent/releases/tag/v1.2.0) 安装 EXE，首次填写你的服务根地址：
 
 ```text
 https://analysis.example.com
@@ -172,7 +172,7 @@ npm.cmd run desktop:build
 | AI 未开放 | 检查模型主机白名单，HTTPS 基础地址的主机须精确匹配。 |
 | 模型失败 | 核对基础地址、模型权限、Key、兼容格式和服务器出网。 |
 | 下载超时 | 检查出网、DNS、代理，不要关闭 TLS 校验。 |
-| 没有注册页 | 使用 1.1.0 并连接正确服务；1.0.0 是原单用户版。 |
+| 没有注册页 | 使用 1.2.0 并连接正确服务；1.0.0 是原单用户版。 |
 
 换域名时先完成新 DNS，再改 `.env`，在原目录运行：
 

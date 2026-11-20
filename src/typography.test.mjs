@@ -15,12 +15,31 @@ function contrast(a, b) {
 test('muted and faint text meet 4.5:1 on both application surfaces', () => {
   for (const fg of ['--muted', '--faint']) for (const bg of ['--bg', '--paper']) assert.ok(contrast(tokens[fg], tokens[bg]) >= 4.5, `${fg} on ${bg}: ${contrast(tokens[fg], tokens[bg]).toFixed(2)}`);
 });
-test('screen typography uses tokens without sub-11px information text', () => {
-  assert.equal(tokens['--text-xs'], '11px'); assert.equal(tokens['--text-base'], '13px');
+test('shell typography keeps 12px for badges and 13/14 for meta/body', () => {
+  const shell = postcss.parse(fs.readFileSync('src/superagent.css', 'utf8'));
+  const values = {};
+  shell.walkRules('.sa-shell', rule => rule.walkDecls(decl => { values[decl.prop] = decl.value; }));
+  assert.equal(values['--sa-fs-badge'], '12px');
+  assert.equal(values['--sa-fs-2xs'], '13px');
+  assert.equal(values['--sa-fs-xs'], '13px');
+  assert.equal(values['--sa-fs-sm'], '13px');
+  assert.equal(values['--sa-fs-base'], '14px');
+  assert.equal(values['--sa-fs-md'], '14px');
+  assert.equal(values['--sa-fs-lg'], '16px');
+  shell.walkDecls('font-size', decl => {
+    if (isPrint(decl)) return;
+    assert.doesNotMatch(decl.value, /^1[01]px$/, `${decl.parent.selector} 不应使用小字号`);
+  });
+});
+
+test('screen typography uses tokens without sub-12px information text', () => {
+  assert.equal(tokens['--text-xs'], '12px');
+  assert.equal(tokens['--text-sm'], '13px');
+  assert.equal(tokens['--text-base'], '14px');
   for (const { file, root } of roots) root.walkDecls('font-size', decl => {
     if (isPrint(decl)) return;
     assert.doesNotMatch(decl.value, /^\d+(?:\.\d+)?px$/, `${file}: ${decl.parent.selector}`);
     const token = /^var\((--[\w-]+)\)$/.exec(decl.value)?.[1];
-    if (token && /^\d+(?:\.\d+)?px$/.test(tokens[token] || '')) assert.ok(parseFloat(tokens[token]) >= 11, `${file}: ${decl.parent.selector}`);
+    if (token && /^\d+(?:\.\d+)?px$/.test(tokens[token] || '')) assert.ok(parseFloat(tokens[token]) >= 12, `${file}: ${decl.parent.selector}`);
   });
 });

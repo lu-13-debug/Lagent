@@ -11,12 +11,14 @@ const bootstrap = {
   attention: [{ ticketId: 't-1', title: ticket.title, question: '是否继续执行下一步？', options: [{ id: 'approve', label: '确认继续', action: 'approve' }], createdAt: ticket.createdAt }],
   datasets: [{ id: 'd1', name: '演示数据', rowCount: 120, source: 'demo' }],
   agents: [
+    { id: 'model', name: 'Lagent', kind: 'model', status: 'available', capabilities: [] },
     { id: 'analysis', name: '分析执行器', kind: 'analysis', status: 'available', capabilities: ['data analysis', 'reports'] },
     { id: 'terminal', name: '受控终端', kind: 'terminal', status: 'available', capabilities: ['git', 'npm'] },
     { id: 'claude-code', name: 'Claude Code', kind: 'cli', status: 'available', capabilities: ['code'] },
   ],
   tools: [{ id: 'github', name: 'GitHub', kind: 'github', status: 'connected', permissions: ['read', 'comment'] }],
-  policy: { mode: 'personal', acceptMode: 'explicit', allowedExecutors: ['analysis', 'terminal', 'claude-code'] },
+  policy: { mode: 'personal', acceptMode: 'explicit', allowedExecutors: ['model', 'analysis', 'terminal', 'claude-code'] },
+  lagent: { ready: true, configured: true, available: true },
 };
 
 test('Super-agent 指挥台：导航、派活模式、审批与移动端', async ({ page }) => {
@@ -25,6 +27,16 @@ test('Super-agent 指挥台：导航、派活模式、审批与移动端', async
   await page.route('**/api/work/events', route => route.abort());
   await page.route('**/api/work/bootstrap', route => route.fulfill({ json: bootstrap }));
   await page.route('**/api/work/command', async route => route.fulfill({ json: { ticket: { ...ticket, id: 't-new', title: '运行终端命令', status: 'working' } } }));
+  let sentBody: any = null;
+  await page.route('**/api/work/conversations', async route => {
+    if (route.request().method() !== 'POST') return route.fulfill({ json: { conversations: [] } });
+    return route.fulfill({ status: 201, json: { conversation: { id: 'conv-new-1', title: '检查 GitHub 仓库状态', goal: '检查 GitHub 仓库状态', host: 'lagent', projectId: null, participants: ['model', 'claude-code'], ticketIds: [], turnCount: 0, lastPrompt: '', lastMode: 'auto', status: 'waiting', createdAt: ticket.createdAt, updatedAt: ticket.createdAt } } });
+  });
+  await page.route('**/api/work/conversations/conv-new-1', route => route.fulfill({ json: { conversation: { id: 'conv-new-1', title: '检查 GitHub 仓库状态', goal: '检查 GitHub 仓库状态', host: 'lagent', projectId: null, participants: ['model', 'claude-code'], ticketIds: ['t-new'], turnCount: 1, lastPrompt: '检查 GitHub 仓库状态', lastMode: 'auto', status: 'working', createdAt: ticket.createdAt, updatedAt: ticket.createdAt, turns: [] }, tickets: [] } }));
+  await page.route('**/api/work/conversations/conv-new-1/messages', route => {
+    sentBody = route.request().postDataJSON();
+    return route.fulfill({ status: 201, json: { conversation: { id: 'conv-new-1', title: '检查 GitHub 仓库状态', goal: '检查 GitHub 仓库状态', host: 'lagent', projectId: null, participants: ['model', 'claude-code'], ticketIds: ['t-new'], turnCount: 1, lastPrompt: '检查 GitHub 仓库状态', lastMode: 'auto', status: 'working', createdAt: ticket.createdAt, updatedAt: ticket.createdAt }, turn: { id: 'turn-1' }, tickets: [{ ...ticket, id: 't-new', title: '运行终端命令', status: 'working', executor: 'claude-code' }] } });
+  });
   await page.route('**/api/work/tickets/t-new', route => route.fulfill({ json: { ticket: { ...ticket, id: 't-new', title: '运行终端命令', status: 'working' }, assignments: [], reports: [] } }));
   await page.route('**/api/work/tickets/t-1', route => route.fulfill({ json: { ticket, assignments: [], reports: [] } }));
   await page.route('**/api/work/tickets/t-1/actions', route => route.fulfill({ json: { ticket: { ...ticket, status: 'working' } } }));
@@ -60,10 +72,12 @@ test('Super-agent 指挥台：导航、派活模式、审批与移动端', async
   await page.getByRole('button', { name: /Claude Code/ }).first().click();
   await page.locator('.sa-composer textarea').fill('检查 GitHub 仓库状态');
   await page.getByRole('button', { name: '发送' }).click();
-  await expect(page.getByText('运行终端命令').first()).toBeVisible();
+  // Lagent 固定主控：即使只点了 Claude Code，请求里也必须带 model。
+  await expect.poll(() => sentBody?.agentIds).toEqual(['model', 'claude-code']);
 
-  // 更多菜单承载低频页面。
-  await page.getByRole('button', { name: '团队', exact: true }).click();
+  // 主导航收成 指挥台 / 项目 / 报告（工单已并入报告页），其余页面进「更多」。
+  await page.getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByRole('menuitem', { name: '团队', exact: true }).click();
   await expect(page.getByRole('heading', { name: '团队', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '更多', exact: true }).click();
   await page.getByRole('menuitem', { name: '工具', exact: true }).click();

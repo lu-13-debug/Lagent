@@ -84,6 +84,23 @@ test('每日配额耗尽后跳过该 Key，全部耗尽时报 429', async t => {
   await assert.rejects(f.pool.execute(saved.id, async () => response(200)), { status: 429 });
 });
 
+test('每日配额跨重启累计，跨天自动清零', async t => {
+  const f = fixture(t);
+  const saved = f.pool.save({ name: '配额池', strategy: 'priority', maxAttempts: 1, members: [{ credentialId: f.a.id, priority: 1, dailyCalls: 2 }] });
+  assert.equal((await f.pool.execute(saved.id, async () => response(200))).attempts, 1);
+
+  // 模拟进程重启：新的池实例仍应看到今天已用掉的 1 次配额。
+  const restarted = createProviderPool({ store: f.store, vault: f.vault, ownerId: 'alice', now: f.now });
+  assert.equal(restarted.explain(saved.id).members[0].usedToday, 1);
+  assert.equal((await restarted.execute(saved.id, async () => response(200))).attempts, 1);
+  await assert.rejects(restarted.execute(saved.id, async () => response(200)), { status: 429 });
+
+  // 跨天后重新计数。
+  const nextDay = createProviderPool({ store: f.store, vault: f.vault, ownerId: 'alice', now: () => f.now() + 24 * 60 * 60 * 1000 });
+  assert.equal(nextDay.explain(saved.id).members[0].usedToday, 0);
+  assert.equal((await nextDay.execute(saved.id, async () => response(200))).attempts, 1);
+});
+
 test('缓存亲和优先复用上次成功的 Key，cheapest 选择成本最低', async t => {
   const f = fixture(t);
   const saved = f.pool.save({ name: '亲和张', strategy: 'round-robin', maxAttempts: 2, members: [{ credentialId: f.a.id, weight: 1, costPer1k: 0.03 }, { credentialId: f.b.id, weight: 1, costPer1k: 0.01 }] });

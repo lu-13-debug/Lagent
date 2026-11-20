@@ -15,7 +15,8 @@ test('Agent 页面可以读取并发送到本机窗口', async ({ page }) => {
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: '团队', exact: true }).click();
+  await page.getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByRole('menuitem', { name: '团队', exact: true }).click();
   await expect(page.getByText('Codex 任务窗口')).toBeVisible();
   await page.getByRole('button', { name: '读取' }).click();
   await expect(page.getByText('Codex 窗口最近输出')).toBeVisible();

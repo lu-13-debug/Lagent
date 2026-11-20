@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { idempotencyKey as makeIdempotencyKey } from './transaction.js';
 
 export const EFFECT_KINDS = Object.freeze({
   launch: 'launch',
@@ -61,13 +62,22 @@ export function enqueue(store, input, options = {}) {
   const stepId = typeof input?.stepId === 'string' && input.stepId.trim() ? input.stepId.trim().slice(0, 100) : null;
   // 优先级越小越先执行：用户交互 0 > 系统回报 1 > routine 2。
   const priority = Number.isSafeInteger(input?.priority) ? Math.max(0, Math.min(9, input.priority)) : 0;
+  const attempt = Number.isSafeInteger(input?.attempt) && input.attempt > 0 ? input.attempt : 1;
+  const idempotencyKey = typeof input?.idempotencyKey === 'string' && input.idempotencyKey.trim()
+    ? input.idempotencyKey.trim().slice(0, 200)
+    : makeIdempotencyKey({ ticketId, stepId, attempt, kind, key });
   if (!input?.payload || typeof input.payload !== 'object' || Array.isArray(input.payload)) throw new TypeError('payload 必须是对象');
   const payload = clone(input.payload);
   return atomically(store, () => {
-    const existing = store.list('work-effect').find(effect => effect.kind === kind && effect.key === key);
+    const effects = store.list('work-effect');
+    const exact = effects.find(effect => effect.idempotencyKey === idempotencyKey);
+    // 兼容旧记录：没有幂等键时按 kind + key 找；同一 key 的第二次 attempt 视为新副作用。
+    const existing = exact || (attempt === 1 ? effects.find(effect => !effect.idempotencyKey && effect.kind === kind && effect.key === key) : null);
+    // 同一幂等键已经执行完，就不再产生第二次副作用。
+    if (exact && exact.status === 'done') return exact;
     const stamp = new Date(now).toISOString();
     const effect = existing
-      ? { ...existing, ticketId, stepId, priority, payload, status: 'pending', nextAt: now, lastError: null, updatedAt: stamp }
+      ? { ...existing, ticketId, stepId, priority, attempt, idempotencyKey, payload, status: 'pending', nextAt: now, lastError: null, updatedAt: stamp }
       : {
           id: randomUUID(),
           kind,
@@ -75,6 +85,8 @@ export function enqueue(store, input, options = {}) {
           ticketId,
           stepId,
           priority,
+          attempt,
+          idempotencyKey,
           payload,
           status: 'pending',
           attempts: 0,

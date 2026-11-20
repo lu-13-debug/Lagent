@@ -22,30 +22,35 @@ const bootstrap = {
 };
 
 test('多步计划一次性创建并按步骤展示', async ({ page }) => {
+  const created: any[] = [];
   await page.request.post('/api/auth/register', { data: { username: `plan${Date.now()}`, displayName: '计划测试', password: 'test-password-123' } });
   await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: '1.1.0', capabilities: { superagent: true } } }));
   await page.route('**/api/work/events', route => route.abort());
   await page.route('**/api/work/bootstrap', route => route.fulfill({ json: bootstrap }));
   await page.route('**/api/work/tickets/p-0', route => route.fulfill({ json: { ticket: step0, assignments: [], reports: [], team: null } }));
-  await page.route('**/api/work/plans', route => route.fulfill({ status: 201, json: { plan } }));
+  await page.route('**/api/work/plans', async route => {
+    created.push(route.request().postDataJSON());
+    await route.fulfill({ status: 201, json: { plan } });
+  });
   await page.route('**/api/work/plans/suggest', route => route.fulfill({ json: { steps: [{ executorId: 'codex', text: '检查 CI' }, { executorId: 'codex', text: '修复失败项', dependsOn: [0] }] } }));
   await page.route('**/api/work/plans/plan-1', route => route.fulfill({ json: { plan, tickets: [step0, step1] } }));
 
   await page.goto('/');
-  await expect(page.locator('.sa-plan-list')).toBeVisible();
-  await page.getByRole('button', { name: '任务图' }).click();
-  await expect(page.getByRole('dialog')).toContainText('依赖 1');
-  await page.getByRole('dialog').getByRole('button', { name: '关闭弹窗' }).click();
-  await page.getByRole('button', { name: '多步计划', exact: true }).click();
+  await page.getByRole('button', { name: '计划', exact: true }).click();
+  await page.locator('.sa-composer textarea').fill('修复 CI 失败');
+  await page.getByRole('button', { name: '编辑计划', exact: true }).click();
+
   const dialog = page.getByRole('dialog');
-  await expect(dialog).toContainText('每一步仍需要你审批');
+  await expect(dialog).toContainText('默认一路跑完');
   await dialog.getByLabel('计划目标').fill('修复 CI 失败');
   await dialog.getByRole('button', { name: 'AI 帮我规划' }).click();
-  await expect(dialog.getByLabel('第 1 步说明')).toHaveValue('检查 CI');
-  await expect(dialog.getByLabel('第 2 步说明')).toHaveValue('修复失败项');
-  await expect(dialog.getByLabel('第 2 步依赖')).toHaveValue('1');
-  await dialog.getByRole('button', { name: '创建计划' }).click();
+  await expect(dialog.getByLabel('第1 步说明')).toHaveValue('检查 CI');
+  await expect(dialog.getByLabel('第2 步说明')).toHaveValue('修复失败项');
+  await expect(dialog.getByLabel('第2 步依赖')).toHaveValue('1');
+  await dialog.getByRole('button', { name: '创建并执行' }).click();
 
-  await expect(page.getByRole('dialog')).toContainText('检查 CI');
-  await expect(page.getByText('多步计划第 1/2 步')).toBeVisible();
+  await expect.poll(() => created.length).toBe(1);
+  expect(created[0].goal).toBe('修复 CI 失败');
+  expect(created[0].steps).toHaveLength(2);
+  expect(created[0].steps[1].dependsOn).toEqual([0]);
 });

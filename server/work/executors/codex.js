@@ -1,5 +1,6 @@
 import {
   createCliExecutor,
+  cliDefaultMaxTurns,
   normalizeCliInput,
   parseJsonLines,
   readOnlyPrompt,
@@ -97,12 +98,12 @@ export function codexExecutor({
   store,
   cwd,
   binary = process.env.LAGENT_CODEX_CLI,
-  timeoutMs = Number(process.env.LAGENT_CLI_TIMEOUT_MS) || 1_800_000,
+  timeoutMs = Number(process.env.LAGENT_CLI_TIMEOUT_MS) || 3_600_000,
   maxOutputBytes = 8 * 1024 * 1024,
   spawnImpl,
   environment = process.env
 }) {
-  const validateInput = input => normalizeCliInput(input, { defaultMaxTurns: 12, maxTurns: 60 });
+  const validateInput = input => normalizeCliInput(input, { defaultMaxTurns: cliDefaultMaxTurns(environment), maxTurns: 120, maxPromptBytes: 64 * 1024 });
   const resolvedBinary = binary || findCodexBinary(environment);
   const buildArgs = (input, workspace) => {
     const write = input.write === true;

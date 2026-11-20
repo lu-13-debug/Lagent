@@ -8,6 +8,11 @@ function allowedNavigation(value, origin) {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && url.origin === origin; }
   catch { return false; }
 }
+// Chromium/Electron 自带 PDF 查看器会把文档放进这个扩展的页面里渲染，文件预览的 PDF 页依赖它。
+const PDF_VIEWER_ORIGIN = 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai';
+function isPdfViewerUrl(value) {
+  return typeof value === 'string' && (value === PDF_VIEWER_ORIGIN || value.startsWith(PDF_VIEWER_ORIGIN + '/'));
+}
 function safeExternalUrl(value) {
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : null; }
   catch { return null; }
@@ -98,4 +103,4 @@ async function saveCloudConnection(file, value, fetchImpl = fetch) {
   await rename(temporary, file);
   return serverUrl;
 }
-module.exports = { desktopPaths, allowedNavigation, safeExternalUrl, normalizeServerUrl, buildSupportDiagnostic, resolveServerUrl, loadServerUrl, isConnectionSender, probeCloudServer, saveCloudConnection, isLocalServerUrl, probeLocalServer, saveLocalConnection };
+module.exports = { desktopPaths, allowedNavigation, isPdfViewerUrl, safeExternalUrl, normalizeServerUrl, buildSupportDiagnostic, resolveServerUrl, loadServerUrl, isConnectionSender, probeCloudServer, saveCloudConnection, isLocalServerUrl, probeLocalServer, saveLocalConnection };

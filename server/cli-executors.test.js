@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { Store } from './store.js';
 import { codexExecutor, parseCodexOutput } from './work/executors/codex.js';
 import { claudeCodeExecutor, parseClaudeOutput } from './work/executors/claude-code.js';
-import { cliEnvironment } from './work/executors/cli.js';
+import { cliEnvironment, createCliExecutor, normalizeCliInput, writablePrompt } from './work/executors/cli.js';
 
 async function waitFor(predicate, message = '等待条件超时', timeoutMs = 2500) {
   const deadline = Date.now() + timeoutMs;
@@ -47,6 +47,38 @@ function fakeCliChild({ chunks = [], stderr = '', code = 0, hang = false } = {})
 
 const jsonl = events => events.map(event => JSON.stringify(event)).join('\n') + '\n';
 
+test('E2 执行器并发上限可由策略动态下发', t => {
+  const { dir, binary, store } = fixture(t);
+  const executor = createCliExecutor({
+    id: 'fake-cli',
+    name: 'Fake CLI',
+    kind: 'cli',
+    store,
+    cwd: dir,
+    binary,
+    maxConcurrent: 1,
+    spawnImpl: () => fakeCliChild({ hang: true }),
+    validateInput: input => ({ prompt: String(input.prompt || '').trim(), maxTurns: 1 }),
+    buildArgs: () => [],
+    parseOutput: () => ({ summary: '完成' })
+  });
+  const start = id => executor.start(
+    { id: `ticket-${id}`, command: '检查' },
+    { id: `assignment-${id}`, ticketId: `ticket-${id}`, executor: 'fake-cli' },
+    { prompt: '只读检查' }
+  );
+  const first = start('one');
+  assert.throws(() => start('two'), { status: 429 });
+  assert.equal(executor.setConcurrency(2), 2);
+  const second = start('two');
+  assert.equal(second.status, 'running');
+  // 上限调回 1 后，仍应允许已占用的任务结束，但新任务被挡住。
+  executor.setConcurrency(1);
+  executor.stop(store.get('task', first.id));
+  assert.throws(() => start('three'), { status: 429 });
+  executor.stop(store.get('task', second.id));
+});
+
 test('E2 CLI 可用性只接受显式可执行文件并校验输入边界', t => {
   const { dir, binary, store } = fixture(t);
   const missing = codexExecutor({ store, cwd: dir, binary: join(dir, 'missing.exe'), spawnImpl: () => fakeCliChild() });
@@ -58,9 +90,36 @@ test('E2 CLI 可用性只接受显式可执行文件并校验输入边界', t =>
   assert.deepEqual(codex.validateInput({ prompt: '  只读检查  ', maxTurns: 3 }), { prompt: '只读检查', maxTurns: 3 });
   assert.throws(() => codex.validateInput({ prompt: '' }), { status: 400 });
   assert.throws(() => codex.validateInput({ prompt: '检查', maxTurns: 0 }), { status: 400 });
-  assert.throws(() => codex.validateInput({ prompt: '检查', maxTurns: 61 }), { status: 400 });
-  assert.throws(() => codex.validateInput({ prompt: 'x'.repeat(17 * 1024) }), { status: 400 });
+  assert.equal(codex.validateInput({ prompt: '检查', maxTurns: 120 }).maxTurns, 120);
+  assert.throws(() => codex.validateInput({ prompt: '检查', maxTurns: 121 }), { status: 400 });
+  assert.equal(codex.validateInput({ prompt: 'x'.repeat(60 * 1024) }).prompt.length, 60 * 1024);
+  assert.throws(() => codex.validateInput({ prompt: 'x'.repeat(65 * 1024) }), { status: 400 });
   assert.throws(() => relative.start({ command: 'x' }, { id: 'a' }, { prompt: 'x' }), { status: 503 });
+});
+
+test('CLI 默认回合数足以完成大型项目，并可用环境变量调整', t => {
+  const { dir, binary, store } = fixture(t);
+  const claude = claudeCodeExecutor({ store, cwd: dir, binary, environment: { PATH: process.env.PATH } });
+  const codex = codexExecutor({ store, cwd: dir, binary, environment: { PATH: process.env.PATH } });
+  assert.equal(claude.validateInput({ prompt: '从零完成一个完整项目' }).maxTurns, 60);
+  assert.equal(codex.validateInput({ prompt: '从零完成一个完整项目' }).maxTurns, 30);
+  const tuned = claudeCodeExecutor({ store, cwd: dir, binary, environment: { PATH: process.env.PATH, LAGENT_CLI_MAX_TURNS: '45' } });
+  assert.equal(tuned.validateInput({ prompt: '从零完成一个完整项目' }).maxTurns, 45);
+  const capped = claudeCodeExecutor({ store, cwd: dir, binary, environment: { PATH: process.env.PATH, LAGENT_CLI_MAX_TURNS: '999' } });
+  assert.equal(capped.validateInput({ prompt: '任务' }).maxTurns, 60);
+});
+
+test('可写模式的提示词要求优先用命令行验证，避免自启服务耗尽回合', () => {
+  const prompt = writablePrompt({ prompt: '改三个页面', maxTurns: 60 });
+  assert.match(prompt, /不要自行启动开发服务器/);
+  assert.match(prompt, /测试、构建等命令行命令/);
+});
+
+test('CLI 单步可覆盖默认超时，且有安全上下限', () => {
+  assert.equal(normalizeCliInput({ prompt: '大项目收尾', timeoutMs: 5_400_000 }).timeoutMs, 5_400_000);
+  assert.equal(normalizeCliInput({ prompt: '普通任务' }).timeoutMs, undefined);
+  assert.throws(() => normalizeCliInput({ prompt: '太快', timeoutMs: 10 }), /60000/);
+  assert.throws(() => normalizeCliInput({ prompt: '太久', timeoutMs: 8_000_000 }), /7200000/);
 });
 
 test('E2 Codex 固定 argv、环境过滤、JSONL 脱敏与 artifact 统计', async t => {
@@ -155,6 +214,33 @@ test('E2 Claude Code 固定 stream-json argv 并只投影摘要/usage/错误', a
   });
   assert.equal(saved.artifacts.cli.stats.tools, 1);
   assert.doesNotMatch(JSON.stringify(saved.artifacts), /private chain|private-session|secret\.txt/);
+});
+
+test('E2 Claude Code 完全权限跳过逐次确认，工作区权限仍走 acceptEdits', async t => {
+  const { dir, binary, store } = fixture(t);
+  const runs = [];
+  const make = () => claudeCodeExecutor({
+    store,
+    cwd: dir,
+    binary,
+    spawnImpl: (_executable, args) => {
+      runs.push(args);
+      return fakeCliChild(jsonl([{ type: 'result', subtype: 'success', is_error: false, result: '完成' }]));
+    }
+  });
+  const run = (suffix, permission) => make().start(
+    { id: `ticket-${suffix}`, command: '改代码' },
+    { id: `assignment-${suffix}`, ticketId: `ticket-${suffix}`, executor: 'claude-code' },
+    { prompt: '实现功能', maxTurns: 3, write: true, permission }
+  );
+  const full = run('full', 'full');
+  await waitFor(() => store.get('task', full.id)?.status === 'completed');
+  assert.ok(runs[0].includes('--dangerously-skip-permissions'), 'full 应完全放行，否则 -p 模式下的命令会被静默拒绝');
+  const workspace = run('workspace', 'workspace');
+  await waitFor(() => store.get('task', workspace.id)?.status === 'completed');
+  const mode = runs[1].indexOf('--permission-mode');
+  assert.equal(runs[1][mode + 1], 'acceptEdits');
+  assert.ok(!runs[1].includes('--dangerously-skip-permissions'));
 });
 
 test('E2 CLI 截断、超时、非零退出与 Abort', async t => {

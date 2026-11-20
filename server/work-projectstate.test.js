@@ -59,4 +59,19 @@ test('执行器按工作目录能拿到项目最近改动，包含文件名', as
   assert.match(brief, /input\.js/, '改动清单里要能看到文件名');
   assert.match(brief, /不必通读|只读相关段落/, '要提示别整篇重读');
   assert.equal(projectStateOf(join(root, 'no-such-project')), '', '没有对应项目时返回空字符串');
+
+  // 改动很多时只给最近的几条，而且按「新的在前」排列，不能拿最旧的当作最新状态。
+  for (let index = 2; index <= 8; index += 1) {
+    await call('POST', `/api/work/projects/${project.id}/changes`, {
+      ticketId: `ticket-${index}`, title: `变更${index}`, files: [`file${index}.js`], executorId: 'claude-code', status: 'completed'
+    });
+  }
+  for (const change of store.list('project-change')) {
+    const index = Number(String(change.title).replace('变更', ''));
+    store.put('project-change', { ...change, createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString() });
+  }
+  const recent = projectStateOf(projectDir);
+  // 标题同时出现在标题行和摘要行，这里只保留首次出现的顺序。
+  const order = [...new Set([...recent.matchAll(/变更(\d)/g)].map(match => Number(match[1])))];
+  assert.deepEqual(order, [8, 7, 6, 5, 4, 3], '只列出最近 6 条，且新的在前');
 });

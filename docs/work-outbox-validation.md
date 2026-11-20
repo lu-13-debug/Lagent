@@ -1,6 +1,6 @@
 # Work durable launch outbox（Batch E5）
 
-日期：2026-11-06。范围：`server/work/outbox.js`、`server/work/outbox.test.js`、`server/work/engine.js` 与本文件；只改服务端和文档，未改 UI，未新增依赖，未开放写操作。
+日期：2026-11-06。范围：`server/work/outbox.js`、`server/work-outbox.test.js`、`server/work/engine.js` 与本文件；只改服务端和文档，未改 UI，未新增依赖，未开放写操作。
 
 ## 开关与兼容性
 
@@ -46,7 +46,7 @@ launch payload 只保留 `{assignmentId,datasetId,useAI}`；prompt、URL、命�
 - 定向测试：
 
 ```text
-node --test server/work/outbox.test.js server/work.test.js
+node --test server/work-outbox.test.js server/work.test.js
 # 24/24 通过（E5 8 项 + Work/既有执行器回归 16 项）
 ```
 

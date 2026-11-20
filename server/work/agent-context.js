@@ -38,8 +38,39 @@ export function taggedForAgent(items, executorId = '') {
     .map(item => item.text);
 }
 
+const charLength = value => [...String(value)].length;
+
+/** 按字符（而不是 UTF-16 码元）截断，避免把中文或 emoji 切坏。 */
+function clipChars(value, max) {
+  if (max <= 0) return '';
+  const chars = [...String(value)];
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : chars.join('');
+}
+
+function fitLines(lines, budget) {
+  const kept = [];
+  let used = 0;
+  for (const line of lines) {
+    const separator = kept.length ? 1 : 0;
+    const room = budget - used - separator;
+    if (room <= 0) break;
+    const clipped = clipChars(line, room);
+    if (!clipped) break;
+    kept.push(clipped);
+    used += separator + charLength(clipped);
+  }
+  return { lines: kept, used };
+}
+
 /**
  * 把配置档 Library 变成一段给执行器的上下文。
+ *
+ * 三层预算，从高密度到低密度：
+ * - system：工作约定，必须保留；
+ * - working：登记技能，帮助选择做法；
+ * - recall：可用 MCP 服务，只在还有余量时提示。
+ *
+ * 低优先级层先被淘汰；上层没用完的预算可以顺延给下层。
  * instructions 是真正的规则文本；skills / mcpServers 目前只是登记名称，所以只做清单提示。
  */
 export function buildLibraryContext(library, { executorId = '', maxChars = 1200 } = {}) {
@@ -47,15 +78,25 @@ export function buildLibraryContext(library, { executorId = '', maxChars = 1200 
   const skills = forAgent(library?.skills, executorId);
   const mcpServers = forAgent(library?.mcpServers, executorId);
   if (!instructions.length && !skills.length && !mcpServers.length) return '';
-  const lines = ['【工作区配置 · 来自 Lagent 配置档】'];
-  if (instructions.length) {
-    lines.push('工作约定（必须遵守）：');
-    for (const item of instructions) lines.push(`- ${item}`);
+  const header = '【工作区配置 · 来自 Lagent 配置档】';
+  if (maxChars <= charLength(header) + 1) return clipChars(header, maxChars);
+  // 减去 header 后的换行；每一层之间也各占一个换行。
+  let remaining = maxChars - charLength(header) - 1;
+  const layers = [
+    instructions.length ? ['工作约定（必须遵守）：', ...instructions.map(item => `- ${item}`)] : [],
+    skills.length ? [`登记技能：${skills.join('、')}。执行相关任务时按对应技能的做法与检查表来做。`] : [],
+    mcpServers.length ? [`可用 MCP 服务：${mcpServers.join('、')}。`] : []
+  ];
+  const kept = [];
+  for (const lines of layers) {
+    if (!lines.length || remaining <= 0) continue;
+    if (kept.length) remaining -= 1;
+    if (remaining <= 0) break;
+    const fitted = fitLines(lines, remaining);
+    kept.push(...fitted.lines);
+    remaining -= fitted.used;
   }
-  if (skills.length) lines.push(`登记技能：${skills.join('、')}。执行相关任务时按对应技能的做法与检查表来做。`);
-  if (mcpServers.length) lines.push(`可用 MCP 服务：${mcpServers.join('、')}。`);
-  const body = lines.join('\n');
-  return body.length > maxChars ? `${body.slice(0, maxChars)}…` : body;
+  return [header, ...kept].join('\n');
 }
 
 /**

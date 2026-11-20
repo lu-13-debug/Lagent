@@ -134,8 +134,8 @@ export function MobileApp() {
   const [device, setDevice] = useState<MobileDevice | null>(() => readDevice());
   if (capability === 'checking') return <main className="mob-pair"><p className="mob-loading"><RefreshCw size={16} className="mob-spin" />正在确认指挥服务…</p></main>;
   if (capability === 'off') return <main className="mob-pair">
-    <header className="mob-brand"><span className="brand-dot" /><strong>Lagent</strong><small>PERSONAL AGENT</small></header>
-    <section className="mob-pair-card"><p className="mob-eyebrow">REMOTE CONTROL</p><h1>手机指挥尚未启用</h1><p>请在电脑端启用 Work 指挥服务后再打开本页。云端账号版默认提供此能力。</p><p className="mob-note"><ShieldCheck size={13} />本地服务默认启用；若被显式关闭，可设置 <code>LAGENT_WORK_ENABLED=1</code>。</p></section>
+    <header className="mob-brand"><span className="brand-dot" /><strong>Lagent</strong><small>个人 Agent</small></header>
+    <section className="mob-pair-card"><p className="mob-eyebrow">远程指挥</p><h1>手机指挥尚未启用</h1><p>请在电脑端启用 Work 指挥服务后再打开本页。云端账号版默认提供此能力。</p><p className="mob-note"><ShieldCheck size={13} />本地服务默认启用；若被显式关闭，可设置 <code>LAGENT_WORK_ENABLED=1</code>。</p></section>
   </main>;
   if (!device) return <PairScreen onPaired={device => { saveDevice(device); setDevice(device); }} />;
   return <MobileHome device={device} onSignOut={() => { clearDevice(); setDevice(null); }} />;
@@ -159,9 +159,9 @@ function PairScreen({ onPaired }: { onPaired: (device: MobileDevice) => void }) 
     finally { setBusy(false); }
   };
   return <main className="mob-pair">
-    <header className="mob-brand"><span className="brand-dot" /><strong>Lagent</strong><small>PERSONAL AGENT</small></header>
+    <header className="mob-brand"><span className="brand-dot" /><strong>Lagent</strong><small>个人 Agent</small></header>
     <section className="mob-pair-card">
-      <p className="mob-eyebrow">REMOTE CONTROL</p>
+      <p className="mob-eyebrow">远程指挥</p>
       <h1>连接你的指挥台</h1>
       <p>在电脑端打开「设置 → 手机指挥」生成配对码，然后在这里输入。配对后即可远程查看任务、审批和下达指令。</p>
       <form onSubmit={submit}>
@@ -186,6 +186,8 @@ function MobileHome({ device, onSignOut }: { device: MobileDevice; onSignOut: ()
   const [notice, setNotice] = useState('');
   const [notifications, setNotifications] = useState<MobileNotification[]>([]);
   const [unread, setUnread] = useState(0);
+  // 弱网下连点审批/停止/重试会重复 POST；提交期间统一禁用详情页操作。
+  const [acting, setActing] = useState('');
   const { theme, toggle } = useTheme();
 
   const unauthorized = useCallback(() => onSignOut(), [onSignOut]);
@@ -254,12 +256,17 @@ function MobileHome({ device, onSignOut }: { device: MobileDevice; onSignOut: ()
   }, [detailId, device.deviceToken, refreshKey]);
 
   const act = async (ticketId: string, action: string, input?: Record<string, unknown>) => {
+    if (acting) return;
+    setActing(ticketId);
     try {
       await mobileRequest(`/tickets/${encodeURIComponent(ticketId)}/actions`, device.deviceToken, { method: 'POST', body: JSON.stringify({ action, ...(input ? { input } : {}) }) });
       setNotice('操作已提交。'); reload();
     } catch (cause) { setNotice((cause as Error).message); }
+    finally { setActing(''); }
   };
   const handoff = async (ticketId: string, executorId: string, text?: string) => {
+    if (acting) return;
+    setActing(ticketId);
     try {
       const source = tickets.find(ticket => ticket.id === ticketId);
       const executorInput = ['codex', 'claude-code'].includes(executorId) ? { prompt: text || source?.title || '继续处理上一棒任务' } : undefined;
@@ -268,6 +275,7 @@ function MobileHome({ device, onSignOut }: { device: MobileDevice; onSignOut: ()
       });
       setNotice('已交给下一棒 Agent。'); setDetailId(result.ticket.id); reload();
     } catch (cause) { setNotice((cause as Error).message); }
+    finally { setActing(''); }
   };
 
   const tickets = bootstrap?.tickets || [];
@@ -288,7 +296,7 @@ function MobileHome({ device, onSignOut }: { device: MobileDevice; onSignOut: ()
     </header>
 
     <main className="mob-content">
-      {detailId ? <TicketDetail detail={detail} ticket={detailTicket} busy={false} agents={agents} allowed={allowed} datasets={datasets} onBack={() => setDetailId('')} onOpen={setDetailId} onAct={act} onHandoff={handoff} /> : tab === 'command' ? <CommandView
+      {detailId ? <TicketDetail detail={detail} ticket={detailTicket} busy={Boolean(acting)} agents={agents} allowed={allowed} datasets={datasets} onBack={() => setDetailId('')} onOpen={setDetailId} onAct={act} onHandoff={handoff} /> : tab === 'command' ? <CommandView
         token={device.deviceToken}
         bootstrap={bootstrap} loading={loading} error={error} allowed={allowed} agents={agents} datasets={datasets}
         onSent={ticket => { setNotice('指令已提交，Agent 正在处理。'); setDetailId(ticket.id); setTab('tickets'); reload(); }}
@@ -364,7 +372,7 @@ function CommandView({ token, bootstrap, loading, error, allowed, agents, datase
   if (error && !bootstrap) return <section className="mob-empty"><AlertTriangle size={22} /><h2>无法载入指挥台</h2><p>{error}</p></section>;
 
   return <section className="mob-page">
-    <p className="mob-eyebrow">PERSONAL AGENT</p>
+    <p className="mob-eyebrow">个人 Agent</p>
     <h1>今天想让我做什么？</h1>
     <p className="mob-lead">从手机下达指令，Agent 会处理并在需要你确认时进入收件箱。</p>
     <form className="mob-composer" onSubmit={submit}>
@@ -400,7 +408,7 @@ function InboxView({ attention, tickets, datasets, notifications, unread, onOpen
 }) {
   const [selected, setSelected] = useState<Record<string, string>>({});
   return <section className="mob-page">
-    <p className="mob-eyebrow">ATTENTION</p><h1>收件箱</h1><p className="mob-lead">只有需要你决定的工单会出现在这里。</p>
+    <p className="mob-eyebrow">需要你</p><h1>收件箱</h1><p className="mob-lead">只有需要你决定的工单会出现在这里。</p>
     {attention.length ? <div className="mob-attention-list">{attention.map(item => {
       const ticket = tickets.find(candidate => candidate.id === item.ticketId);
       const needsDataset = !ticket?.executor || ticket.executor === 'analysis';
@@ -432,7 +440,7 @@ function TicketsView({ tickets, plans, loading, onOpen }: { tickets: MobileTicke
   if (loading && !tickets.length) return <p className="mob-loading"><RefreshCw size={16} className="mob-spin" />正在载入任务…</p>;
   if (!tickets.length) return <section className="mob-empty"><Terminal size={22} /><h2>还没有任务</h2><p>从指挥台发送第一条指令开始。</p></section>;
   return <section className="mob-page">
-    <p className="mob-eyebrow">TICKETS</p><h1>任务</h1>
+    <p className="mob-eyebrow">队列</p><h1>任务</h1>
     {plans.length > 0 && <div className="mob-plan-list">{plans.slice(0, 4).map(plan => <div className="mob-plan-card" key={plan.id}><div><strong>{plan.goal}</strong><span>{plan.status === 'active' ? '进行中' : plan.status === 'completed' ? '已完成' : plan.status === 'cancelled' ? '已取消' : '已失败'} · 第 {Math.min(plan.currentStep + 1, plan.totalSteps)}/{plan.totalSteps} 步</span></div><span className="mob-plan-bar" aria-hidden="true"><i style={{ width: `${Math.round((Math.min(plan.currentStep + 1, plan.totalSteps) / Math.max(1, plan.totalSteps)) * 100)}%` }} /></span></div>)}</div>}
     <ul className="mob-ticket-list">{tickets.map(ticket => <li key={ticket.id}>
       <button type="button" onClick={() => onOpen(ticket.id)}>
@@ -476,7 +484,7 @@ function TicketDetail({ detail, ticket, busy, agents, allowed, datasets, onBack,
       {ticket.handoffChildId ? <button type="button" className="mob-secondary" onClick={() => onOpen(ticket.handoffChildId!)}>查看下一棒<ChevronRight size={14} /></button> : <div className="mob-handoff-form">
         <label>目标执行器<select value={target} onChange={event => setTarget(event.target.value)}>{available.length ? available.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>) : <option value="">没有可用执行器</option>}</select></label>
         <label>补充说明<input value={note} onChange={event => setNote(event.target.value)} placeholder="可选：希望下一棒关注什么" /></label>
-        <button type="button" className="mob-primary" disabled={!target} onClick={() => void onHandoff(ticket.id, target, note.trim() || undefined)}>交接</button>
+        <button type="button" className="mob-primary" disabled={busy || !target} onClick={() => void onHandoff(ticket.id, target, note.trim() || undefined)}>交接</button>
       </div>}
     </section>}
     {ticket.parentTicketId && <div className="mob-lineage"><p>来自上一棒工单 {ticket.parentTicketId.slice(0, 8)}，当前为第 {ticket.handoffDepth ?? 1} 棒。</p>{ticket.handoffSummary && <p>上一棒摘要：{ticket.handoffSummary}</p>}</div>}
@@ -495,7 +503,7 @@ function SettingsView({ device, theme, onTheme, onSignOut }: { device: MobileDev
     finally { setBusy(false); onSignOut(); }
   };
   return <section className="mob-page">
-    <p className="mob-eyebrow">SETTINGS</p><h1>设置</h1>
+    <p className="mob-eyebrow">偏好</p><h1>设置</h1>
     <div className="mob-settings-card">
       <h2>{device.name || '我的手机'}</h2>
       <p>已与电脑端指挥台配对。设备凭证只保存在本机浏览器。</p>

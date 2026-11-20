@@ -1,7 +1,3 @@
-export const workError = (message, status = 400) => Object.assign(new Error(message), { status });
-export const actions = new Set(['approve', 'reject', 'stop', 'retry', 'resume', 'skip']);
-const transitions = { approve:['awaiting_review'], reject:['awaiting_review'], stop:['queued','working','awaiting_review','blocked','waiting'], retry:['failed','cancelled','blocked'], resume:['waiting'], skip:['failed','blocked','waiting','cancelled'] };
-export function assertWorkAction(status, action) {
-  if (!actions.has(action)) throw workError('未知工单操作');
-  if (!transitions[action].includes(status)) throw workError('当前工单状态不支持此操作',409);
-}
+// 兼容门面：规则已移到 server/application/ticket/model.js。
+// 现有代码继续 import './domain.js'，等 Phase 3 拆 engine 时再逐批改为直接引用内层。
+export * from '../application/ticket/model.js';

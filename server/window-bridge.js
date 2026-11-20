@@ -421,27 +421,3 @@ export function createWindowBridge({
 
   return { listWindows, readWindow, sendToWindow, captureWindow };
 }
-
-const defaultBridge = createWindowBridge();
-
-export function listWindows() {
-  return defaultBridge.listWindows();
-}
-
-export function readWindow(handle, options) {
-  return defaultBridge.readWindow(handle, options);
-}
-
-export function sendToWindow(handle, content, options) {
-  return defaultBridge.sendToWindow(handle, content, options);
-}
-
-export default {
-  DEFAULT_WINDOW_PROCESSES,
-  WindowBridgeError,
-  createWindowBridge,
-  listWindows,
-  readWindow,
-  sendToWindow,
-  captureWindow: (handle, options) => defaultBridge.captureWindow(handle, options)
-};

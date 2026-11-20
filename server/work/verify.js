@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { workError } from './domain.js';
 import { redactSecrets } from './risk.js';
@@ -74,7 +75,17 @@ export function normalizeVerify(input) {
 function inside(root, target) {
   const base = path.resolve(root);
   const resolved = path.resolve(base, target || '.');
-  return resolved === base || resolved.startsWith(base + path.sep);
+  if (resolved !== base && !resolved.startsWith(base + path.sep)) return false;
+  // 跟随已存在祖先的符号链接：项目内指向外部的链接不能当工作目录。
+  let baseReal;
+  try { baseReal = realpathSync(base); } catch { baseReal = base; }
+  let probe = resolved;
+  while (!existsSync(probe) && path.dirname(probe) !== probe) probe = path.dirname(probe);
+  if (!existsSync(probe)) return false;
+  let probeReal;
+  try { probeReal = realpathSync(probe); } catch { return false; }
+  const real = path.resolve(probeReal, path.relative(probe, resolved));
+  return real === baseReal || real.startsWith(baseReal + path.sep);
 }
 
 function tail(value) {
@@ -82,12 +93,17 @@ function tail(value) {
   return text.length > MAX_OUTPUT ? `…${text.slice(-MAX_OUTPUT)}` : text;
 }
 
+// cmd.exe 按空格重新分词；带空格的参数必须重新加引号，否则会拆成多个参数。
+const quoteWindowsArg = value => (/[\s"]/.test(value) ? `"${value}"` : value);
+
 function run(program, args, options) {
   return new Promise(resolve => {
     const started = Date.now();
-    // Windows 的 npm/pytest 是 .cmd/.bat，需要经 ComSpec；命令 token 已做元字符白名单校验。
-    const file = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : program;
-    const argv = process.platform === 'win32' ? ['/d', '/s', '/c', [program, ...args].join(' ')] : args;
+    // Windows 上只有 npm 是 .cmd，需要经 ComSpec；其它都是 exe，直接 execFile 才能
+    // 保留参数边界（经 cmd 重新拼接会把带空格的参数拆开）。
+    const viaCmd = process.platform === 'win32' && program === 'npm';
+    const file = viaCmd ? (process.env.ComSpec || 'cmd.exe') : program;
+    const argv = viaCmd ? ['/d', '/s', '/c', `npm ${args.map(quoteWindowsArg).join(' ')}`.trim()] : args;
     execFile(file, argv, {
       cwd: options.cwd,
       timeout: options.timeoutMs,

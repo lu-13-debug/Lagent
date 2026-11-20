@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { Check, CheckCircle2, LoaderCircle, X } from 'lucide-react';
-import type { TaskStatus } from '../types';
 
 let scrollLocks = 0;
 let bodyOverflow = '';
@@ -19,6 +18,9 @@ export function Logo({ small = false }: { small?: boolean }) {
 export function Modal({ title, subtitle, children, close, wide = false, dismissible = true }: { title: string; subtitle?: string; children: ReactNode; close: () => void; wide?: boolean; dismissible?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const canDismiss = useRef(dismissible); canDismiss.current = dismissible;
+  // 调用方几乎都传内联箭头函数；若把 close 放进依赖，父组件每次刷新都会重跑
+  // 焦点与滚动锁，弹窗内的输入焦点会被反复抢走。用 ref 取最新值，effect 只挂一次。
+  const closeRef = useRef(close); closeRef.current = close;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     lockScroll();
@@ -27,7 +29,7 @@ export function Modal({ title, subtitle, children, close, wide = false, dismissi
     items()[0]?.focus();
     const handleKey = (e: KeyboardEvent) => {
       if (e.isComposing || e.keyCode === 229) return;
-      if (e.key === 'Escape' && canDismiss.current) close();
+      if (e.key === 'Escape' && canDismiss.current) closeRef.current();
       if (e.key === 'Tab') {
         const focusable = items(); const first = focusable[0]; const last = focusable.at(-1);
         if (!focusable.length) { e.preventDefault(); panel?.focus(); }
@@ -38,7 +40,7 @@ export function Modal({ title, subtitle, children, close, wide = false, dismissi
     };
     document.addEventListener('keydown', handleKey);
     return () => { unlockScroll(); document.removeEventListener('keydown', handleKey); previous?.focus(); };
-  }, [close]);
+  }, []);
   return <div className="modal-backdrop" onMouseDown={e => { if (dismissible && e.target === e.currentTarget) close(); }}>
     <div ref={ref} tabIndex={-1} className={`modal ${wide ? 'modal-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
       <div className="modal-header"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div><button className="icon-button" onClick={close} disabled={!dismissible} aria-label="关闭弹窗"><X size={19} /></button></div>
@@ -46,8 +48,6 @@ export function Modal({ title, subtitle, children, close, wide = false, dismissi
     </div>
   </div>;
 }
-const statusNames: Record<TaskStatus, string> = { running: '分析中', awaiting_approval: '等待确认', completed: '已完成', failed: '分析失败', cancelled: '已取消' };
-export function Status({ value }: { value: TaskStatus }) { return <span className={`status-chip status-${value}`}><span />{statusNames[value]}</span>; }
 export function Spinner({ size = 16 }: { size?: number }) { return <LoaderCircle className="spin" size={size} aria-label="处理中" />; }
 export function Empty({ icon, title, description, action }: { icon: ReactNode; title: string; description: string; action?: ReactNode }) {
   return <div className="empty-state"><span className="empty-icon">{icon}</span><h3>{title}</h3><p>{description}</p>{action}</div>;

@@ -95,7 +95,12 @@ export function createApp(options = {}) {
   const publicSettings = req => {
     const hub = modelHub?.publicState();
     const profile = hub?.profiles.find(item => item.id === hub.workflow.defaultProfileId);
-    const enabled = Boolean(profile && !profile.unavailable && hub.vault.available && hub.credentials.some(credential => credential.id === profile.credentialId));
+    // 配置档可以绑定单个凭据，也可以绑定 Key 池；只看 credentialId 会把池配置误判为不可用。
+    const enabled = Boolean(profile && !profile.unavailable && hub.vault.available && (
+      profile.credentialId
+        ? hub.credentials.some(credential => credential.id === profile.credentialId)
+        : profile.poolId && hub.pools.some(pool => pool.id === profile.poolId)
+    ));
     const sessionHasKey = Boolean(getKey(req));
     return { ...settings, ...(enabled ? { model: profile.model } : {}), hasKey: enabled || sessionHasKey, sessionHasKey, workflowEnabled: enabled };
   };
@@ -121,7 +126,7 @@ export function createApp(options = {}) {
   };
   app.locals.store = store;
   app.locals.explorer = explorer;
-  app.locals.isBusy = () => explorer.size > 0 || monitor.size > 0 || activeAsync > 0 || workflow.running.size > 0 || store.list('task').some(t => ['running', 'awaiting_approval'].includes(t.status)) || Boolean(app.locals.workBusy?.());
+  app.locals.isBusy = () => explorer.size > 0 || monitor.size > 0 || activeAsync > 0 || workflow.running.size > 0 || store.busyTaskCount() > 0 || Boolean(app.locals.workBusy?.());
   let closed = false;
   app.locals.close = () => { if (closed) return; closed = true; closeWork?.(); if (ownsMobileGateway) mobileGateway?.close(); explorer.close(); monitor.close(); workflow.close(); key = ''; store.close(); };
   function ensureDemo() {
@@ -188,7 +193,7 @@ export function createApp(options = {}) {
     const analysis=analysisExecutor({store,workflow,create:({ticket,assignment,dataset,useAI})=>{
       const domain=dataset.domain||'game';assertAnalyzable(dataset,{domain});
       const snapshot=useAI?modelHub.captureWorkflow():null;
-      if(store.list('task').filter(t=>['running','awaiting_approval'].includes(t.status)).length>=(options.maxConcurrentTasks??Infinity))throw statusError('工作区并发分析已达上限',429);
+      if(store.busyTaskCount()>=(options.maxConcurrentTasks??Infinity))throw statusError('工作区并发分析已达上限',429);
       const task=createTask({title:ticket.title,goal:ticket.command,mode:'collaborative',domain,datasetId:dataset.id,useAI},dataset,settings.model);
       task.workAssignmentId=assignment.id;task.sourceProvenance=buildProvenance(dataset);
       if(snapshot)configureMultiTask(task,snapshot);
@@ -233,7 +238,8 @@ export function createApp(options = {}) {
     const executors=createExecutorRegistry([analysis,terminal,codex,claudeCode,...localAgents,browser,github,modelAgent,...(window?[window]:[]),...(workbuddy?[workbuddy]:[]),...acp]);
     mobileGateway=options.mobileGateway||new MobileGateway({dataDir:path.join(storeDir,'mobile'),now:options.now});
     ownsMobileGateway=!options.mobileGateway;
-    registerMobilePairingRoutes(app,mobileGateway,{desktopOwner:options.mobileDesktopOwner||(()=>mobileOwnerId)});
+    // 云端由外层应用统一注册配对接口，子工作区应用不重复注册同一组路由。
+    if(!options.cloud)registerMobilePairingRoutes(app,mobileGateway,{desktopOwner:options.mobileDesktopOwner||(()=>mobileOwnerId)});
     closeWork=registerWork(app,store,executors,{isSessionValid:options.isSessionValid,onConnect:options.onTaskEventConnect,mobileGateway,mobileOwnerId,onMobileEventConnect:options.onMobileEventConnect,workspace:workCwd,brain:workBrain,planner:options.workPlanner??(async input=>{try{return await modelHub.suggestWorkPlan(input);}catch(error){try{return await agentPlanner(input);}catch(fallbackError){throw fallbackError?.message?Object.assign(error,{message:`${error.message}；本机 Agent 也无法拆解：${fallbackError.message}`}):error;}}}),windowBridge,providerRegistry,ownerId:options.userId||'local',allowFilesystemBrowser:!options.cloud,mcpTokenIndex:options.mcpTokenIndex});
   }
   app.get('/api/runtime', (_req, res) => res.json({ mode: 'local', authRequired: false, serviceName: 'Lagent', version: APP_VERSION, capabilities: taskCapabilities(enableWork) }));
@@ -245,7 +251,7 @@ export function createApp(options = {}) {
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/metric-catalog', (req, res) => res.json({ metrics: getMetricCatalog(selectedDomain(req.query.domain)) }));
   app.get('/api/bootstrap', (req, res) => res.json({ project: { ...PROJECT, ...(options.cloud ? { description: '多 Agent 指挥台 · 云端个人工作空间' } : {}) }, tasks: store.list('task').map(taskView), datasets: store.list('dataset').map(publicDataset), ...store.walletSnapshot(), skills: SKILLS, domains: DOMAINS, settings: publicSettings(req) }));
-  const checkDatasetLimit = () => { if (store.list('dataset').length >= (options.maxDatasets ?? Infinity)) throw statusError('每个账号最多保存 20 份数据，请先删除不再使用的数据', 429); };
+  const checkDatasetLimit = () => { if (store.list('dataset').length >= (options.maxDatasets ?? Infinity)) throw statusError(`每个账号最多保存 ${options.maxDatasets ?? 20} 份数据，请先删除不再使用的数据`, 429); };
   app.post('/api/datasets/demo', (_req, res) => {
     checkDatasetLimit();
     const dataset = generateDemo(); store.put('dataset', dataset); res.status(201).json({ dataset: publicDataset(dataset) });
@@ -329,7 +335,7 @@ export function createApp(options = {}) {
       options.assertModelSettings?.(settings);
       if (!requestKey) throw statusError('尚未设置 API Key；请先配置模型或切换为本地分析');
     }
-    if (store.list('task').filter(t => ['running', 'awaiting_approval'].includes(t.status)).length >= (options.maxConcurrentTasks ?? Infinity)) throw statusError('每个账号最多同时运行 2 个任务，请先完成或取消现有任务', 429);
+    if (store.busyTaskCount() >= (options.maxConcurrentTasks ?? Infinity)) throw statusError(`每个账号最多同时运行 ${options.maxConcurrentTasks ?? 2} 个任务，请先完成或取消现有任务`, 429);
     const task = store.createTask(candidate);
     if (task.id !== candidate.id) return res.json(taskWallet(task));
     if (task.useAI && !multiSnapshot) workflow.captureModel(task.id, { settings, key: requestKey, fetchImpl: options.fetchImpl || fetch, timeoutMs: options.modelTimeoutMs || DEFAULT_MODEL_TIMEOUT_MS });
@@ -380,7 +386,7 @@ export function createApp(options = {}) {
       options.assertModelSettings?.(settings);
       if (!requestKey) throw statusError('尚未设置当前会话的 API Key；请先配置模型或切换为本地分析');
     }
-    if (store.list('task').filter(task => ['running', 'awaiting_approval'].includes(task.status)).length >= (options.maxConcurrentTasks ?? Infinity)) throw statusError('每个账号最多同时运行 2 个任务，请先完成或取消现有任务', 429);
+    if (store.busyTaskCount() >= (options.maxConcurrentTasks ?? Infinity)) throw statusError(`每个账号最多同时运行 ${options.maxConcurrentTasks ?? 2} 个任务，请先完成或取消现有任务`, 429);
     const candidate = Object.assign(recoverTask(source, dataset, input, settings.model), identity);
     candidate.sourceProvenance = buildProvenance(dataset);
     if (multiSnapshot) configureMultiTask(candidate, multiSnapshot);
@@ -465,9 +471,10 @@ export function createApp(options = {}) {
     } catch (error) { throw statusError(redact(error.message, requestKey), 400); }
     finally { res.off('close', abort); }
   }));
+  // /api 的兜底必须在更具体的 /api/mobile 之前声明，否则移动端 404 永远走不到。
+  app.use('/api/mobile', (_req, res) => res.status(404).json({ error: '移动接口不存在' }));
   app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在' }));
   const dist = options.distDir || path.join(root, 'dist');
-  app.use('/api/mobile', (_req, res) => res.status(404).json({ error: '移动接口不存在' }));
   if (options.serveStatic !== false && existsSync(dist)) {
     app.use(express.static(dist, { index: false }));
     app.use((req, res, next) => { if (req.method === 'GET' && req.accepts('html')) res.sendFile(path.join(dist, 'index.html')); else next(); });
@@ -477,9 +484,12 @@ export function createApp(options = {}) {
     let message = error.message || '服务内部错误';
     if (error instanceof multer.MulterError) message = error.code === 'LIMIT_FILE_SIZE' ? '单个文件不能超过 20MB；请按时间范围拆分文件、只导出必要列，或压缩日期范围后重试' : `上传受限：最多 ${DATASET_LIMITS.maxFiles} 个文件、单文件 20MB；请按时间范围拆分、只导出必要列或压缩日期范围后重试`;
     if (error.type === 'entity.parse.failed') { status = 400; message = 'JSON 请求格式无效'; }
-    if (status >= 500) message = '服务处理失败，请检查数据或重试；敏感错误细节已隐藏';
+    if (status >= 500 && error.expose !== true) message = '服务处理失败，请检查数据或重试；敏感错误细节已隐藏';
     const issues = status < 500 && Array.isArray(error.issues) ? JSON.parse(JSON.stringify(error.issues, (_field, value) => typeof value === 'string' ? redact(value, getKey(req)) : value)) : undefined;
-    res.status(status).json({ error: redact(message, getKey(req)), ...(issues ? { issues } : {}), ...(isModelErrorCode(error.code) ? { code: error.code } : {}) });
+    // LAGENT_* 是工作台自己的前置条件错误（如模型未配置），前端要据此给出设置入口；
+    // 只透出白名单前缀，避免把任何内部错误码当公开契约。
+    const publicCode = isModelErrorCode(error.code) || (typeof error.code === 'string' && /^LAGENT_[A-Z_]+$/.test(error.code)) ? error.code : '';
+    res.status(status).json({ error: redact(message, getKey(req)), ...(issues ? { issues } : {}), ...(publicCode ? { code: publicCode } : {}) });
   });
   return app;
 }

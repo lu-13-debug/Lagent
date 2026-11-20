@@ -1,4 +1,4 @@
-import { createCliExecutor, normalizeCliInput, parseJsonLines, readOnlyPrompt, sanitizeText, writablePrompt } from './cli.js';
+import { cliDefaultMaxTurns, createCliExecutor, normalizeCliInput, parseJsonLines, readOnlyPrompt, sanitizeText, writablePrompt } from './cli.js';
 import { findClaudeCodeCli } from './discover.js';
 
 const MAX_SUMMARY = 6000;
@@ -79,12 +79,14 @@ export function claudeCodeExecutor({
   store,
   cwd,
   binary = process.env.LAGENT_CLAUDE_CLI,
-  timeoutMs = Number(process.env.LAGENT_CLI_TIMEOUT_MS) || 1_800_000,
+  timeoutMs = Number(process.env.LAGENT_CLI_TIMEOUT_MS) || 3_600_000,
   maxOutputBytes = 8 * 1024 * 1024,
   spawnImpl,
   environment = process.env
 }) {
-  const validateInput = input => normalizeCliInput(input, { defaultMaxTurns: 12, maxTurns: 60 });
+  // 30 回合对「多页面 UI 改造 + 构建」这类任务经常不够；Claude Code 默认给 60，
+  // Codex 保持 30。仍可用 LAGENT_CLI_MAX_TURNS 覆盖。
+  const validateInput = input => normalizeCliInput(input, { defaultMaxTurns: cliDefaultMaxTurns(environment, 60), maxTurns: 120, maxPromptBytes: 64 * 1024 });
   const detected = binary ? { binary, prefix: [] } : findClaudeCodeCli(environment);
   const resolvedBinary = binary || detected?.binary;
   const binaryPrefix = detected?.prefix || [];
@@ -101,7 +103,10 @@ export function claudeCodeExecutor({
     if (input.model) args.push('--model', input.model);
     // Claude Code 原生支持 --effort（low/medium/high/xhigh/max）。
     if (input.effort && input.effort !== 'default') args.push('--effort', input.effort);
-    args.push('--permission-mode', input.write === true ? 'acceptEdits' : 'plan');
+    // 「完全权限」用跳过确认的档位；工作区用 acceptEdits（文件改动自动放行，其余仍需确认）。
+    // 之前写死 acceptEdits，用户在界面上选的 full 完全没生效。
+    if (input.write === true && input.permission === 'full') args.push('--dangerously-skip-permissions');
+    else args.push('--permission-mode', input.write === true ? 'acceptEdits' : 'plan');
     args.push(input.write === true ? writablePrompt(input) : readOnlyPrompt(input));
     return args;
   };

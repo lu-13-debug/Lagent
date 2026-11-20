@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { modelExecutor } from './work/executors/model.js';
+import { modelExecutor, safeSearchExpression } from './work/executors/model.js';
 
 function memoryStore() {
   const rows = new Map();
@@ -11,6 +11,7 @@ function memoryStore() {
     put: (kind, body) => { rows.set(`${kind}:${body.id}`, structuredClone(body)); return body; },
     get: (kind, id) => (rows.has(`${kind}:${id}`) ? structuredClone(rows.get(`${kind}:${id}`)) : null),
     list: kind => [...rows.entries()].filter(([key]) => key.startsWith(`${kind}:`)).map(([, body]) => structuredClone(body)),
+    delete: (kind, id) => { rows.delete(`${kind}:${id}`); },
   };
 }
 
@@ -650,4 +651,29 @@ test('project_changes 工具把项目改动清单交给模型，不必整篇重�
   const text = done.activity.map(item => `${item.text || ''} ${item.detail || ''}`).join('\n');
   assert.match(text, /看改动|项目现状/);
   assert.match(text, /input\.js/, '清单里要能看出别人动了哪些文件');
+});
+
+test('服务重启后失效的确认请求返回 false，而不是把工单写成执行中', () => {
+  const store = memoryStore();
+  const executor = modelExecutor({ store, cwd: process.cwd(), context: () => null });
+  // 进程内没有挂起的确认（服务重启/任务已结束）：引擎必须知道这次审批没法继续。
+  assert.equal(executor.approve({ id: 'gone', status: 'awaiting_approval' }, { decision: 'allow' }), false);
+  assert.equal(executor.reject({ id: 'gone', status: 'awaiting_approval' }), false);
+});
+
+test('重启后遗留的 running 任务由 resume 让路，交给引擎重新开跑', () => {
+  const store = memoryStore();
+  const executor = modelExecutor({ store, cwd: process.cwd(), context: () => null });
+  store.put('task', { id: 'stale', status: 'running', activity: [] });
+  assert.equal(executor.resume(store.get('task', 'stale')), false);
+  assert.equal(store.get('task', 'stale'), null, '旧循环记录要清掉，start 才能重新创建');
+});
+
+test('搜索正则拒绝灾难性回溯写法，普通关键字照常可用', () => {
+  assert.ok(safeSearchExpression('useEffect') instanceof RegExp);
+  assert.ok(safeSearchExpression('foo.*bar') instanceof RegExp);
+  for (const pattern of ['(a+)+', '(x*)*', '(a)\\1']) {
+    assert.throws(() => safeSearchExpression(pattern), { status: 400 }, pattern);
+  }
+  assert.throws(() => safeSearchExpression('a'.repeat(201)), { status: 400 });
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createProjectMemory, summarizeExecution } from './work/project-memory.js';
+import { createProjectMemory, deriveFailureLesson, summarizeExecution } from './work/project-memory.js';
 
 function fakeDb() {
   const rows = new Map();
@@ -77,4 +77,37 @@ test('项目记忆：本地总结带出失败原因与改动文件', () => {
   assert.match(result.summary, /测试没跑通/);
   assert.deepEqual(result.files, ['server/stats.js', 'src/pages/stats.tsx']);
   assert.match(result.openQuestions[0], /上次执行失败/);
+});
+test('失败反思：同类合并、按执行器生成 playbook，并从普通摘要中排除', () => {
+  const db = fakeDb();
+  const memory = createProjectMemory(db, { now: () => '2026-11-18T10:00:00.000Z' });
+  memory.add('p1', { title: '修复登录', summary: 'token 校验提前到路由层', files: ['server/auth.js'], executorId: 'codex' });
+  const first = memory.reflect('p1', { executorId: 'codex', failureCode: 'failed', summary: '命令超时，重新跑也没用', title: '构建' });
+  assert.equal(first.kind, 'reflection');
+  assert.ok([...first.lesson].length <= 120);
+  const second = memory.reflect('p1', { executorId: 'codex', failureCode: 'failed', summary: '命令超时，重新跑也没用', title: '构建' });
+  assert.equal(second.id, first.id);
+  assert.equal(second.occurrences, 2);
+  memory.reflect('p1', { executorId: 'claude-code', failureCode: 'failed', summary: '权限被拒', title: '部署' });
+
+  const lessons = memory.playbook('p1', { executorId: 'codex' });
+  assert.equal(lessons.length, 1);
+  assert.match(lessons[0].lesson, /超时/);
+  assert.match(memory.playbookDigest('p1', { executorId: 'codex' }), /失败教训/);
+  const digest = memory.digest('p1');
+  assert.match(digest, /修复登录/);
+  assert.doesNotMatch(digest, /失败反思|命令超时/);
+
+  assert.equal(memory.playbook('p1', { executorId: 'codex' })[0].positive, 0);
+  assert.equal(memory.reinforce('p1', { executorId: 'codex', success: true, scopes: ['server'] }), 1);
+  assert.equal(memory.playbook('p1', { executorId: 'codex' })[0].positive, 1);
+});
+
+test('失败反思：按信号生成短教训，并限制在 120 字内', () => {
+  assert.match(deriveFailureLesson({ summary: 'Claude Code error_max_turns' }), /拆小/);
+  assert.match(deriveFailureLesson({ summary: '命令超时' }), /缩小/);
+  assert.match(deriveFailureLesson({ summary: 'ENOENT: no such file or directory' }), /路径/);
+  assert.match(deriveFailureLesson({ summary: '验收未通过：npm test' }), /验收/);
+  assert.ok([...deriveFailureLesson({ summary: 'x'.repeat(500) })].length <= 120);
+  assert.match(deriveFailureLesson({ summary: '普通失败', status: 'blocked' }), /阻塞项/);
 });

@@ -12,6 +12,7 @@ import { createRoutineService, ROUTINE_KINDS } from './routines.js';
 import { createMcpBridge, loadMcpServers, normalizeMcpServers } from './mcp-client.js';
 import { createImNotifier } from './im-notify.js';
 import { createLiveService, SENSITIVE_TITLE } from './live-session.js';
+import { PROJECT_FILE_CSP, PROJECT_IMAGE_CSP } from './project-files.js';
 
 // 执行器（特别是模型 Agent）需要知道「这个工作目录属于哪个项目、最近改了什么」。
 // 执行器比引擎先创建，所以这里按 workspace 登记引擎，事后反查。
@@ -51,12 +52,28 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   if(allowFilesystemBrowser)app.get('/api/work/files',(req,res)=>res.json(engine.listDirectory({path:req.query?.path})));
   app.post('/api/work/projects',(req,res)=>{const result=engine.importProject(req.body);res.status(result.created?201:200).json(result);});
   app.get('/api/work/projects/:id',(req,res)=>res.json({project:engine.getProject(req.params.id)}));
+  // 项目文件：列表与搜索只读元数据；预览按格式返回文本/表格/幻灯片，原始文件走 file 接口。
+  app.get('/api/work/projects/:id/files',(req,res)=>res.json(engine.projectFiles(req.params.id,req.query?.path)));
+  app.get('/api/work/projects/:id/files/search',(req,res)=>res.json(engine.searchProjectFiles(req.params.id,req.query?.q)));
+  app.get('/api/work/projects/:id/file/preview',async(req,res)=>res.json(await engine.projectFilePreview(req.params.id,req.query?.path)));
+  app.get('/api/work/projects/:id/file',(req,res)=>{
+    const file=engine.projectFileSource(req.params.id,req.query?.path);
+    const download=req.query?.download==='1';
+    const encoded=encodeURIComponent(file.name).replace(/['()*]/g,char=>`%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+    res.setHeader('X-Content-Type-Options','nosniff');
+    res.setHeader('Cache-Control','no-store');
+    res.setHeader('Content-Disposition',`${download?'attachment':'inline'}; filename="preview"; filename*=UTF-8''${encoded}`);
+    if(file.mime.startsWith('text/html'))res.setHeader('Content-Security-Policy',PROJECT_FILE_CSP);
+    if(file.mime==='image/svg+xml')res.setHeader('Content-Security-Policy',PROJECT_IMAGE_CSP);
+    res.setHeader('Content-Type',file.mime);
+    res.sendFile(file.absolute);
+  });
   app.delete('/api/work/projects/:id',(req,res)=>res.json(engine.deleteProject(req.params.id)));
   app.patch('/api/work/projects/:id',(req,res)=>res.json({project:engine.renameProject(req.params.id,req.body)}));
   app.get('/api/work/projects/:id/sessions',(req,res)=>res.json({sessions:engine.scanProjectSessions(req.params.id,req.query?.executor)}));
   app.post('/api/work/projects/:id/sessions',(req,res)=>res.status(201).json(engine.importProjectSession(req.params.id,req.body)));
   app.post('/api/work/projects/:id/chats',(req,res)=>res.status(201).json(engine.createProjectChat(req.params.id,req.body)));
-  app.post('/api/work/projects/:id/dispatch',(req,res)=>res.status(201).json(engine.projectDispatch(req.params.id,req.body)));
+  app.post('/api/work/projects/:id/dispatch',async(req,res)=>res.status(201).json(await engine.projectDispatch(req.params.id,req.body)));
   app.post('/api/work/projects/:id/teamwork',(req,res)=>res.status(201).json(engine.teamworkStart(req.params.id,req.body)));
   app.get('/api/work/projects/:id/teamworks',(req,res)=>res.json({teamworks:engine.teamworkList(req.params.id)}));
   app.get('/api/work/teamworks/:id',(req,res)=>res.json({teamwork:engine.teamworkGet(req.params.id)}));
@@ -96,8 +113,26 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     if(req.body&&Object.hasOwn(req.body,'collaborators'))return res.json({chat:engine.setProjectChatCollaborators(req.params.id,req.body)});
     return res.json({chat:engine.renameProjectChat(req.params.id,req.body)});
   });
-  app.post('/api/work/chats/:id/messages',(req,res)=>res.status(201).json({ticket:engine.projectChatMessage(req.params.id,req.body)}));
+  // 旧入口保留为受管回合的包装：项目对话会先惰性转成 Lagent 会话，再走同一套主控流程。
+  app.post('/api/work/chats/:id/messages',(req,res)=>{
+    const tickets=engine.projectChatMessages(req.params.id,req.body);
+    res.status(201).json({ticket:tickets[0],tickets,conversationId:tickets[0]?.conversationId||null});
+  });
+  app.post('/api/work/chats/:id/materialize',(req,res)=>res.json(engine.materializeProjectChat(req.params.id)));
   app.get('/api/work/chats/:id/tickets',(req,res)=>res.json({tickets:engine.projectChatTickets(req.params.id)}));
+  // 会话：用户可见的唯一对话容器。每个被选中的 Agent 只是会话里的一次 run。
+  app.get('/api/work/conversations',(req,res)=>res.json(engine.listConversations(Number(req.query?.limit)||60)));
+  app.post('/api/work/conversations',(req,res)=>res.status(201).json(engine.createConversation(req.body||{})));
+  app.post('/api/work/conversations/import',(req,res)=>res.json(engine.importConversations(req.body||{})));
+  app.get('/api/work/conversations/:id',(req,res)=>res.json(engine.getConversation(req.params.id)));
+  app.patch('/api/work/conversations/:id',(req,res)=>res.json(engine.renameConversation(req.params.id,req.body||{})));
+  app.delete('/api/work/conversations/:id',(req,res)=>res.json(engine.deleteConversation(req.params.id)));
+  app.post('/api/work/conversations/:id/messages',async(req,res)=>res.status(201).json(await engine.conversationMessage(req.params.id,req.body||{})));
+  app.post('/api/work/conversations/:id/turns/:turnId/synthesize',(req,res)=>res.status(201).json(engine.conversationSynthesize(req.params.id,req.params.turnId,req.body||{})));
+  // 报告中心：默认按会话聚合最近结论；工单页仍是执行记录索引。
+  app.get('/api/work/reports',(req,res)=>res.json(engine.listReports(req.query||{})));
+  app.get('/api/work/reports/:id',(req,res)=>res.json(engine.getReport(req.params.id)));
+  app.get('/api/work/reports/:id/markdown',(req,res)=>res.type('text/markdown; charset=utf-8').send(engine.reportMarkdown(req.params.id)));
   app.get('/api/work/projects/:id/brief',(req,res)=>res.json({brief:engine.projectBrief(req.params.id)}));
   app.put('/api/work/projects/:id/brief',(req,res)=>res.json({brief:engine.saveProjectBrief(req.params.id,req.body)}));
   app.get('/api/work/projects/:id/brief.md',(req,res)=>res.json(engine.projectBriefMarkdown(req.params.id)));
@@ -109,6 +144,23 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/projects/:id/library/apply',(req,res)=>res.json(engine.libraryApply(req.params.id,req.body||{})));
   app.get('/api/work/projects/:id/library/syncs',(req,res)=>res.json({syncs:engine.librarySyncs(req.params.id)}));
   app.post('/api/work/projects/:id/library/rollback',(req,res)=>res.json(engine.libraryRollback(req.params.id,req.body?.syncId)));
+  // 技能中心：推荐清单、预览、安装与生命周期；插件交给本机 Claude Code CLI。
+  app.get('/api/work/skills',(_req,res)=>res.json(engine.listSkills()));
+  app.post('/api/work/skills/preview',async(req,res)=>{res.json(await engine.previewSkill(req.body||{}));});
+  app.post('/api/work/skills/install',(req,res)=>res.json(engine.installSkill(req.body||{})));
+  app.post('/api/work/skills/:id/update',async(req,res)=>{res.json(await engine.updateSkill(req.params.id));});
+  app.post('/api/work/skills/:id/enable',(req,res)=>res.json(engine.enableSkill(req.params.id)));
+  app.post('/api/work/skills/:id/disable',(req,res)=>res.json(engine.disableSkill(req.params.id)));
+  app.delete('/api/work/skills/:id',(req,res)=>res.json(engine.removeSkill(req.params.id)));
+  app.get('/api/work/plugins',async(req,res)=>{res.json(await engine.listPlugins({refresh:req.query?.refresh==='1'}));});
+  app.post('/api/work/plugins/preview',async(req,res)=>{res.json(await engine.pluginDetails(req.body?.name));});
+  app.post('/api/work/plugins/marketplaces',async(req,res)=>{res.json(await engine.addPluginMarketplace(req.body?.source,{scope:req.body?.scope}));});
+  app.delete('/api/work/plugins/marketplaces/:name',async(req,res)=>{res.json(await engine.removePluginMarketplace(req.params.name));});
+  app.post('/api/work/plugins/install',async(req,res)=>{res.json(await engine.installPlugin(req.body?.name,{marketplace:req.body?.marketplace,scope:req.body?.scope,acceptCommand:req.body?.acceptCommand}));});
+  app.post('/api/work/plugins/:id/enable',async(req,res)=>{res.json(await engine.enablePlugin(req.params.id,{scope:req.body?.scope}));});
+  app.post('/api/work/plugins/:id/disable',async(req,res)=>{res.json(await engine.disablePlugin(req.params.id,{scope:req.body?.scope}));});
+  app.post('/api/work/plugins/:id/update',async(req,res)=>{res.json(await engine.updatePlugin(req.params.id));});
+  app.delete('/api/work/plugins/:id',async(req,res)=>{res.json(await engine.uninstallPlugin(req.params.id));});
   app.get('/api/work/projects/:id/changes',(req,res)=>res.json({changes:engine.projectChanges(req.params.id)}));
   app.post('/api/work/projects/:id/changes',(req,res)=>res.status(201).json({change:engine.recordProjectChange(req.params.id,req.body)}));
   app.delete('/api/work/projects/:id/changes/:changeId',(req,res)=>res.json(engine.deleteProjectChange(req.params.id,req.params.changeId)));
@@ -200,6 +252,8 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.get('/api/work/plans/:id',(req,res)=>res.json({plan:engine.getPlan(req.params.id)}));
   app.get('/api/work/plans/:id/sheet',(req,res)=>res.json(engine.planSheet(req.params.id)));
   app.post('/api/work/plans/:id/cancel',(req,res)=>res.json({plan:engine.cancelPlan(req.params.id)}));
+  app.get('/api/work/plans/:id/compensations',(req,res)=>res.json({compensations:engine.planCompensations(req.params.id)}));
+  app.post('/api/work/plans/:id/rollback',async(req,res)=>res.json(await engine.rollbackPlan(req.params.id)));
   app.post('/api/work/command',(req,res)=>res.status(201).json({ticket:engine.command(req.body)}));
   app.get('/api/work/tickets/:id',(req,res)=>res.json(engine.detail(req.params.id)));
   app.get('/api/work/tickets/:id/trace',(req,res)=>res.json(engine.ticketTrace(req.params.id)));

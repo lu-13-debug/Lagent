@@ -41,3 +41,5 @@ data-public/
 # 原型截图与本地临时对话记录
 prototype/
 tmp-claude.jsonl
+# 设计稿原始截图（约 79MB），只保留本地，不进入仓库
+docs/ui-schemes/

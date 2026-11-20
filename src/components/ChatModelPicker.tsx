@@ -109,20 +109,21 @@ export function CliModelPicker({ executorId, executorName, value, onChange, disa
       .catch(() => { if (alive) setModels([]); });
     return () => { alive = false; };
   }, [executorId]);
-  const listId = `cli-models-${executorId.replace(/[^a-z0-9-]/gi, '')}`;
+  // 只允许从已配置的模型里选；旧版本手工填过的值保留为选项，避免下拉框显示空白。
+  const options = value.model && !models.includes(value.model) ? [...models, value.model] : models;
   return <div className="sa-modelbar" role="group" aria-label="模型设置">
-    <label className="sa-chip sa-chip-input">
+    <label className="sa-chip">
       <Bot size={12} />
       <span>模型</span>
-      <input
+      <select
         aria-label={`${executorName || executorId} 使用的模型`}
-        list={listId}
         value={value.model}
         disabled={disabled}
-        placeholder="默认（CLI 自带）"
         onChange={event => onChange({ ...value, model: event.target.value })}
-      />
-      <datalist id={listId}>{models.map(name => <option key={name} value={name} />)}</datalist>
+      >
+        <option value="">默认（CLI 自带）</option>
+        {options.map(name => <option key={name} value={name}>{name}</option>)}
+      </select>
     </label>
     <label className="sa-chip">
       <Sparkles size={12} />

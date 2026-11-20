@@ -38,6 +38,13 @@ function executableStatus(binary) {
   }
 }
 
+// CLI 的默认回合数。大型项目（从零建站、完整游戏）12 回合不够用，
+// 会在快完成时因 error_max_turns 中止；默认给 30，可用环境变量调整。
+export function cliDefaultMaxTurns(environment = process.env, fallback = 30) {
+  const value = Number(environment?.LAGENT_CLI_MAX_TURNS);
+  return Number.isInteger(value) && value >= 1 && value <= 120 ? value : fallback;
+}
+
 export function normalizeCliInput(input, { defaultMaxTurns = 5, maxTurns = 20, maxPromptBytes = 16 * 1024 } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw statusError('executorInput 必须为结构化对象');
   const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
@@ -60,6 +67,13 @@ export function normalizeCliInput(input, { defaultMaxTurns = 5, maxTurns = 20, m
   // 思考强度：不同 CLI 的原生档位不同，由各执行器自己决定是否拼进参数。
   const effort = typeof input.effort === 'string' ? input.effort.trim() : '';
   if (effort && !/^[a-z]{2,10}$/.test(effort)) throw statusError('effort 无效');
+  // 权限档位：read / workspace / full。CLI 自己决定怎么映射；不认识就按 workspace 处理。
+  const permission = ['read', 'workspace', 'full'].includes(input.permission) ? input.permission : '';
+  // 单步执行可以覆盖默认超时：大型项目一步跑 30 分钟以上很常见，但也不允许无限挂起。
+  const timeoutMs = input.timeoutMs === undefined ? 0 : input.timeoutMs;
+  if (timeoutMs !== 0 && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 60_000 || timeoutMs > 7_200_000)) {
+    throw statusError('timeoutMs 必须是 60000-7200000 的整数');
+  }
   return {
     prompt,
     maxTurns: turns,
@@ -67,6 +81,8 @@ export function normalizeCliInput(input, { defaultMaxTurns = 5, maxTurns = 20, m
     ...(resume ? { resume } : {}),
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
+    ...(permission ? { permission } : {}),
+    ...(timeoutMs ? { timeoutMs } : {}),
     ...(input.write === true ? { write: true } : {})
   };
 }
@@ -86,6 +102,9 @@ export function writablePrompt(input) {
     '项目修改模式：你与用户共享当前项目目录。可以读取、编辑、创建文件；修改必须限定在当前项目目录内。',
     '不得删除项目目录之外的文件，不得执行 git push、发布、部署，不得安装全局依赖，不得发起与当前任务无关的网络请求。',
     '先阅读项目现状，再动手修改；完成后用简短摘要列出改动文件与验证方式。',
+    // 大型 UI 任务里，Agent 常把回合预算耗在自启开发服务器和浏览器自检上，最后被回合上限截断；
+    // 命令行测试/构建足以验证，浏览器复核应由外层或专门的验收步骤负责。
+    '验证优先使用测试、构建等命令行命令；不要自行启动开发服务器、浏览器自动化或桌面自动化，除非任务明确要求。',
     `最多 ${input.maxTurns} 个回合。`,
     '',
     '用户任务：',
@@ -192,6 +211,7 @@ export function createCliExecutor({
   timeoutMs = 300_000,
   maxOutputBytes = 512 * 1024,
   maxConcurrent = 2,
+
   spawnImpl = spawn,
   environment = process.env,
   validateInput,
@@ -213,12 +233,14 @@ export function createCliExecutor({
   const binaryInfo = executableStatus(binary);
   const prefixArgs = Array.isArray(binaryPrefix) ? binaryPrefix.filter(item => typeof item === 'string' && item && !item.includes('\0')) : [];
   const controllers = new Map();
+  // 并发名额可由引擎按策略动态下发；缺省仍保留执行器自己的保守值。
+  let concurrency = Number.isSafeInteger(maxConcurrent) && maxConcurrent >= 1 ? maxConcurrent : 2;
   const persist = task => { store.put('task', task); return task; };
 
   const emptyController = () => ({
     done: false, stdout: [], stderr: [], outputBytes: 0, stdoutBytes: 0, stderrBytes: 0,
     truncated: false, timedOut: false, startedAt: Date.now(), timer: null, child: null,
-    lineBuffer: '', streamDirty: false, flusher: null
+    timeoutMs: 0, lineBuffer: '', streamDirty: false, flusher: null
   });
 
   // CLI 的 stdout 是 JSON Lines，关掉进程才解析一次的话，界面上十几分钟只看到「还在执行」。
@@ -322,7 +344,7 @@ export function createCliExecutor({
     // 超时是最需要说清的原因：它会盖掉 stderr 里的噪声（比如 codex 那句 "Reading additional input from stdin..."），
     // 并且明确告诉用户「文件可能已经改了一半」，否则只会看到一句看不懂的报错。
     if (controller.timedOut) {
-      const minutes = Math.max(1, Math.round((timeoutMs / 60000) * 10) / 10);
+      const minutes = Math.max(1, Math.round(((controller.timeoutMs || timeoutMs) / 60000) * 10) / 10);
       parsed.error = `${name} 执行超过 ${minutes} 分钟被中止，已停止等待；它可能已经改了一部分文件，先看产出再决定重试还是手动收尾。`;
     } else if (stderrNoise(parsed.error)) {
       parsed.error = '';
@@ -379,7 +401,8 @@ export function createCliExecutor({
     } catch (error) {
       return finalize(task, emptyController(), { error });
     }
-    const controller = { ...emptyController(), child };
+    const runTimeoutMs = input.timeoutMs || timeoutMs;
+    const controller = { ...emptyController(), child, timeoutMs: runTimeoutMs };
     controllers.set(task.id, controller);
     // 外部 CLI 一跑就是十几分钟，界面上只写「CLI执行中」用户完全不知道在干什么。
     // 每分钟往 activity 里补一条心跳，详情面板就能看到它还在干活。
@@ -409,7 +432,7 @@ export function createCliExecutor({
       if (controller.done) return;
       controller.timedOut = true;
       kill(child);
-    }, timeoutMs);
+    }, runTimeoutMs);
     controller.timer.unref?.();
     return task;
   }
@@ -424,6 +447,13 @@ export function createCliExecutor({
     validateInput,
     // 计划/指挥里只给一句话时，按「只读提问」补成结构化输入。
     defaultInput: text => validateInput({ prompt: text }),
+    // 引擎在策略变化时调用：让设置页的并发数真正约束执行器，而不是永远卡在 2。
+    setConcurrency(value) {
+      if (!Number.isSafeInteger(value) || value < 1 || value > 16) throw new TypeError('执行器并发必须是 1-16 的整数');
+      concurrency = value;
+      return concurrency;
+    },
+    concurrencyLimit: () => concurrency,
     start(ticket, assignment, input) {
       if (!binaryInfo.available) throw statusError(`${name} 未配置可用的可执行文件`, 503);
       const normalized = validateInput(input?.executorInput ?? input);
@@ -435,7 +465,7 @@ export function createCliExecutor({
       }
       const prior = store.get('task', assignment.id);
       if (prior) return prior;
-      if (controllers.size >= maxConcurrent) throw statusError(`${name} 并发执行已达上限`, 429);
+      if (controllers.size >= concurrency) throw statusError(`${name} 并发执行已达上限`, 429);
       const stamp = new Date().toISOString();
       const task = {
         id: assignment.id,

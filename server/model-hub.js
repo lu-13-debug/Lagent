@@ -6,6 +6,7 @@ import { listModels } from './model-catalog.js';
 import { modelCapabilities, validateEffort } from './model-protocol.js';
 import { modelCallEntry } from './model-usage.js';
 import { STAGE_DEFINITIONS, BUILTIN_SKILLS, defaultWorkflow, validateWorkflow, skillHash, skillContract } from './workflow-config.js';
+import { normalizeVerify } from './work/verify.js';
 
 const field = (value, label, max, required = true) => {
   if (typeof value !== 'string' || value.trim().length > max || (required && !value.trim())) throw vaultError(`${label}须为${required ? '非空' : ''}文本，最多${max}字`);
@@ -49,21 +50,24 @@ export function parseWorkPlanReply(reply, executors, datasets = [], windows = []
     const dependsOn = [...new Set(rawDependsOn)].filter(item => Number.isInteger(item) && item >= 0 && item < index);
     if (rawDependsOn.length !== dependsOn.length) throw vaultError(`规划第 ${index + 1} 步依赖无效`, 502);
     if (dependsOn.length > 3) throw vaultError(`规划第 ${index + 1} 步依赖过多`, 502);
+    const scope = Array.isArray(step?.scope)
+      ? step.scope.filter(item => typeof item === 'string' && item.trim() && item.trim().length <= 120).slice(0, 6).map(item => item.trim())
+      : [];
     let verify;
     if (step?.verify !== undefined) {
       if (!step.verify || typeof step.verify !== 'object' || Array.isArray(step.verify)) throw vaultError(`规划第 ${index + 1} 步的 verify 无效`, 502);
-      const command = typeof step.verify.command === 'string' ? step.verify.command.trim() : '';
-      if (!command || command.length > 500) throw vaultError(`规划第 ${index + 1} 步的验收命令无效`, 502);
-      verify = { command };
-      if (typeof step.verify.cwd === 'string' && step.verify.cwd.trim()) verify.cwd = step.verify.cwd.trim().slice(0, 300);
-      if (typeof step.verify.expect === 'string' && step.verify.expect.trim()) verify.expect = step.verify.expect.trim().slice(0, 200);
-      if (step.verify.timeoutMs !== undefined) verify.timeoutMs = step.verify.timeoutMs;
+      try {
+        const normalized = normalizeVerify(step.verify);
+        verify = { command: normalized.command, cwd: normalized.cwd, expect: normalized.expect, timeoutMs: normalized.timeoutMs };
+      } catch (error) {
+        throw vaultError(`规划第 ${index + 1} 步的验收命令无效：${error.message}`, 502);
+      }
     }
-    return { executorId, text, ...(reason ? { reason } : {}), ...(datasetId ? { datasetId } : {}), ...(windowTarget ? { executorInput: { handle: windowTarget.handle, process: windowTarget.process, submit: true } } : {}), ...(dependsOn.length ? { dependsOn } : {}), ...(verify ? { verify } : {}) };
+    return { executorId, text, ...(reason ? { reason } : {}), ...(datasetId ? { datasetId } : {}), ...(windowTarget ? { executorInput: { handle: windowTarget.handle, process: windowTarget.process, submit: true } } : {}), ...(scope.length ? { scope } : {}), ...(dependsOn.length ? { dependsOn } : {}), ...(verify ? { verify } : {}) };
   });
 }
 
-const PLAN_SYSTEM_PROMPT = '你是 Lagent 的任务规划器。把用户目标拆成 2–5 个步骤，只输出严格 JSON，不执行工具、不调用命令。步骤可以并行：没有 dependsOn 的步骤会同时进入待审批；dependsOn 只能引用更早步骤的编号（从 0 开始），最多 3 个，禁止环，后续步骤用依赖表达先后。executorId 只能从给定列表选择；每步 text 是给该执行器的一句可执行指令，最多 300 字；reason 可选，最多 100 字。analysis 步骤如指定 datasetId 必须来自 datasets；codex/claude-code 目标是只读的；id 以 -acp 结尾的步骤通过 ACP 协议驱动另一个只读 Agent，适合独立分析或交叉审查。窗口步骤必须使用 executorId=window，并在 executorInput 中给出 windows 列表里的 handle。不得输出密钥、凭据、URL 参数或原始数据。实现/验证类步骤可选带 verify：{"command":"npm test","expect":"exit=0"}；命令只能用 npm test / npm run test|build|lint|typecheck / pytest / go test / cargo test / dotnet test / node --test，不要写 shell 管道、重定向或变量。格式：{"steps":[{"executorId":"...","text":"...","reason":"...","dependsOn":[0],"verify":{"command":"npm test","expect":"exit=0"}}]}';
+const PLAN_SYSTEM_PROMPT = '你是 Lagent 的任务规划器。把用户目标拆成 2–5 个步骤，只输出严格 JSON，不执行工具、不调用命令。步骤可以并行：没有 dependsOn 的步骤会同时进入待审批；dependsOn 只能引用更早步骤的编号（从 0 开始），最多 3 个，禁止环，后续步骤用依赖表达先后。executorId 只能从给定列表选择；每步 text 是给该执行器的一句可执行指令，最多 300 字；reason 可选，最多 100 字。analysis 步骤如指定 datasetId 必须来自 datasets。claude-code、codex、model 都可以读写项目文件；要只读分析必须在 text 里明确写「只读、不修改文件」，要改文件时用 scope 标出允许改动的目录。id 以 -acp 结尾的步骤通过 ACP 协议驱动另一个只读 Agent，适合独立分析或交叉审查。窗口步骤必须使用 executorId=window，并在 executorInput 中给出 windows 列表里的 handle。不得输出密钥、凭据、URL 参数或原始数据。实现/验证类步骤可选带 verify：{"command":"npm test","expect":"exit=0"}；命令只能用 npm test / npm run test|build|lint|typecheck|check|coverage / pytest / python -m pytest / go test / cargo test / dotnet test / node --test / git diff --check，不要写 shell 管道、重定向或变量。格式：{"steps":[{"executorId":"...","text":"...","reason":"...","scope":["src/**"],"dependsOn":[0],"verify":{"command":"npm test","expect":"exit=0"}}]}';
 
 export function registerModelHub(app, { store, ownerId = 'local', masterKey, assertModelSettings, fetchImpl = fetch }) {
   ownerId = String(ownerId);
@@ -149,7 +153,8 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     return freeze({ version: 1, ownerId, capturedAt: new Date().toISOString(), defaultProfileId: config.defaultProfileId, stages });
   };
   const suggestWorkPlan = async ({ goal, executors, agents, datasets, windows, project } = {}) => {
-    const goalText = field(goal, '计划目标', 300);
+    // 与引擎的 4000 字上限保持一致，避免长目标被模型规划器静默拒绝后才回退本机 Agent。
+    const goalText = field(goal, '计划目标', 4000);
     const allowed = [...new Set((Array.isArray(executors) ? executors : []).filter(id => typeof id === 'string' && id.trim() && id.length <= 60).map(id => id.trim()))].slice(0, 12);
     if (!allowed.length) throw vaultError('没有可用于规划的执行器');
     const agentList = (Array.isArray(agents) ? agents : []).filter(item => object(item) && allowed.includes(item.id)).slice(0, 12)
@@ -322,7 +327,20 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
   app.delete('/api/model-profiles/:id', route((req, res) => {
     profileById(req.params.id); const config = workflow();
     if (config.defaultProfileId === req.params.id) config.defaultProfileId = null;
-    for (const stage of Object.values(config.stages)) if (stage.profileId === req.params.id) stage.profileId = null;
+    for (const stage of Object.values(config.stages)) {
+      if (stage.profileId === req.params.id) stage.profileId = null;
+      // 子智能体与评审员也引用模型配置；不清理会让后续 captureWorkflow 校验失败，
+      // 该账号的所有 AI 任务都无法再创建。
+      if (Array.isArray(stage.subagents)) {
+        stage.subagents = stage.subagents.filter(item => item.profileId !== req.params.id);
+        if (!stage.subagents.length) delete stage.subagents;
+      }
+      if (stage.review?.reviewerProfileIds) {
+        const ids = stage.review.reviewerProfileIds.filter(id => id !== req.params.id);
+        if (ids.length) stage.review = { reviewerProfileIds: ids };
+        else delete stage.review;
+      }
+    }
     store.config(profileKey, storedProfiles().filter(item => item.id !== req.params.id));
     // 删掉默认配置后补一个，避免整个工作流突然「没有默认模型」。
     if (!config.defaultProfileId) { const rest = storedProfiles(); if (rest.length) config.defaultProfileId = rest[0].id; }
@@ -377,7 +395,13 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     if (!previous) throw vaultError('Skill不存在', 404);
     if (previous.builtin) throw vaultError('内置Skill不可删除');
     const config = workflow();
-    for (const [stageId, stage] of Object.entries(config.stages)) if (stage.skillId === previous.id) stage.skillId = STAGE_DEFINITIONS.find(([id]) => id === stageId)[3];
+    for (const [stageId, stage] of Object.entries(config.stages)) {
+      if (stage.skillId === previous.id) stage.skillId = STAGE_DEFINITIONS.find(([id]) => id === stageId)[3];
+      // 子智能体也能绑定独立 Skill；删掉 Skill 后同样要解除引用，否则校验失败。
+      if (Array.isArray(stage.subagents)) {
+        for (const item of stage.subagents) if (item.skillId === previous.id) delete item.skillId;
+      }
+    }
     store.config(skillKey, privateSkills().filter(skill => skill.id !== previous.id)); store.config(workflowKey, config); res.json({ ok: true });
   }));
   return { publicState, captureWorkflow, context, contextForProfile, suggestWorkPlan, reviewerContext, subagentContext: (stage,index) => { if(stage.ownerId !== ownerId || !['insights','report'].includes(stage.stageId) || !Number.isInteger(index) || !stage.subagents?.[index]) throw vaultError('子智能体快照无效',403); return context({...stage.subagents[index],stageId:stage.stageId}); } };
