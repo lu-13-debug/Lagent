@@ -2,3 +2,7 @@
     encode zstd gzip
     reverse_proxy app:3002
 }
+
+www.{$LAGENT_DOMAIN} {
+    redir https://{$LAGENT_DOMAIN}{uri} permanent
+}
