@@ -134,10 +134,12 @@ function AuthPage({ runtime, notice, onAuthenticated, attribution }: { runtime: 
   const usernameRef = useRef<HTMLInputElement>(null);
   const phoneRef = useRef<HTMLInputElement>(null);
   const register = mode === 'register';
+  const registrationClosed = runtime.registrationOpen === false;
+  useEffect(() => { if (registrationClosed && mode === 'register') setMode('login'); }, [registrationClosed, mode]);
   const phoneMode = method === 'phone';
   useEffect(() => { (phoneMode ? phoneRef : usernameRef).current?.focus(); }, [mode, method]);
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
-  function switchMode(next: 'login' | 'register') { setMode(next); setError(''); setAuthNotice(''); setPassword(''); setConfirmPassword(''); setCode(''); setNeedCode(false); }
+  function switchMode(next: 'login' | 'register') { if (next === 'register' && registrationClosed) return; setMode(next); setError(''); setAuthNotice(''); setPassword(''); setConfirmPassword(''); setCode(''); setNeedCode(false); }
   function switchMethod(next: 'phone' | 'password') { setMethod(next); setError(''); setAuthNotice(''); setCode(''); setNeedCode(false); }
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -191,7 +193,7 @@ function AuthPage({ runtime, notice, onAuthenticated, attribution }: { runtime: 
         <div className="auth-service"><span className="online-dot" /><span>已连接云端服务<strong>{window.location.host}</strong></span></div>
       </section>
       <section className="auth-card" aria-labelledby="auth-title">
-        <div className="auth-switch" aria-label="账号操作"><button type="button" aria-pressed={!register} className={!register ? 'selected' : ''} onClick={() => switchMode('login')} disabled={busy}>登录</button><button type="button" aria-pressed={register} className={register ? 'selected' : ''} onClick={() => switchMode('register')} disabled={busy}>创建账号</button></div>
+        {!registrationClosed && <div className="auth-switch" aria-label="账号操作"><button type="button" aria-pressed={!register} className={!register ? 'selected' : ''} onClick={() => switchMode('login')} disabled={busy}>登录</button><button type="button" aria-pressed={register} className={register ? 'selected' : ''} onClick={() => switchMode('register')} disabled={busy}>创建账号</button></div>}
         {phoneAvailable && <div className="auth-switch auth-method-switch" aria-label="登录方式"><button type="button" aria-pressed={phoneMode} className={phoneMode ? 'selected' : ''} onClick={() => switchMethod('phone')} disabled={busy}>手机号验证码</button><button type="button" aria-pressed={!phoneMode} className={!phoneMode ? 'selected' : ''} onClick={() => switchMethod('password')} disabled={busy}>账号密码</button></div>}
         <h2 id="auth-title">{title}</h2><p className="auth-subtitle">{subtitle}</p>
         {notice && <p className="auth-notice" role="status">{notice}</p>}

@@ -145,7 +145,8 @@ export function createCloudApp(options = {}) {
   if (enableWork) registerMobilePairingRoutes(app, mobileGateway, { desktopOwner: req => requireSession(req).user.id });
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/runtime', (_req, res) => {
-    const runtime = { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: APP_VERSION, modelHosts: policy.allowed, capabilities: { ...taskCapabilities(workEnabled(options)), reportSharing: true } };
+    // 注册关闭时客户端要能提前知道，否则登录页还会摆一个点了必然报错的「创建账号」。
+    const runtime = { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: APP_VERSION, registrationOpen: process.env.LAGENT_REGISTRATION !== 'closed', modelHosts: policy.allowed, capabilities: { ...taskCapabilities(workEnabled(options)), reportSharing: true } };
     // 只在启用手机号验证时增加字段，保持旧部署的运行时契约不变。
     if (phoneAuth.required) Object.assign(runtime, { phoneRequired: true, smsConfigured: phoneAuth.configured });
     res.json(runtime);
