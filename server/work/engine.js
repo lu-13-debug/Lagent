@@ -3965,14 +3965,23 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       }
       for(const ticket of db.list('ticket').filter(t=>['working','awaiting_review'].includes(t.status))){
         const assignment=latest(ticket.id);if(!assignment)continue;
-        const active=executorFor(assignment);
-        const task=active?.get?.(assignment.sessionId);
-        if(task){
-          sync(privateTicket(ticket.id),assignment,task);
-          // resume 返回 false：执行器确认旧循环已丢失并让路，重新开跑原工单。
-          if(active.resume?.(task)===false&&ticket.status==='working')start(privateTicket(ticket.id),{},assignment);
+        // 中断的工单恢复时要重新拉起执行器，而执行器可能已经不在了（本机节点离线、
+        // CLI 被卸载）。这类失败只能收尾那一张工单，不能让 recover 抛出——
+        // 否则整个工作区都建不起来，该账号之后每个请求都只会看到这条错误。
+        try{
+          const active=executorFor(assignment);
+          const task=active?.get?.(assignment.sessionId);
+          if(task){
+            sync(privateTicket(ticket.id),assignment,task);
+            // resume 返回 false：执行器确认旧循环已丢失并让路，重新开跑原工单。
+            if(active.resume?.(task)===false&&ticket.status==='working')start(privateTicket(ticket.id),{},assignment);
+          }
+          else if(ticket.status==='working')start(privateTicket(ticket.id),{},assignment);
+        }catch(error){
+          try{
+            settleLaunchFailure({ticketId:ticket.id,payload:{assignmentId:assignment.id}},error,error?.status===400?'blocked':'failed');
+          }catch(inner){audit(ticket.id,'recover','engine','failed',String(inner?.message||inner).slice(0,200));}
         }
-        else if(ticket.status==='working')start(privateTicket(ticket.id),{},assignment);
       }
       reconcile();
       recoverPlans();

@@ -237,6 +237,34 @@ test('Work服务重启后待确认工单同步为失败并可重试', async t =>
   assert.equal(f.starts.length, 2);
 });
 
+test('启动恢复时执行器已不可用，只收尾那张工单，不会让工作区启动失败', t => {
+  const f = fixture(t, {
+    executorFactory: base => createExecutorRegistry([
+      { ...base, id: 'analysis', name: '数据分析', kind: 'analysis', available: true },
+      {
+        id: 'claude-code', name: 'Claude Code CLI', kind: 'cli', available: false,
+        validateInput: value => value,
+        start: () => { throw new Error('不可用的执行器不该被调用'); }
+      }
+    ])
+  });
+  const stamp = new Date().toISOString();
+  f.store.put('work-ticket', {
+    id: 't-unavailable', title: '被中断的任务', command: '改一下导出按钮', status: 'working', executor: 'claude-code', createdAt: stamp, updatedAt: stamp
+  });
+  f.store.put('work-assignment', {
+    id: 'a-unavailable', ticketId: 't-unavailable', executor: 'claude-code', status: 'working', sessionId: 'old-session', startedAt: stamp, createdAt: stamp
+  });
+
+  // 之前这里会把 400 一路抛到 createApp，导致该账号的每个请求都只看到「执行器当前不可用」。
+  assert.doesNotThrow(() => f.engine.recover());
+  const ticket = f.store.get('work-ticket', 't-unavailable');
+  assert.equal(ticket.status, 'blocked');
+  assert.match(ticket.summary, /启动受阻/);
+  assert.equal(f.store.get('work-assignment', 'a-unavailable').status, 'blocked');
+  assert.doesNotThrow(() => f.engine.bootstrap(), '工作区其余功能必须照常可用');
+});
+
 test('Work event 在写入事务内裁剪为每 ticket 500 条及全局 5000 条', t => {
   const f = fixture(t, { datasets: [] });
   const store = workStore(f.store, () => {});
