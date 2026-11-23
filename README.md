@@ -26,6 +26,8 @@ npm.cmd run cloud
 
 手机端见 **[手机端说明](docs/mobile-app.md)**：`/m` 是响应式指挥台（PWA 可直接加到主屏幕），`mobile/android/` 是对应的 Android WebView 外壳，用配对码连接云端账号。
 
+桌面端连云端时会自动启动 **[本机执行节点](docs/local-agent-node.md)**，把你电脑上的 Claude Code、Codex 注册到账号下，云端的多 Agent 模式因此可以用上本机的 CLI。
+
 云端密码使用随机盐散列，登录凭据使用 HttpOnly Cookie。旧会话模式的 API Key 只保留在内存，退出或服务重启后需重新填写；新版持久凭据库见文末配置说明。上传数据和报告保存在所连接的服务器。每次云端模型请求仅向用户指定且管理员已允许的供应商发送业务背景与聚合指标。
 
 ## Windows 桌面版

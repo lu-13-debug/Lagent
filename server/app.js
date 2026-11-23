@@ -17,6 +17,8 @@ import { githubExecutor } from './work/executors/github.js';
 import { modelExecutor } from './work/executors/model.js';
 import { workbuddyExecutor } from './work/executors/workbuddy.js';
 import { loadMcpServers } from './work/mcp-client.js';
+import { createNodeHub, loadNodeSecret } from './work/node-hub.js';
+import { registerNodeRoutes } from './work/node-routes.js';
 import { registerMemory } from './memory-api.js';
 import express from 'express';
 import multer from 'multer';
@@ -126,9 +128,9 @@ export function createApp(options = {}) {
   };
   app.locals.store = store;
   app.locals.explorer = explorer;
-  app.locals.isBusy = () => explorer.size > 0 || monitor.size > 0 || activeAsync > 0 || workflow.running.size > 0 || store.busyTaskCount() > 0 || Boolean(app.locals.workBusy?.());
+  app.locals.isBusy = () => explorer.size > 0 || monitor.size > 0 || activeAsync > 0 || workflow.running.size > 0 || store.busyTaskCount() > 0 || Boolean(app.locals.workBusy?.()) || Boolean(app.locals.nodeHub?.hasNodes?.());
   let closed = false;
-  app.locals.close = () => { if (closed) return; closed = true; closeWork?.(); if (ownsMobileGateway) mobileGateway?.close(); explorer.close(); monitor.close(); workflow.close(); key = ''; store.close(); };
+  app.locals.close = () => { if (closed) return; closed = true; try { app.locals.nodeHub?.close(); } catch { /* 节点清理失败不阻塞关闭。 */ } closeWork?.(); if (ownsMobileGateway) mobileGateway?.close(); explorer.close(); monitor.close(); workflow.close(); key = ''; store.close(); };
   function ensureDemo() {
     let dataset = store.list('dataset').find(x => x.source === 'demo');
     if (!dataset) { dataset = generateDemo(); store.put('dataset', dataset); }
@@ -177,6 +179,9 @@ export function createApp(options = {}) {
     }
     next();
   });
+  // 本机执行节点的上报体带任务快照，比普通接口大；在全局 128kb 解析器之前挂载，避免被截断。
+  const nodeRouter = express.Router();
+  app.use('/api/node', nodeRouter);
   app.use(express.json({ limit: '128kb' }));
   app.use('/api', (req, res, next) => {
     if (hasDeviceToken(req) && req.path.startsWith('/work/')) return res.status(401).json({ error: '设备 token 仅可用于移动 Work API' });
@@ -243,6 +248,15 @@ export function createApp(options = {}) {
     // 云端由外层应用统一注册配对接口，子工作区应用不重复注册同一组路由。
     if(!options.cloud)registerMobilePairingRoutes(app,mobileGateway,{desktopOwner:options.mobileDesktopOwner||(()=>mobileOwnerId)});
     closeWork=registerWork(app,store,executors,{isSessionValid:options.isSessionValid,onConnect:options.onTaskEventConnect,mobileGateway,mobileOwnerId,onMobileEventConnect:options.onMobileEventConnect,workspace:workCwd,brain:workBrain,planner:options.workPlanner??(async input=>{try{return await modelHub.suggestWorkPlan(input);}catch(error){try{return await agentPlanner(input);}catch(fallbackError){throw fallbackError?.message?Object.assign(error,{message:`${error.message}；本机 Agent 也无法拆解：${fallbackError.message}`}):error;}}}),windowBridge,providerRegistry,ownerId:options.userId||'local',allowFilesystemBrowser:!options.cloud,mcpTokenIndex:options.mcpTokenIndex});
+    // 本机执行节点：桌面端连上来后，它电脑上的 CLI 会作为执行器出现在这个工作区里。
+    const nodeSecret = options.nodeSecret || loadNodeSecret(storeDir, process.env);
+    const nodeHub = createNodeHub({ store, registry: executors, engine: app.locals.workEngine });
+    app.locals.nodeHub = nodeHub;
+    app.locals.nodeSecret = nodeSecret;
+    // 云端由顶层应用统一挂载 /api/node，因为节点要先登录才找得到自己的工作区。
+    if (!options.cloud) {
+      registerNodeRoutes(nodeRouter, { resolveHub: () => nodeHub, authenticate: () => options.userId || 'local', secret: nodeSecret });
+    }
   }
   app.get('/api/runtime', (_req, res) => res.json({ mode: 'local', authRequired: false, serviceName: 'Lagent', version: APP_VERSION, capabilities: taskCapabilities(enableWork) }));
   app.get('/api/model-usage', (req, res) => {

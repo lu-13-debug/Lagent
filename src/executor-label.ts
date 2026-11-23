@@ -25,8 +25,12 @@ export const EXECUTOR_LABELS: Record<string, string> = {
   manual: '人工补录'
 };
 
+// 本机执行节点的执行器 id 形如 node-1a2b3c4d-claude-code；显示名和图标要退回它对应的那个 Agent。
+export const NODE_EXECUTOR_PREFIX = /^node-[a-z0-9]{1,8}-/;
+export const baseExecutorId = (id: string) => id.replace(NODE_EXECUTOR_PREFIX, '');
+
 export function executorLabel(id: string, agents?: { id: string; name?: string }[]): string {
   if (!id) return '';
   const named = agents?.find(agent => agent.id === id)?.name;
-  return named || EXECUTOR_LABELS[id] || id;
+  return named || EXECUTOR_LABELS[id] || EXECUTOR_LABELS[baseExecutorId(id)] || id;
 }

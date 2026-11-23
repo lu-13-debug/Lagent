@@ -20,7 +20,7 @@ import { AccountModal } from './AccountModal';
 import { SettingsModal } from './ModelSettings';
 import { Logo, Modal, Toast } from './ui';
 import { STATUS_LABELS } from '../status';
-import { EXECUTOR_LABELS as executorNames } from '../executor-label';
+import { baseExecutorId, EXECUTOR_LABELS as executorNames } from '../executor-label';
 import '../superagent.css';
 
 type ShellView = 'command' | 'project' | 'projects' | 'agents' | 'runs' | 'reports' | 'tools' | 'skills' | 'memory' | 'settings';
@@ -99,7 +99,9 @@ const BRAND_MARKS: Record<string, { text: string; bg: string; icon?: string; mon
   codegeex: { text: 'GX', bg: '#3859ff', icon: 'codegeex.png' },
   workbuddy: { text: 'WB', bg: '#0ea5a4', icon: 'workbuddy.svg' }
 };
-const brandOf = (id: string) => BRAND_MARKS[id.replace(/-(acp|desktop)$/, '')] || null;
+const brandOf = (id: string) => BRAND_MARKS[baseExecutorId(id).replace(/-(acp|desktop)$/, '')] || null;
+// 本机节点连上来时，执行器 id 可能带 node-<短id>- 前缀，但它在对话里和内置的同名 Agent 是一类。
+const isConversationExecutor = (id: string) => conversationExecutorIds.includes(id) || conversationExecutorIds.includes(baseExecutorId(id));
 const time = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '–';
 const shortTime = (value?: string) => {
   if (!value) return '–';
@@ -1064,7 +1066,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   };
 
   const usableAgents = useMemo(() => agents.filter(agent => agent.id !== 'analysis' && allowedExecutors.includes(agent.id) && agent.status === 'available'), [agents, allowedExecutors]);
-  const crossCapable = useMemo(() => usableAgents.filter(agent => conversationExecutorIds.includes(agent.id)), [usableAgents]);
+  const crossCapable = useMemo(() => usableAgents.filter(agent => isConversationExecutor(agent.id)), [usableAgents]);
   // 旧服务端没有 lagent 字段时视为就绪，避免升级过程中误锁。
   const lagentState = work?.lagent;
   const lagentReady = lagentState ? lagentState.ready !== false : true;
@@ -1637,7 +1639,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     return () => document.removeEventListener('pointerdown', close, true);
   }, [moreOpen]);
 
-  const handoffTargets = usableAgents.filter(agent => conversationExecutorIds.includes(agent.id) && agent.id !== 'analysis');
+  const handoffTargets = usableAgents.filter(agent => isConversationExecutor(agent.id) && agent.id !== 'analysis');
   // 详情弹窗和线程内联交接共用同一份来源：优先当前弹窗，其次线程里打开的那条工单。
   const handoffSource = detail?.ticket || activeTicket;
   useEffect(() => {

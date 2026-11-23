@@ -29,6 +29,20 @@ export function createExecutorRegistry(executors) {
   return Object.freeze({
     list: () => [...entries.values()].map(entry => ({ ...entry.publicMetadata, capabilities: [...entry.publicMetadata.capabilities] })),
     resolve,
+    // 本机执行节点连上来时才出现，断开后立刻消失；内置执行器在构造时就固定了。
+    register(executor) {
+      const publicMetadata = metadata(executor);
+      if (entries.has(executor.id)) throw new TypeError(`执行器 id 重复：${executor.id}`);
+      entries.set(executor.id, { executor, publicMetadata });
+      return publicMetadata;
+    },
+    unregister(id) {
+      const entry = entries.get(id);
+      if (!entry) return false;
+      try { entry.executor.close?.(); } catch { /* 清理失败不阻止移除。 */ }
+      entries.delete(id);
+      return true;
+    },
     requireAvailable(id) {
       const entry = entries.get(id);
       if (!entry) throw workError('执行器不存在', 400);

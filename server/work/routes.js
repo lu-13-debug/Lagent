@@ -44,6 +44,8 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain,outboxEnabled:process.env.LAGENT_WORK_OUTBOX==='1'});
   // cloud-app 的空闲回收要靠它判断「这个 workspace 里还有没有活」，否则长任务会被当成空闲关掉。
   app.locals.workBusy = () => engine.hasActiveWork();
+  // 本机执行节点要在连上来时把动态执行器加进策略白名单，因此需要拿到引擎。
+  app.locals.workEngine = engine;
   imNotifier=createImNotifier({store,engine,ownerId,env:process.env});
   enginesByWorkspace.set(typeof workspace==='string'?workspace:'', engine);
   fallbackEngine = engine;

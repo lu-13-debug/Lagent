@@ -13,7 +13,8 @@ const { createAppearancePolicy } = require('./appearance.cjs');
 const { downloadFilters } = require('./downloads.cjs');
 const { createUpdater } = require('./updater.cjs');
 const { runUpdate } = require('./update-ui.cjs');
-const { mkdirSync, appendFileSync, readFileSync, writeFileSync, existsSync, renameSync } = require('node:fs');
+const { mkdirSync, appendFileSync, readFileSync, writeFileSync, existsSync, renameSync, openSync } = require('node:fs');
+const { spawn } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const { desktopPaths, allowedNavigation, isPdfViewerUrl, safeExternalUrl, buildSupportDiagnostic, loadServerUrl, isConnectionSender, probeCloudServer, saveCloudConnection, isLocalServerUrl, probeLocalServer, saveLocalConnection } = require('./runtime.cjs');
 
@@ -46,7 +47,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (window && !window.isDestroyed()) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
   app.on('window-all-closed', () => app.quit());
-  app.on('before-quit', () => { quitting = true; trayController?.destroy(); });
+  app.on('before-quit', () => { quitting = true; stopNodeHost(); trayController?.destroy(); });
   app.whenReady().then(start).catch(fail);
 }
 
@@ -202,6 +203,48 @@ async function showConnection({ serverUrl = lastServerUrl, error = '' } = {}) {
   local.show(); local.focus();
   if (previous && previous !== local && !previous.isDestroyed()) previous.destroy();
 }
+// ── 本机执行节点 ───────────────────────────────────────────────
+// 连云端时，把用户自己电脑上的 CLI Agent 注册到账号下；本地模式已经有这些执行器，不需要节点。
+let nodeHost = null;
+const nodeStateDir = () => path.join(app.getPath('userData'), 'node');
+
+async function syncNodeCookie() {
+  if (!cloudOrigin || isLocalServerUrl(cloudOrigin)) return;
+  try {
+    const cookies = await session.defaultSession.cookies.get({ url: cloudOrigin });
+    const header = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
+    mkdirSync(nodeStateDir(), { recursive: true });
+    writeFileSync(path.join(nodeStateDir(), 'session-cookie.txt'), header, { mode: 0o600 });
+  } catch { /* 还没登录，节点会自己重试 */ }
+}
+
+function stopNodeHost() {
+  if (!nodeHost) return;
+  try { nodeHost.kill(); } catch { /* 已经退出 */ }
+  nodeHost = null;
+}
+
+async function startNodeHost() {
+  stopNodeHost();
+  if (!cloudOrigin || isLocalServerUrl(cloudOrigin)) return;
+  await syncNodeCookie();
+  const dir = nodeStateDir();
+  mkdirSync(dir, { recursive: true });
+  let out;
+  try { out = openSync(path.join(dir, 'node.log'), 'a'); } catch { out = 'ignore'; }
+  try {
+    nodeHost = spawn(process.execPath, [path.join(__dirname, 'node-host.mjs')], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', LAGENT_NODE_URL: cloudOrigin, LAGENT_NODE_STATE: dir },
+      stdio: ['ignore', out, out],
+      windowsHide: true
+    });
+    nodeHost.on('exit', code => { log(`本机执行节点退出（${code}）`); nodeHost = null; });
+    log('本机执行节点已启动。');
+  } catch (error) {
+    log(`本机执行节点启动失败：${error.message}`);
+  }
+}
+
 async function connectToServer(target) {
   lastServerUrl = target;
   await clearCloudSession();
@@ -226,6 +269,9 @@ async function connectToServer(target) {
   if (!smoke) remote.show();
   if (previous && previous !== remote && !previous.isDestroyed()) previous.destroy();
   log('已连接 Lagent 服务。');
+  // 登录状态会变，每次页面加载后刷新一次凭据，节点据此注册或续期。
+  remote.webContents.on('did-finish-load', () => { void syncNodeCookie(); });
+  if (!smoke) void startNodeHost();
   if (smoke) await smokeTest(remote, target, serverMode);
 }
 async function switchServer() {
@@ -237,6 +283,7 @@ async function switchServer() {
   finally { switching = false; }
 }
 async function clearCloudSession() {
+  stopNodeHost();
   trayController?.clear();
   if (clearingSession) return clearingSession;
   if (!cloudOrigin) return;

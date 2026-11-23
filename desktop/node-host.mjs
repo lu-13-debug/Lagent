@@ -1,0 +1,202 @@
+#!/usr/bin/env node
+/**
+ * 本机执行节点。
+ *
+ * 由桌面端在连接云端服务后拉起：扫描本机装了哪些 CLI Agent，注册到账号下，
+ * 然后长轮询领任务，在本机执行，把过程与结果回传。执行部分直接复用
+ * server/work/executors 里的 CLI 封装，行为与本地模式完全一致。
+ *
+ * 环境变量：
+ *   LAGENT_NODE_URL        服务根地址，例如 https://lagent.site
+ *   LAGENT_NODE_COOKIE     登录后的 Cookie 头，只在注册时用一次
+ *   LAGENT_NODE_STATE      节点状态目录（存 nodeId / token）
+ *   LAGENT_NODE_WORKSPACE  默认工作目录，默认 ~/Lagent Workspace
+ */
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { claudeCodeExecutor } from '../server/work/executors/claude-code.js';
+import { codexExecutor } from '../server/work/executors/codex.js';
+
+const origin = String(process.env.LAGENT_NODE_URL || '').replace(/\/+$/, '');
+const stateDir = process.env.LAGENT_NODE_STATE || path.join(homedir(), '.lagent-node');
+const workspace = process.env.LAGENT_NODE_WORKSPACE || path.join(homedir(), 'Lagent Workspace');
+const stateFile = path.join(stateDir, 'node-state.json');
+const log = (...args) => console.log(new Date().toISOString(), ...args);
+
+if (!origin) {
+  console.error('缺少 LAGENT_NODE_URL');
+  process.exit(1);
+}
+
+mkdirSync(stateDir, { recursive: true });
+try { mkdirSync(workspace, { recursive: true }); } catch { /* 用默认目录失败时下面会报错。 */ }
+
+// CLI 执行器需要一个能按 kind/id 存取任务的 store；节点只在内存里保留任务。
+const tasks = new Map();
+const store = {
+  put: (kind, body) => { tasks.set(`${kind}:${body.id}`, body); return body; },
+  get: (kind, id) => tasks.get(`${kind}:${id}`) || undefined
+};
+
+const executors = [
+  claudeCodeExecutor({ store, cwd: workspace }),
+  codexExecutor({ store, cwd: workspace })
+];
+const agents = executors
+  .filter(executor => executor.available)
+  .map(executor => ({ id: executor.id, name: executor.name, kind: executor.kind, capabilities: executor.capabilities || [] }));
+
+if (!agents.length) {
+  log('本机没有检测到可用的 CLI Agent（claude / codex），节点退出。');
+  process.exit(0);
+}
+log(`检测到本机 Agent：${agents.map(agent => agent.name).join('、')}；工作目录：${workspace}`);
+
+function readState() {
+  try {
+    const value = JSON.parse(readFileSync(stateFile, 'utf8'));
+    if (value && typeof value.token === 'string' && typeof value.nodeId === 'string') return value;
+  } catch { /* 首次启动没有状态文件。 */ }
+  return null;
+}
+
+function saveState(state) {
+  try { writeFileSync(stateFile, JSON.stringify(state, null, 2), { mode: 0o600 }); } catch { /* 写不进去就每次重新注册。 */ }
+}
+
+// 登录凭据由桌面端写到这个文件里：用户可能在节点启动后才登录，所以每次注册都重新读。
+function readCookie() {
+  try {
+    const value = readFileSync(path.join(stateDir, 'session-cookie.txt'), 'utf8').trim();
+    if (value) return value;
+  } catch { /* 还没登录 */ }
+  return String(process.env.LAGENT_NODE_COOKIE || '');
+}
+
+async function register() {
+  // 本地服务不需要登录；云端没登录时会返回 401，外层会隔一会儿重试。
+  const cookie = readCookie();
+  const response = await fetch(`${origin}/api/node/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
+    body: JSON.stringify({ agents })
+  });
+  if (!response.ok) throw new Error(`注册失败：HTTP ${response.status} ${(await response.text()).slice(0, 200)}`);
+  const body = await response.json();
+  const state = { nodeId: body.nodeId, token: body.token };
+  saveState(state);
+  log(`节点已注册：${body.nodeId}`);
+  return state;
+}
+
+async function call(pathname, init = {}, state) {
+  const response = await fetch(`${origin}${pathname}`, {
+    ...init,
+    headers: { ...(init.headers || {}), authorization: `Bearer ${state.token}`, 'content-type': 'application/json' }
+  });
+  return response;
+}
+
+const signature = task => `${task?.status || ''}|${Array.isArray(task?.activity) ? task.activity.length : 0}|${Array.isArray(task?.activity) ? (task.activity.at(-1)?.text || '').length : 0}`;
+
+async function report(state, jobId, status, task, extra = {}) {
+  const payload = {
+    status,
+    ...(task ? { task: { ...task, id: jobId } } : {}),
+    ...extra
+  };
+  const response = await call(`/api/node/jobs/${encodeURIComponent(jobId)}`, { method: 'POST', body: JSON.stringify(payload) }, state);
+  if (!response.ok) return { ok: false, status: response.status };
+  return { ok: true, ...(await response.json()) };
+}
+
+function startJob(job) {
+  const executor = executors.find(item => item.id === job.agentId);
+  if (!executor) throw new Error(`本机没有执行器 ${job.agentId}`);
+  const ticket = { id: job.ticketId || job.id, command: '' };
+  const assignment = { id: job.id };
+  return executor.start(ticket, assignment, { executorInput: job.input || {} });
+}
+
+async function runJob(state, job) {
+  let task;
+  try {
+    task = startJob(job);
+  } catch (error) {
+    await report(state, job.id, 'failed', { id: job.id, ticketId: job.ticketId, status: 'failed', error: error?.message || '本机启动失败', activity: [] });
+    log(`任务 ${job.id} 启动失败：${error?.message || error}`);
+    return;
+  }
+  log(`开始执行任务 ${job.id}（${job.agentId}）`);
+  let last = '';
+  let cancelled = false;
+  while (!cancelled) {
+    await new Promise(resolve => setTimeout(resolve, 900));
+    const current = executors.find(item => item.id === job.agentId)?.get(job.id) || task;
+    const status = current?.status || 'running';
+    const mark = signature(current);
+    if (mark !== last) {
+      last = mark;
+      const result = await report(state, job.id, status, current);
+      if (result.cancelled) {
+        cancelled = true;
+        try { executors.find(item => item.id === job.agentId)?.stop(current); } catch { /* 已经停了 */ }
+      }
+    }
+    if (['completed', 'failed', 'cancelled'].includes(status)) {
+      log(`任务 ${job.id} 结束：${status}`);
+      return;
+    }
+  }
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function main() {
+  let state = readState();
+  while (!state) {
+    try { state = await register(); }
+    catch (error) {
+      log(`等待注册：${error?.message || error}`);
+      await sleep(10_000);
+    }
+  }
+
+  for (;;) {
+    let response;
+    try {
+      response = await call('/api/node/next?wait=25', { method: 'GET' }, state);
+    } catch (error) {
+      log(`连接服务失败：${error?.message || error}`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      continue;
+    }
+    if (response.status === 401 || response.status === 409) {
+      log('节点令牌失效，重新注册');
+      let next = null;
+      while (!next) {
+        try { next = await register(); }
+        catch (error) { log(`重新注册失败：${error?.message || error}`); await sleep(10_000); }
+      }
+      state = next;
+      continue;
+    }
+    if (response.status === 204) continue;
+    if (!response.ok) {
+      log(`领任务失败：HTTP ${response.status}`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      continue;
+    }
+    const body = await response.json().catch(() => null);
+    if (!body?.job) continue;
+    await runJob(state, body.job);
+  }
+}
+
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+main().catch(error => {
+  console.error(error);
+  process.exit(1);
+});

@@ -11,6 +11,8 @@ import { taskCapabilities } from './task-monitor.js';
 import { Accounts, PasswordHasher, AuthRateLimiter, authError, usernameValue, passwordValue, publicUser, tokenHash } from './accounts.js';
 import { createPhoneAuth, createSmsSender } from './phone-auth.js';
 import { MobileGateway, hasDeviceToken, registerMobilePairingRoutes } from './mobile-gateway.js';
+import { loadNodeSecret } from './work/node-hub.js';
+import { registerNodeRoutes } from './work/node-routes.js';
 import { randomBytes } from 'node:crypto';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -129,7 +131,17 @@ export function createCloudApp(options = {}) {
     inFlight++;
     let released = false; const release = () => { if (!released) { released = true; inFlight--; } }; res.locals.releaseCloudRequest = release; res.once('finish', release); res.once('close', release); next();
   });
+  // 本机执行节点的上报体带任务快照，先于全局解析器挂载，避免被 128kb 截断。
+  const nodeRouter = express.Router();
+  app.use('/api/node', nodeRouter);
   app.use(express.json({ limit: '128kb' }));
+  if (enableWork) {
+    registerNodeRoutes(nodeRouter, {
+      resolveHub: userId => workspaceFor(userId).app.locals.nodeHub,
+      authenticate: req => requireSession(req).user.id,
+      secret: loadNodeSecret(dataDir, process.env)
+    });
+  }
   if (enableWork) registerMobilePairingRoutes(app, mobileGateway, { desktopOwner: req => requireSession(req).user.id });
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/runtime', (_req, res) => {
