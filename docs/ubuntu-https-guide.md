@@ -180,6 +180,14 @@ npm.cmd run desktop:build
 docker compose up -d --force-recreate app caddy
 ```
 
+也可以用仓库里的脚本一步完成（会自动备份 `.env`、核对 A 记录、停用临时叠加配置并验证 HTTPS）：
+
+```bash
+sudo bash deploy/set-domain.sh analysis.example.com
+```
+
+备案通过、域名 A 记录指向本机公网 IP、安全组放行 80/443 之后才执行；脚本最后会用 `https://你的域名/api/runtime` 自检。
+
 客户端改地址后重新登录。保留原数据卷时，账号、额度和报告不会重置。更新和备份步骤见 [部署参考](cloud-deployment.md#更新与备份)；不要使用 `docker compose down -v` 更新，它会删除数据卷。
 
 本版为单实例 SQLite 服务，不含真实支付、邮箱验证、自助密码找回或组织权限。当前环境已验证 Windows/Node 和实际 EXE 的业务流程，没有 Docker 引擎，未在你的公网服务器实测容器、DNS 或证书签发。
