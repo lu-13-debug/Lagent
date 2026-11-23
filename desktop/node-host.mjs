@@ -17,6 +17,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { claudeCodeExecutor } from '../server/work/executors/claude-code.js';
 import { codexExecutor } from '../server/work/executors/codex.js';
+import { localAgentExecutors } from '../server/work/executors/local-agent.js';
 
 const origin = String(process.env.LAGENT_NODE_URL || '').replace(/\/+$/, '');
 const stateDir = process.env.LAGENT_NODE_STATE || path.join(homedir(), '.lagent-node');
@@ -39,9 +40,11 @@ const store = {
   get: (kind, id) => tasks.get(`${kind}:${id}`) || undefined
 };
 
+// Claude Code / Codex 有专门的结构化解析；其余（opencode、dsh、gemini 等）用通用适配器。
 const executors = [
   claudeCodeExecutor({ store, cwd: workspace }),
-  codexExecutor({ store, cwd: workspace })
+  codexExecutor({ store, cwd: workspace }),
+  ...localAgentExecutors({ store, cwd: workspace })
 ];
 const agents = executors
   .filter(executor => executor.available)

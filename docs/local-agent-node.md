@@ -9,7 +9,7 @@
 ## 工作方式
 
 1. 桌面端连上云端服务后，在后台拉起 `desktop/node-host.mjs`（独立进程，关掉主窗口不影响它）。
-2. 节点扫描本机 PATH，找出 `claude`、`codex` 可执行文件。
+2. 节点扫描本机 PATH，找出已安装的 CLI Agent：`claude`、`codex`、`opencode`、`dsh`、`gemini`、`qwen`、`cursor-agent`、`codebuddy`、`qoder`、`iflow`、`kimi`。装了哪个就上报哪个。
 3. 用你当前登录的会话注册到服务器，拿到一个 180 天有效的节点令牌。
 4. 之后每 25 秒长轮询一次任务；领到任务就在本机执行，过程与结果实时回传。
 5. 关掉软件或退出登录，节点断开，服务器上的这些 Agent 立刻消失。
@@ -38,6 +38,6 @@
 
 ## 当前限制
 
-- 只桥接 `claude` 和 `codex` 两种 CLI；ACP 类执行器（`dsh-acp` 等）还没接。
+- 只桥接命令行 Agent；ACP 类执行器（`dsh-acp`、`claude-acp`）和 WorkBuddy 桌面自动化还没接。
 - 同一账号连多台电脑时，第二台的同名 Agent 会以 `node-<短id>-claude-code` 的形式出现，界面上按同一品牌显示，但选择时要看清是哪台。
 - 项目对话里的文件改动落在节点的默认工作目录，不是云端项目记录里的路径。
