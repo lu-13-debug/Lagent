@@ -24,6 +24,8 @@ npm.cmd run cloud
 
 首次部署可直接跟随 **[服务器部署与 HTTPS 从零教程](docs/ubuntu-https-guide.md)**：Ubuntu 24.04 → Docker → 域名 A 记录 → `.env` → Caddy 自动证书 → Windows 客户端，附验证命令和排错。
 
+手机端见 **[手机端说明](docs/mobile-app.md)**：`/m` 是响应式指挥台（PWA 可直接加到主屏幕），`mobile/android/` 是对应的 Android WebView 外壳，用配对码连接云端账号。
+
 云端密码使用随机盐散列，登录凭据使用 HttpOnly Cookie。旧会话模式的 API Key 只保留在内存，退出或服务重启后需重新填写；新版持久凭据库见文末配置说明。上传数据和报告保存在所连接的服务器。每次云端模型请求仅向用户指定且管理员已允许的供应商发送业务背景与聚合指标。
 
 ## Windows 桌面版
