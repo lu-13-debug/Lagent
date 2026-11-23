@@ -217,7 +217,7 @@ function AuthPage({ runtime, notice, onAuthenticated, attribution }: { runtime: 
         <p className="auth-help">{register ? '注册即表示你同意仅将手机号用于登录验证与账号找回。' : '无法登录时，请联系本服务管理员。'}</p>
       </section>
     </div>
-    <footer className="auth-footer">上传数据与报告保存在所连接的服务器，并按账号隔离。模型仅接收业务背景与聚合指标。</footer>
+    <footer className="auth-footer">会话、任务与产物保存在所连接的服务器，并按账号隔离。本机任务在你自己的电脑上执行。</footer>
   </main>;
 }
 
