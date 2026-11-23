@@ -9,8 +9,15 @@ import { normalizePolicy } from './application/policy/model.js';
 
 function memoryStore() {
   const rows = new Map();
+  const listeners = new Set();
   return {
-    put: (kind, body) => { rows.set(`${kind}:${body.id}`, structuredClone(body)); return body; },
+    // 和真实 store 一致：只有 task 写入会通知订阅者，引擎就是靠这个回收执行器状态。
+    subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+    put: (kind, body) => {
+      rows.set(`${kind}:${body.id}`, structuredClone(body));
+      if (kind === 'task') for (const listener of listeners) listener(body);
+      return body;
+    },
     get: (kind, id) => (rows.has(`${kind}:${id}`) ? structuredClone(rows.get(`${kind}:${id}`)) : null),
     list: kind => [...rows.entries()].filter(([key]) => key.startsWith(`${kind}:`)).map(([, body]) => structuredClone(body))
   };
@@ -97,6 +104,22 @@ test('任务从排队到完成：长轮询领取，过程与结果回传给引�
   assert.equal(done.status, 'completed');
   assert.equal(done.artifacts.cli.summary, '目录里有两个文件');
   assert.equal(done.id, task.id, '任务 id 必须与工单分配的 sessionId 一致');
+});
+
+test('节点任务的进度写成 task 记录并触发通知，工单才能从执行中收尾', async () => {
+  const { store, registry, hub } = harness();
+  const { agents } = hub.registerNode({ nodeId: 'nodebbbb2222', userId: 'u1', agents: [{ id: 'claude-code', name: 'Claude Code', kind: 'cli' }] });
+  const executor = registry.resolve(agents[0].executorId);
+  const notified = [];
+  store.subscribe(body => notified.push(body.status));
+
+  const task = executor.start({ id: 'ticket-2' }, { id: 'assign-2' }, { executorInput: { prompt: '列目录' } });
+  assert.equal(store.get('task', task.id).status, 'queued', '领任务前也要有 task 记录');
+  await hub.nextJob('nodebbbb2222', 1000);
+  hub.updateJob('nodebbbb2222', task.id, { status: 'completed', task: { status: 'completed', activity: [] } });
+
+  assert.equal(store.get('task', task.id).status, 'completed');
+  assert.deepEqual(notified, ['queued', 'completed'], '每次状态变化都要通知引擎');
 });
 
 test('节点断开时，排队中的任务直接失败，不会永远卡住', async () => {

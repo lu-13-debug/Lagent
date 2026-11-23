@@ -114,6 +114,12 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
     };
   };
 
+  // 引擎是靠 store 里 task 的变更通知来回收执行器状态的（CLI 执行器自己就写这个表），
+  // 节点任务只写 node-job 的话工单会一直停在「执行中」。所以每次进度变化都同步一份 task。
+  const publishTask = job => {
+    try { store.put('task', taskOf(job)); } catch { /* 通知写不进去不该打断本机任务。 */ }
+  };
+
   const settleWaiters = node => {
     const waiter = node.waiters.shift();
     if (!waiter) return false;
@@ -151,6 +157,7 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
           updatedAt: now()
         };
         persist(job);
+        publishTask(job);
         node.queue.push(job.id);
         settleWaiters(node);
         return taskOf(job);
@@ -166,6 +173,7 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
         job.cancelledAt = now();
         job.updatedAt = job.cancelledAt;
         persist(job);
+        publishTask(job);
         settleWaiters(node);
       },
       close() { /* 节点断开时统一在 unregisterNode 里清理。 */ }
@@ -320,6 +328,7 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
       updatedAt: now()
     };
     persist(next);
+    publishTask(next);
     return { status: next.status, cancelled: next.status === 'cancelled' };
   }
 
