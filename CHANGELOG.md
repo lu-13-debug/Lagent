@@ -2,6 +2,7 @@
 
 ## 未发布
 
+- 登录页左侧介绍改为多 Agent 指挥台的说法，去掉「500 试用额度」「换电脑继续分析」等数据分析版遗留文案。
 - 桌面端连接云端后自动启动「本机执行节点」：扫描本机安装的 CLI Agent（Claude Code、Codex、OpenCode、DSH、Gemini 等）注册到账号下，任务在本机执行、过程与结果回传云端，断开后这些 Agent 自动消失。
 - 新增 Android 手机端外壳 `mobile/android`：WebView 加载 `/m`，用配对码连接云端账号。
 - 新增 `deploy/set-domain.sh`：备案域名一条命令切换，自动备份、停用临时配置并申请证书。

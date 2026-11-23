@@ -179,15 +179,15 @@ function AuthPage({ runtime, notice, onAuthenticated, attribution }: { runtime: 
   const title = register ? '创建你的工作空间' : '欢迎回来';
   const subtitle = register
     ? phoneMode ? '用手机号验证码注册，用户名可以自动生成。' : '注册后即可使用指挥台，无需邮箱。'
-    : phoneMode ? '用手机号验证码登录，新设备同样需要验证。' : '登录后，继续查看你的数据与分析报告。';
+    : phoneMode ? '用手机号验证码登录，新设备同样需要验证。' : '登录后，继续你的会话与任务。';
   return <main className="auth-page">
     <div className="auth-layout">
       <section className="auth-intro" aria-label="Lagent 账号介绍">
         <div className="auth-brand"><Logo /><span>Lagent<span className="brand-dot">.</span></span></div>
-        <span className="auth-eyebrow">从数据出发，为决策而来</span>
-        <h1>你的数据，<br />你的下一步<span>。</span></h1>
-        <p>连接团队的分析服务，让每一次探索都留在自己的工作空间。</p>
-        <div className="auth-features"><div><Database size={18} /><span>数据与报告按账号保存</span></div><div><ShieldCheck size={18} /><span>新账号获赠 500 试用额度</span></div><div><LockKeyhole size={18} /><span>同一服务，换电脑也能继续分析</span></div></div>
+        <span className="auth-eyebrow">多 Agent 指挥台</span>
+        <h1>你的 Agent，<br />你的工作台<span>。</span></h1>
+        <p>登录后，云端任务与你电脑上的 CLI Agent 在同一个工作台里流转。</p>
+        <div className="auth-features"><div><Database size={18} /><span>会话、任务与产物按账号保存</span></div><div><ShieldCheck size={18} /><span>桌面端自动接入本机 CLI Agent</span></div><div><LockKeyhole size={18} /><span>换台电脑登录，接着往下做</span></div></div>
         <div className="auth-service"><span className="online-dot" /><span>已连接云端服务<strong>{window.location.host}</strong></span></div>
       </section>
       <section className="auth-card" aria-labelledby="auth-title">
