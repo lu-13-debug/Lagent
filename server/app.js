@@ -227,6 +227,8 @@ export function createApp(options = {}) {
       },
       // 内置模型可以直接调用项目配置的 MCP 工具；未配置或显式关闭时返回空列表。
       mcpServers:workspace=>process.env.LAGENT_MCP_CLIENT==='0'?[]:loadMcpServers({store,ownerId:options.userId||'local',workspace,env:process.env}),
+      // 汇总/收口这类长任务要读清单、核对目录再补文件，15 分钟常在半途被掐断；默认给到 25 分钟。
+      totalTimeoutMs:Number(process.env.LAGENT_MODEL_TOTAL_TIMEOUT_MS)>0?Number(process.env.LAGENT_MODEL_TOTAL_TIMEOUT_MS):1500000,
       fetchImpl:options.fetchImpl||fetch,
     });
     const mobileOwnerId=options.userId||'local';

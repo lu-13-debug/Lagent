@@ -60,7 +60,9 @@ test('团队协作：内置模型先拆解，再分派外部 Agent，最后由�
   for (const step of middle) {
     assert.ok(step.dependsOn.includes(0), '外部步骤要等第 0 步拆解完成');
   }
-  assert.deepEqual(steps.at(-1).dependsOn, middle.map(step => step.index), '收拢步骤要等所有外部步骤');
+  const verifySteps = middle.filter(step => step.role === 'verify');
+  assert.equal(verifySteps.length, 2, '两位协作 Agent 互相验收');
+  assert.deepEqual(steps.at(-1).dependsOn, verifySteps.map(step => step.index), '收拢步骤要等交叉验收完成');
 
   const tickets = store.list('work-ticket').filter(ticket => ticket.planId === result.plan.id);
   assert.equal(tickets.length, steps.length, '每一步一张工单');
@@ -71,7 +73,29 @@ test('团队协作：内置模型先拆解，再分派外部 Agent，最后由�
     assert.equal(control.executorInput.model, 'claude-sonnet-4-6', '指定的模型要传给该 CLI');
   }
   const modelControl = store.get('work-control', steps[0].ticketId);
-  assert.match(modelControl.executorInput.prompt, /不要修改任何文件/);
+  assert.match(modelControl.executorInput.prompt, /不要修改或创建任何文件/);
+});
+
+test('团队协作：项目里的只读目标不建交付清单，也不要求协作方落盘', async t => {
+  const { engine, store } = harness(t);
+  const project = engine.importProject({ path: process.cwd(), name: 'demo-readonly' }).project;
+  const result = await engine.collaborate({
+    goal: '只读统计 src 下的 .tsx 文件，不要修改任何文件，不要运行构建',
+    projectId: project.id,
+    agentIds: ['claude-code', 'codex']
+  });
+  const steps = result.plan.steps;
+  const coordination = store.get('work-control', steps[0].ticketId).executorInput;
+  assert.match(coordination.prompt, /原始目标要求只读/);
+  assert.doesNotMatch(coordination.prompt, /把清单写到项目根目录/);
+  assert.equal(coordination.role, 'coordination');
+  const workStep = steps.find(step => step.executorId !== 'model' && step.role !== 'verify');
+  const work = store.get('work-control', workStep.ticketId).executorInput;
+  assert.match(work.prompt, /原始目标要求只读/);
+  assert.doesNotMatch(work.prompt, /清单里的每个文件都要真实落盘/);
+  const synthesis = store.get('work-control', steps.at(-1).ticketId).executorInput;
+  assert.equal(synthesis.role, 'synthesis');
+  assert.match(synthesis.prompt, /不要因为“没有生成脚本\/报告文件”判失败/);
 });
 
 test('团队协作：只给你选中的 Agent 派活，没选的不会凭空出现在分工里', async t => {

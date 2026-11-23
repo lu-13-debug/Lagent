@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Store } from './store.js';
@@ -201,7 +201,8 @@ test('P1 CLI 因回合上限失败后仍保存 sessionId，下一条消息可续
   await waitFor(() => spawned.length === 1, '首条消息未启动');
   const turnsIndex = spawned[0].indexOf('--max-turns');
   assert.ok(turnsIndex >= 0, '应带上回合上限参数');
-  assert.equal(spawned[0][turnsIndex + 1], '30', '未显式指定时使用 CLI 默认回合数，而不是被引擎写死的较低值');
+  // Claude Code 自己的默认是 60 回合；引擎不能再用统一的 30 把它压低。
+  assert.equal(spawned[0][turnsIndex + 1], '60', '未显式指定时使用该 CLI 的默认回合数，而不是被引擎写死的较低值');
   await waitFor(() => engine.detail(ticket.id).ticket.status === 'failed', '工单应因回合上限失败');
   assert.equal(engine.getProject(imported.project.id).chats[0].sessionId, 'cli-failed-session');
 
@@ -844,4 +845,23 @@ test('同一条项目消息可以并行交给多个 Agent，各开一张工单',
 
   assert.throws(() => engine.projectChatMessages(chat.id, { text: '太多人', executorIds: ['claude-code', 'codex', 'claude-acp', 'codex-acp', 'opencode'] }), { status: 400 });
   assert.throws(() => engine.projectChatMessages(chat.id, { text: '越权', executorIds: ['claude-code', 'analysis'] }), { status: 400 });
+});
+
+test('P1 非 Git 项目按 mtime 找本次改动并跳过依赖目录', t => {
+  const root = mkdtempSync(join(tmpdir(), 'lagent-scan-'));
+  const store = new Store(root);
+  const service = projectService(store, { home: makeHome(root) });
+  t.after(() => { store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const dir = join(root, 'plain-project');
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  mkdirSync(join(dir, 'node_modules', 'pkg'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'old.js'), 'old');
+  const since = Date.now() - 50;
+  utimesSync(join(dir, 'src', 'old.js'), new Date(since - 60_000), new Date(since - 60_000));
+  writeFileSync(join(dir, 'src', 'a.js'), 'a');
+  writeFileSync(join(dir, 'node_modules', 'pkg', 'index.js'), 'x');
+
+  assert.equal(service.isGitRepo(dir), false);
+  assert.deepEqual(service.filesModifiedSince(dir, since), ['src/a.js']);
 });

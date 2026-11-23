@@ -5,6 +5,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { workError } from '../domain.js';
 import { resolveLocalCommand } from '../providers.js';
+import { withChineseOutput } from './cli.js';
 
 // 单条 ACP 事件可能包含很大的工具输出；256KiB 连一次目录列举都能撑爆，
 // 结果是整段复审被判失败。缓冲区放到 8MiB，只对「保留的正文」设小上限。
@@ -314,7 +315,8 @@ export function createAcpExecutor({
         const session = await requestRpc('session/new', { cwd: request.workspace || cwd, mcpServers: [] });
         if (typeof session?.sessionId !== 'string' || !session.sessionId) throw new Error('ACP session/new 未返回 sessionId');
         controller.sessionId = session.sessionId;
-        const result = await requestRpc('session/prompt', { sessionId: controller.sessionId, prompt: [{ type: 'text', text: request.prompt }] });
+        // 语言要求只加在真正发送的正文上，输入校验仍按用户原文计算上限。
+        const result = await requestRpc('session/prompt', { sessionId: controller.sessionId, prompt: [{ type: 'text', text: withChineseOutput(request.prompt) }] });
         finish('completed', {
           report: { id: `acp-${assignment.id}`, summary: controller.updates.join('').slice(0, 4000) || 'ACP Agent 已完成', stopReason: result?.stopReason || null },
           artifacts: { acp: { agent: id, stopReason: result?.stopReason || null, cwd: request.workspace || cwd, text: controller.updates.join('').slice(-8000) } }

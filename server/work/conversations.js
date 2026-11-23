@@ -11,7 +11,7 @@ const KIND = 'conversation';
 const MAX_CONVERSATIONS = 500;
 const MAX_TURNS = 200;
 const MAX_RUNS_PER_TURN = 8;
-const MODES = new Set(['auto', 'review', 'plan']);
+const MODES = new Set(['auto', 'review', 'plan', 'multi']);
 const ROLES = new Set(CONVERSATION_ROLES);
 
 const text = (value, label, max) => {

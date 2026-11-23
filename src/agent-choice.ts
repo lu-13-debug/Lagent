@@ -21,7 +21,8 @@ export function lagentOnlySuggestion(input: AgentChoiceInput): AgentChoice {
   const text = (input.text || '').trim();
   const collaborators = Array.isArray(input.collaborators) ? input.collaborators.filter(Boolean) : [];
   if (!collaborators.length) return { suggestLagentOnly: false, reason: '' };
-  if (input.mode !== 'auto') return { suggestLagentOnly: false, reason: '' };
+  // 旧的 auto 与当前的 multi 都可能出现「只是问了句话」的情况；单 Agent 模式无需再提示。
+  if (input.mode !== 'auto' && input.mode !== 'multi') return { suggestLagentOnly: false, reason: '' };
   if (!text || text.length > 120) return { suggestLagentOnly: false, reason: '' };
   if (input.hasDataset) return { suggestLagentOnly: false, reason: '' };
   if (MULTI_SENTENCE.test(text)) return { suggestLagentOnly: false, reason: '' };

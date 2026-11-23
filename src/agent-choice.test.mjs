@@ -8,6 +8,10 @@ test('一句话问题选了协作 Agent 时建议只用 Lagent', () => {
   assert.match(result.reason, /更快/);
 });
 
+test('多 Agent 模式遇到一句话问题，仍可建议退回单 Agent', () => {
+  assert.equal(lagentOnlySuggestion({ text: '解释一下这个报错是什么原因', collaborators: ['claude-code'], mode: 'multi' }).suggestLagentOnly, true);
+});
+
 test('没有协作 Agent 时不提示', () => {
   assert.equal(lagentOnlySuggestion({ text: '解释一下这个报错', collaborators: [], mode: 'auto' }).suggestLagentOnly, false);
 });

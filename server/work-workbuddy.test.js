@@ -59,7 +59,10 @@ test('WorkBuddy 执行器：派发任务并把回复写入 artifacts.cli', async
   assert.equal(done.artifacts.cli.executorId, 'workbuddy');
   assert.equal(done.error, undefined);
   assert.deepEqual(driver.calls[0], 'open');
-  assert.deepEqual(driver.calls[1], ['send', '计算 1234 乘以 5678', { newConversation: true }]);
+  assert.equal(driver.calls[1][0], 'send');
+  assert.match(driver.calls[1][1], /^计算 1234 乘以 5678/);
+  assert.match(driver.calls[1][1], /请全程使用简体中文思考和输出/);
+  assert.deepEqual(driver.calls[1][2], { newConversation: true });
   assert.equal(driver.calls.includes('close'), true);
 });
 

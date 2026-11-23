@@ -45,11 +45,22 @@ export function cliDefaultMaxTurns(environment = process.env, fallback = 30) {
   return Number.isInteger(value) && value >= 1 && value <= 120 ? value : fallback;
 }
 
+// 所有外部 CLI 共用一条语言要求：思考过程与最终结论都用简体中文，
+// 命令、代码、路径、专有名词保持原样。放在 normalize 层，claude/codex/国产 CLI 都覆盖。
+export const CHINESE_OUTPUT_RULE = '语言要求：请全程使用简体中文思考和输出。命令、代码、文件路径、专有名词可以保留原文；需要英文命令时，先给命令，再用中文说明它做什么。不要把思考过程或结论改成英文。';
+
+export function withChineseOutput(prompt) {
+  const text = typeof prompt === 'string' ? prompt.trim() : '';
+  if (!text || text.includes('请全程使用简体中文思考和输出')) return text;
+  return `${text}\n\n${CHINESE_OUTPUT_RULE}`;
+}
+
 export function normalizeCliInput(input, { defaultMaxTurns = 5, maxTurns = 20, maxPromptBytes = 16 * 1024 } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw statusError('executorInput 必须为结构化对象');
   const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
   if (!prompt) throw statusError('CLI prompt 必须是非空字符串');
   if (prompt.includes('\0')) throw statusError('CLI prompt 不允许 NUL 字符');
+  // 语言要求不写进校验后的 prompt：输入上限按用户原文计算，真正拼参数时再追加。
   if (Buffer.byteLength(prompt) > maxPromptBytes) throw statusError(`CLI prompt 不能超过 ${maxPromptBytes} 字节`);
   const turns = input.maxTurns === undefined ? defaultMaxTurns : input.maxTurns;
   if (!Number.isInteger(turns) || turns < 1 || turns > maxTurns) {
@@ -383,7 +394,8 @@ export function createCliExecutor({
     persist(task);
     let args;
     try {
-      args = buildArgs(input, runWorkspace);
+      // 真正交给 CLI 的提示词附带统一语言要求；task.cliInput 仍保留用户原文，恢复时不会越叠越长。
+      args = buildArgs({ ...input, prompt: withChineseOutput(input.prompt) }, runWorkspace);
       if (!Array.isArray(args) || !args.every(item => typeof item === 'string' && !item.includes('\0'))) throw new Error('CLI 参数模板无效');
     } catch (error) {
       return finalize(task, emptyController(), { error });

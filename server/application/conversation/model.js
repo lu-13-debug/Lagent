@@ -5,7 +5,7 @@ export const LAGENT_EXECUTOR_ID = 'model';
 export const LAGENT_DISPLAY_NAME = 'Lagent';
 export const MAX_COLLABORATORS = 3;
 export const MAX_TURN_AGENTS = MAX_COLLABORATORS + 1;
-export const CONVERSATION_ROLES = Object.freeze(['answer', 'synthesis', 'step', 'coordination']);
+export const CONVERSATION_ROLES = Object.freeze(['answer', 'synthesis', 'step', 'coordination', 'verify']);
 
 const AGENT_ID = /^[A-Za-z0-9._:-]{1,60}$/;
 
@@ -72,7 +72,8 @@ export function isExecutorAllowed(policy, executorId) {
 /**
  * 一轮受管任务需要哪些角色：
  * - 只有 Lagent：直接作答，不再多造协调/汇总步骤；
- * - Lagent + 协作 Agent：Lagent 分工 → 协作方执行 → Lagent 汇总；
+ * - 多 Agent：Lagent 拆解分发 → 协作方执行 → 协作方互相验收 → Lagent 汇总；
+ * - 旧的复核模式：Lagent 分工 → 协作方并行作答 → Lagent 汇总；
  * - 计划模式仍由 Lagent 先拆步骤。
  * 返回的 steps 只描述角色语义，具体执行器由引擎决定。
  */
@@ -82,5 +83,6 @@ export function managedTurnShape({ mode = 'auto', collaborators = [] } = {}) {
     .slice(0, MAX_COLLABORATORS);
   if (!list.length) return { kind: 'direct', collaborators: [] };
   if (mode === 'plan') return { kind: 'plan', collaborators: list };
+  if (mode === 'multi') return { kind: 'multi', collaborators: list };
   return { kind: 'coordinated', collaborators: list };
 }

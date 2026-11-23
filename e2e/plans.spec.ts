@@ -36,9 +36,10 @@ test('多步计划一次性创建并按步骤展示', async ({ page }) => {
   await page.route('**/api/work/plans/plan-1', route => route.fulfill({ json: { plan, tickets: [step0, step1] } }));
 
   await page.goto('/');
-  await page.getByRole('button', { name: '计划', exact: true }).click();
-  await page.locator('.sa-composer textarea').fill('修复 CI 失败');
-  await page.getByRole('button', { name: '编辑计划', exact: true }).click();
+  // 手动多步计划收在多 Agent 模式的高级入口里，不再是独立的派活模式。
+  await page.getByRole('button', { name: '多 Agent', exact: true }).click();
+  await page.getByRole('button', { name: /Codex CLI/ }).first().click();
+  await page.getByRole('button', { name: '手动编排多步计划', exact: true }).click();
 
   const dialog = page.getByRole('dialog');
   await expect(dialog).toContainText('默认一路跑完');

@@ -78,7 +78,7 @@ test('旧项目对话打开后物化成统一会话线程，可继续发消息',
   // 与普通会话同一套线程：用户气泡 + 思考/编排面板，而不是只列工单的旧壳。
   await expect(page.locator('.sa-bubble-user')).toHaveText('修复登录接口');
   await expect(page.locator('.sa-conv-turn')).toBeVisible();
-  await expect(page.getByRole('button', { name: '自动', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '单 Agent', exact: true })).toBeVisible();
 
   await page.locator('.sa-composer textarea').fill('再补一个回归测试');
   await page.getByRole('button', { name: '发送' }).click();

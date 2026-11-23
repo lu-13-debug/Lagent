@@ -4,6 +4,7 @@ import process from 'node:process';
 import { chromium } from 'playwright';
 import { workError } from '../domain.js';
 import { resolveWorkbuddyExe } from '../workbuddy-app.js';
+import { withChineseOutput } from './cli.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -302,7 +303,7 @@ export function workbuddyExecutor({
       });
       try {
         await driver.open();
-        const { baseline } = await driver.send(normalized.prompt, { newConversation: normalized.newConversation });
+        const { baseline } = await driver.send(withChineseOutput(normalized.prompt), { newConversation: normalized.newConversation });
         const text = await driver.wait({ baseline, timeoutMs: normalized.timeoutMs, cancelled: () => controller.cancelled });
         if (!controller.cancelled) finalize(task, { text, startedAt });
       } catch (error) {

@@ -159,6 +159,7 @@ test('E2 Codex 固定 argv、环境过滤、JSONL 脱敏与 artifact 统计', as
   assert.deepEqual(invocation.args.slice(0, 7), ['exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check', '-C', resolve(dir)]);
   assert.equal(invocation.args.length, 8);
   assert.match(invocation.args[7], /只读分析模式/);
+  assert.match(invocation.args[7], /请全程使用简体中文思考和输出/);
   assert.match(invocation.args[7], /不得启动子智能体/);
   assert.match(invocation.args[7], /检查; \$\(whoami\) && echo no/);
   assert.equal(invocation.options.cwd, resolve(dir));
@@ -314,6 +315,28 @@ test('E2 输出解析器不保留 reasoning/thinking 或原始事件', () => {
   assert.deepEqual(codex.stats, { events: 3, malformedLines: 0, agentMessages: 1, commands: 0, fileChanges: 0, tools: 0 });
   assert.equal(claude.summary, '最终结果');
   assert.doesNotMatch(JSON.stringify({ codex, claude }), /private reasoning|private thinking/);
+});
+
+test('E2 Claude Code 解析写入工具的文件清单作为产物', () => {
+  const parsed = parseClaudeOutput({
+    stdout: jsonl([
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', name: 'Read', input: { file_path: 'D:/demo/README.md' } },
+            { type: 'tool_use', name: 'Write', input: { file_path: 'D:/demo/src/app.js' } },
+            { type: 'tool_use', name: 'Edit', input: { file_path: 'D:/demo/src/app.js' } },
+            { type: 'tool_use', name: 'Edit', input: { file_path: 'D:/demo/src/style.css' } }
+          ]
+        }
+      },
+      { type: 'result', subtype: 'success', is_error: false, result: '完成', usage: { input_tokens: 2, output_tokens: 1 } }
+    ]),
+    stderr: '',
+    exitCode: 0
+  });
+  assert.deepEqual(parsed.artifacts, ['D:/demo/src/app.js', 'D:/demo/src/style.css']);
 });
 
 test('E2 CLI 子进程默认零凭据，只透传显式点名的环境变量', () => {

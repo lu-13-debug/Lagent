@@ -120,7 +120,7 @@ comparePrevious=true 时，上期为紧邻当前期之前、含首尾等长的�
 
 ## 项目工作区（/api/work/projects、/api/work/chats）
 
-指挥台默认启用；显式设置 `LAGENT_WORK_ENABLED=0` 会关闭 `/api/work/*`。CLI 项目对话还需要 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1` 并在执行器策略中勾选对应执行器。所有写操作仍经工单审批，不新增绕过审批的入口。
+指挥台默认启用；显式设置 `LAGENT_WORK_ENABLED=0` 会关闭 `/api/work/*`。CLI 项目对话还需要 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1` 并在执行器策略中勾选对应执行器。`GET /api/work/bootstrap` 的 `externalExecutors` 字段回报总开关状态：为 `false` 时策略里的外部执行器勾选不会生效，拒绝请求返回 403，`code` 为 `EXECUTOR_DISABLED`（白名单未勾选）或 `EXTERNAL_EXECUTORS_DISABLED`（服务级总开关未开）。所有写操作仍经工单审批，不新增绕过审批的入口。
 
 ### 本机 Agent 适配器（opencode / gemini / qwen / cursor-agent / dsh）
 
@@ -169,7 +169,7 @@ WorkBuddy 没有对外 CLI，`workbuddy` 执行器改用 Chromium 调试协议�
 - `POST /api/work/conversations {goal,title?,projectId?,agentIds?}` → `201 {conversation}`。同一 `id` 重复创建返回原会话。
 - `GET /api/work/conversations/:id` → `{conversation,tickets}`；`conversation.turns[]` 含 `{id,index,prompt,mode,agentIds,runs:[{ticketId,agentId,role}],synthesisTicketId?,synthesisAgentId?,createdAt}`。
 - `PATCH /api/work/conversations/:id {title}` → `{conversation}`；`DELETE /api/work/conversations/:id` → `{id,ticketIds}`。删除会话只解除工单归属，不删除执行记录。
-- `POST /api/work/conversations/:id/messages {text,mode,agentIds,settings?,executorInputs?,datasetId?,clientRequestId?,autoRun?}` → `{conversation,turn,tickets}`。text 1–3000 字，mode 为 `auto|review|plan`；`agentIds` 中的外部 Agent 最多 3 个，Lagent 会自动补到首位。`review` 让协作 Agent 各生成一张工单、同一轮内并列作答，再由 Lagent 汇总；`plan` 先经规划器拆 2–7 步，再把步骤工单收进同一轮。追问只追加一轮，不新建会话。Lagent 未配置模型时返回 `409 LAGENT_MODEL_NOT_CONFIGURED`，且不会创建外部工单。
+- `POST /api/work/conversations/:id/messages {text,mode,agentIds,settings?,executorInputs?,datasetId?,clientRequestId?,autoRun?}` → `{conversation,turn,tickets}`。text 1–3000 字，当前界面的 mode 为 `auto`（单 Agent，仅 Lagent）或 `multi`（多 Agent）；旧调用仍接受 `review|plan`。`agentIds` 中的外部 Agent 最多 3 个，Lagent 会自动补到首位。`multi` 的执行顺序固定为：Lagent 拆解分发 → 协作 Agent 各自执行 → 按环状互相验收（每位验收下一位，只有一位协作方时由 Lagent 在汇总里验收）→ Lagent 汇总；一轮最多 8 张工单。`review` 保留旧的「并行独立作答再汇总」，`plan` 先经规划器拆 2–7 步。追问只追加一轮，不新建会话。Lagent 未配置模型时返回 `409 LAGENT_MODEL_NOT_CONFIGURED`，且不会创建外部工单。
 - `POST /api/work/chats/:id/materialize` → `{chat,conversation,created}`。把旧项目对话惰性转成 Lagent 会话：宿主改为 `executorId:'model'`、`role:'host'`，原执行器移到隐藏执行对话，CLI session 与窗口绑定继续可用。
 - `GET /api/work/reports?group=conversation|ticket|report&projectId=&conversationId=&ticketId=&executorId=&kind=&q=&limit=&cursor=` → `{group,total,reportTotal?,cursor,items}`。默认只列 `ready/failed/blocked/completed/dropped` 等结论报告，`kind=progress` 需显式请求；旧报告没有归属字段时通过 `ticketId` 回查工单。
 - `GET /api/work/reports/:id` → `{report,ticket,conversation,project,artifacts}`；`GET /api/work/reports/:id/markdown` 返回可导出的 Markdown，只含结论与产物名称，不含 `executorInput` 等执行输入。
@@ -199,6 +199,7 @@ WorkBuddy 没有对外 CLI，`workbuddy` 执行器改用 Chromium 调试协议�
 - 所有路径都经 `pathGuard.resolve` 校验（`isForbiddenPath` + 是否在已知根内）；未配置模型或没有 Key 时 `start` 直接 503，不会留下假运行的任务。
 - 执行器输入可带 `profileId` 指定这条工单用哪个模型配置（团队协作里「内置 Agent 用哪个模型」就靠它），不传则用工作流默认模型；也可带 `effort`（`default|low|medium|high|xhigh|max`），供应商不认这个档位时自动按默认档重试一次并在摘要里注明。
 - CLI 类执行器（`claude-code`、`codex`）的 `executorInput.model` 会转成 `--model <id>` / `-m <id>`，用于「同一个 Agent 在不同团队里用不同模型」；其余 CLI 没有统一开关，留空即用它们自己的配置。
+- 输出语言：CLI、ACP、内置模型与 WorkBuddy 的输入末尾都会附带「全程使用简体中文思考和输出」的要求；命令、代码、文件路径与专有名词可以保留原文。该要求由服务端统一注入，不依赖前端传参。
 - 权限档位：执行器策略 `permission` 取 `read`（仅查看）/`workspace`（仅工作区内修改，默认）/`full`（完全权限）。`read` 下写工具（`write_file`/`replace_in_file`/`move_path`/`delete_path`）一律不可用且不弹窗，模型只读取与检索并给结论；`workspace` 下项目目录内直接写，目录外与递归删除仍逐次确认；`full` 下写操作不再逐次确认（系统目录、`.git`、`.ssh`、`.env*` 与密钥文件仍然永远拒绝）。`limits.modelWrites`/`limits.acpWrites` 由该档位推导（`read` 为 `false`，其余为 `true`），项目对话还要求 `chat.writable !== false`。
 - 执行审批：策略 `requireApproval` 默认 `false`，工单创建即执行（`queued → working`）；设为 `true` 时恢复「先 `awaiting_review` 等待批准」的链路。计划执行同样默认一路跑完，`autoRun:false` 才逐步等确认。
 - 过程流：执行器把每一步写进 `task.activity`（`{kind:'tool'|'observation'|'error'|'result', text, detail?, at}`，保留 60 条）。`GET /api/work/tickets/:id` 的 `detail` 在有过程时附带 `activity`（最近 40 条）；SSE `GET /api/work/events` 在过程变化时推送 `{type:'activity',ticketId,payload:{activity,status}}`，前端据此渲染时间线。`result` 与「结果」块内容相同，界面只显示 `tool/observation/error`。
@@ -302,13 +303,14 @@ outbox 默认关闭；`LAGENT_WORK_OUTBOX=1` 时启用，工单启动先入队�
 
 ### 任务契约与自动验收
 
-- `POST /api/work/command` 与计划步骤都接受可选的 `contract`：`{objective?,inputs?,constraints?,acceptance?,tools?,budget?:{tokens?,wallMs?,calls?},deadlineMs?,report?:{summary?,evidence?,next?}}`。字段有长度与数量上限，未知字段返回 400；空契约（`{}`）返回 400。契约随工单投影返回，计划步骤详情也带 `contract`。
+- `POST /api/work/command` 与计划步骤都接受可选的 `contract`：`{objective?,inputs?,constraints?,acceptance?,deliverables?,tools?,budget?:{tokens?,wallMs?,calls?},deadlineMs?,report?:{summary?,evidence?,next?}}`。字段有长度与数量上限，未知字段返回 400；空契约（`{}`）返回 400。`deliverables` 是项目内相对路径（最多 30 项，禁止绝对路径与 `..`），会写进执行器提示词；任务完成时逐项检查文件是否存在，缺一个就判失败，不能只交一份总结。契约随工单投影返回，计划步骤详情也带 `contract`。
 - `POST /api/work/command` 支持可选的对话级 `settings`：`{profileId?,model?,effort?,permission?:'read'|'workspace'|'full'}`。
   - 内置 Agent（`model`）：`profileId`/`effort` 透传到模型执行器，`permission` 直接决定只读/工作区/完全权限；最终输入冻结在工单里，重试沿用。
   - 外部 CLI：`model`/`effort` 透传（Codex 用 `-m` + `model_reasoning_effort`，Claude Code 用 `--model` + `--effort`，其它 CLI 不支持时会忽略）；`permission` 映射为只读（`write:false`）或可写（`workspace/full` 均为 `write:true`；完全权限不绕过 CLI 自身的危险确认）。带 `profileId` 返回 400。
   - 项目对话：权限通过 `PATCH /api/work/chats/:id {permission}` 设置，模型/思考强度通过 `POST /api/work/chats/:id/messages {profileId,model,effort}` 传入（`model` 用于 CLI，`profileId` 用于内置 Agent）；在 command 上带 `settings.permission` 返回 400，避免绕过会话级配置。
   - 未知字段、非法 `profileId/model/effort/permission` 或把设置发给不支持的工具执行器，均返回 400。
 - 工单带回 `verify` 时，完成（`completed`）后自动在 Lagent 侧执行验收：通过则写入 `acceptance` 与「验收通过」摘要；失败则工单进入 `blocked`、附 `attention` 与退出码/输出摘要。验收结果同时生成 `ticket.review`：`evidence.level='verified'` 只在「命令通过且评审通过」时出现，仅评审通过标记为 `reviewed`，验收失败标记为 `failed` 并追加阻断项 `CRITIC_VERIFY_FAILED`。报告 `artifacts.review` 保留同一份证据。`LAGENT_AUTO_VERIFY=0` 或引擎 `autoVerify:false` 可关闭；手动 `POST /api/work/tickets/:id/verify` 仍可用。
+- 计划步骤因回合/步数用尽（如 `error_max_turns`）、服务重启、超时或交付文件缺失而失败时，引擎会自动续跑最多 2 次：补足回合预算，并在提示词里要求先检查已落盘文件、只补缺失部分。用户点「停止」的中断不自动续跑。`LAGENT_AUTO_CONTINUE=0` 或引擎 `autoContinue:false` 可关闭。
 
 ### 观测：工单时间线
 

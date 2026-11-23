@@ -26,6 +26,33 @@ test('Work policy 默认拒绝外部执行器并允许 analysis/terminal', t => 
   assert.equal(policy.permission, 'workspace');
   assert.throws(() => engine.command({ text: '读取仓库', executorId: 'codex', executorInput: { prompt: 'hi' } }), { status: 403 });
   assert.equal(engine.command({ text: '检查活跃' }).executor, 'analysis');
+  assert.equal(engine.bootstrap().externalExecutors, false);
+});
+
+test('Work policy 拒绝时区分「白名单未勾选」与「服务级总开关未开」', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-work-policy-reason-'));
+  const store = new Store(dir);
+  const codex = { id: 'codex', name: 'Codex', kind: 'cli', available: true, capabilities: [], validateInput: input => input, start() { throw new Error('unused'); }, get() { return null; } };
+  const engine = createWorkEngine(store, createExecutorRegistry([codex]), () => {}, { policy: { allowedExecutors: ['codex'] }, env: { LAGENT_ALLOW_EXTERNAL_EXECUTORS: '', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' } });
+  t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
+  const disabledBySwitch = (() => { try { engine.command({ text: '读取', executorId: 'codex', executorInput: { prompt: 'hi' } }); } catch (error) { return error; } })();
+  assert.equal(disabledBySwitch.status, 403);
+  assert.equal(disabledBySwitch.code, 'EXTERNAL_EXECUTORS_DISABLED');
+  assert.match(disabledBySwitch.message, /LAGENT_ALLOW_EXTERNAL_EXECUTORS=1/);
+
+  engine.updatePolicy({ allowedExecutors: ['analysis'] });
+  const disabledByPolicy = (() => { try { engine.command({ text: '读取', executorId: 'codex', executorInput: { prompt: 'hi' } }); } catch (error) { return error; } })();
+  assert.equal(disabledByPolicy.code, 'EXECUTOR_DISABLED');
+  assert.match(disabledByPolicy.message, /执行器策略/);
+});
+
+test('服务级总开关开启时 bootstrap 明确回报', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-work-policy-bootstrap-'));
+  const store = new Store(dir);
+  const codex = { id: 'codex', name: 'Codex', kind: 'cli', available: true, capabilities: [], validateInput: input => input, start() { throw new Error('unused'); }, get() { return null; } };
+  const engine = createWorkEngine(store, createExecutorRegistry([codex]), () => {}, { policy: { allowedExecutors: ['analysis', 'codex'] }, env: { LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' } });
+  t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
+  assert.equal(engine.bootstrap().externalExecutors, true);
 });
 
 test('Work policy 需要策略允许与外部开关同时成立', t => {

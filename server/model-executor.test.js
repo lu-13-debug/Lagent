@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { modelExecutor, safeSearchExpression } from './work/executors/model.js';
+import { modelExecutor, normalizeModelInput, safeSearchExpression } from './work/executors/model.js';
 
 function memoryStore() {
   const rows = new Map();
@@ -96,6 +96,21 @@ test('模型 Agent 走工具循环并把过程写进 activity', async () => {
   assert.equal(done.artifacts.cli.stats.steps, 2);
 });
 
+test('长结论保留完整正文，供计划后续步骤使用', async () => {
+  const store = memoryStore();
+  const long = '分工说明'.repeat(1200); // 4800 字，超过工单摘要的 4000 字上限
+  const hub = fakeModelHub([JSON.stringify({ final: { summary: long, files: [] } })]);
+  const executor = modelExecutor({ store, cwd: process.cwd(), context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '给出完整分工' }, { id: 'assign-long' }, {
+    executorInput: { prompt: '给出完整分工', workspace: process.cwd(), write: false },
+  });
+  const done = await settle(executor, 'assign-long');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(done.artifacts.cli.summary.length, 4000, '界面摘要仍限制在 4000 字');
+  assert.equal(done.artifacts.cli.detail.length, 4800, '完整正文不能被 4000 字截断');
+  assert.ok(done.artifacts.cli.detail.endsWith('分工说明'));
+});
+
 test('没有写权限时拒绝写入，并记录失败原因', async () => {
   const store = memoryStore();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-agent-'));
@@ -164,6 +179,15 @@ test('输入校验：空目标、非法步数、相对工作目录都会被拒�
   assert.throws(() => executor.validateInput({ prompt: '做点事', maxSteps: 99 }), /maxSteps/);
   assert.throws(() => executor.validateInput({ prompt: '做点事', workspace: 'relative/dir' }), /绝对路径/);
   assert.throws(() => executor.validateInput({ prompt: '做点事', effort: 'high; rm -rf' }), /effort/);
+});
+
+test('项目计划传入的 maxTurns 会变成模型步数预算，不再退回 12 步', () => {
+  // 引擎给项目执行器传 maxTurns，模型的一步就是一次工具调用，必须复用这个预算。
+  assert.equal(normalizeModelInput({ prompt: '做点事', maxTurns: 60 }).maxSteps, 60);
+  assert.equal(normalizeModelInput({ prompt: '做点事', maxTurns: 120 }).maxSteps, 60, '超过模型上限时夹到 60，而不是让整条计划报 400');
+  assert.equal(normalizeModelInput({ prompt: '做点事' }).maxSteps, 20);
+  assert.throws(() => normalizeModelInput({ prompt: '做点事', maxTurns: 0 }), /maxTurns/);
+  assert.equal(normalizeModelInput({ prompt: '做点事', maxSteps: 3, maxTurns: 60 }).maxSteps, 3, '显式 maxSteps 优先');
 });
 
 test('会话级模型与思考强度会一起传给模型中心', async () => {
@@ -543,6 +567,69 @@ test('步数用完还没做完的工单标成失败，不再报「已完成」',
   assert.equal(done.status, 'failed');
   assert.match(String(done.error || ''), /步数上限/);
   assert.equal(done.artifacts.cli.exitCode, 1);
+});
+
+test('协调/验收/汇总步骤的「没做完」是报告结论，不把报告本身判失败', async t => {
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-report-role-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const hub = fakeModelHub([
+    '{"final":{"done":false,"summary":"只做了分工：两位协作 Agent 分别独立统计，再交叉验收。","files":[]}}'
+  ]);
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl: fakeFetch(hub) });
+  executor.start({ command: '分工' }, { id: 'assign-report-role' }, {
+    executorInput: { prompt: '分工', workspace: dir, write: false, role: 'coordination' }
+  });
+  const done = await settle(executor, 'assign-report-role');
+  assert.equal(done.status, 'completed', done.error || '');
+  assert.equal(done.artifacts.cli.exitCode, 0);
+  assert.match(done.artifacts.cli.summary, /只做了分工/);
+
+  // 同样的措辞出现在执行型步骤里，仍然要按「没做完」判失败。
+  const workerHub = fakeModelHub([
+    '{"final":{"done":false,"summary":"只做了分工：两位协作 Agent 分别独立统计。","files":[]}}'
+  ]);
+  const worker = modelExecutor({ store, cwd: dir, context: () => workerHub.context(), fetchImpl: fakeFetch(workerHub) });
+  worker.start({ command: '执行' }, { id: 'assign-worker-role' }, {
+    executorInput: { prompt: '执行', workspace: dir, write: false }
+  });
+  const failed = await settle(worker, 'assign-worker-role');
+  assert.equal(failed.status, 'failed');
+  assert.match(String(failed.error || ''), /任务没有完成/);
+});
+
+test('read_office 直接读出 pptx 文字，不需要 PowerShell 解压', async t => {
+  const JSZip = (await import('jszip')).default;
+  const store = memoryStore();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-office-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const zip = new JSZip();
+  zip.file('ppt/slides/slide1.xml', '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:t>科学饮食系统</a:t><a:t>需求：记录每日摄入</a:t></p:sld>');
+  fs.writeFileSync(path.join(dir, '课程要求.pptx'), await zip.generateAsync({ type: 'nodebuffer' }));
+  const hub = fakeModelHub([
+    '{"tool":"read_office","args":{"path":"课程要求.pptx"}}',
+    '{"final":{"summary":"读完了","files":[]}}',
+  ]);
+  const seen = [];
+  const fetchImpl = async (_url, options) => {
+    seen.push(JSON.parse(options.body));
+    const content = hub.reply();
+    const body = { choices: [{ message: { content } }], usage: {} };
+    return {
+      ok: true, status: 200, headers: { get: () => null },
+      async json() { return body; },
+      async text() { return JSON.stringify(body); },
+    };
+  };
+  const executor = modelExecutor({ store, cwd: dir, context: () => hub.context(), fetchImpl });
+  executor.start({ command: '读课程要求' }, { id: 'assign-office' }, {
+    executorInput: { prompt: '读课程要求', workspace: dir, write: false },
+  });
+  const done = await settle(executor, 'assign-office');
+  assert.equal(done.status, 'completed', done.error || '');
+  const conversation = JSON.stringify(seen);
+  assert.match(conversation, /科学饮食系统/);
+  assert.match(conversation, /需求：记录每日摄入/);
 });
 
 test('模型自己说「没有权限、没执行」时标成失败，而不是已完成', async t => {

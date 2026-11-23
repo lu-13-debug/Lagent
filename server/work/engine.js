@@ -6,7 +6,7 @@ import { assertWorkAction, workError } from './domain.js';
 import { publicTicket } from '../application/ticket/projection.js';
 import { publicPlan as planProjection } from '../application/plan/projection.js';
 import { manualTrigger } from './sources/manual.js';
-import { defaultPolicy, externalExecutorAllowed, normalizePolicy, PERMISSIONS, WORK_POLICY_ID } from './policy.js';
+import { defaultPolicy, EXTERNAL_EXECUTORS, externalExecutorAllowed, externalExecutorsEnabled, normalizePolicy, PERMISSIONS, WORK_POLICY_ID } from './policy.js';
 import { appendWorkEvent, workStore } from './store.js';
 import { executorRegistry } from './executors/index.js';
 import { cliDefaultMaxTurns } from './executors/cli.js';
@@ -19,7 +19,7 @@ import { isKeyChange, normalizePrompts, refineLocal } from './prompt-refiner.js'
 import { buildPreview, previewQuestion } from './risk.js';
 import { normalizeVerify, runVerify } from './verify.js';
 import { critiqueResult } from '../critic.js';
-import { normalizeContract } from './contract.js';
+import { contractBrief, missingDeliverables, normalizeContract } from './contract.js';
 import { buildRoster } from './roster.js';
 import { teamTemplateService } from './team-templates.js';
 import { createWorkProfiles } from './profiles.js';
@@ -151,6 +151,24 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   };
   // 兼容旧调用：externalExecutorAllowed 对非外部执行器恒为 true，但模型仍要经过主控判定。
   const executorAllowed = executorId => isExecutorAllowed(policy, executorId) && externalExecutorAllowed(executorId, policy, env);
+  // 被拒时给出可执行的原因：是白名单没勾，还是服务级总开关没开。
+  // 这两种情况原来都提示「未获当前策略允许」，用户照着设置页勾选也修不好。
+  const executorDenial = executorId => {
+    if (!isExecutorAllowed(policy, executorId)) {
+      return { code: 'EXECUTOR_DISABLED', reason: `执行器「${executorId}」未启用：请在「设置 → 执行器策略」中勾选后重试` };
+    }
+    if (!externalExecutorAllowed(executorId, policy, env)) {
+      return { code: 'EXTERNAL_EXECUTORS_DISABLED', reason: `外部执行器「${executorId}」被服务级开关关闭：请设置 LAGENT_ALLOW_EXTERNAL_EXECUTORS=1 后重启 Lagent 服务（用「启动 Lagent.cmd」或 npm run dev 启动会自动开启）` };
+    }
+    return null;
+  };
+  // 只在真实服务进程里提醒，避免测试注入的 env 触发噪音。
+  if (env === process.env) {
+    const enabledButBlocked = policy.allowedExecutors.filter(id => EXTERNAL_EXECUTORS.includes(id));
+    if (enabledButBlocked.length && !externalExecutorsEnabled(env)) {
+      console.warn(`[lagent] 执行器策略已勾选 ${enabledButBlocked.join('、')}，但 LAGENT_ALLOW_EXTERNAL_EXECUTORS 未开启，这些执行器会被拒绝。设置 LAGENT_ALLOW_EXTERNAL_EXECUTORS=1 后重启服务，或改用「启动 Lagent.cmd」/ npm run dev。`);
+    }
+  }
   const planSuggestionTimes = [];
   let drainingOutbox = false;
   let outboxTimer = null;
@@ -160,9 +178,12 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   };
   const teamTemplates = teamTemplateService(db, { now, audit });
   const guard = (executorId, ticketId, action) => {
-    if (!executorAllowed(executorId)) {
-      audit(ticketId, action, executorId, 'denied', '执行器未获当前策略允许');
-      throw workError(`执行器「${executorId}」未获当前策略允许`, 403);
+    const denial = executorDenial(executorId);
+    if (denial) {
+      audit(ticketId, action, executorId, 'denied', denial.reason);
+      const error = workError(denial.reason, 403);
+      error.code = denial.code;
+      throw error;
     }
   };
   // 配置档的「工作方式」默认值：只透传当前执行器认识的字段。
@@ -456,7 +477,11 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     // 项目内的一次真实改动常常要读十来个文件、改几处、再验证一次；
     // 12 个回合会在「刚开始动手」时就被 error_max_turns 掐断。默认值和 CLI 执行器共用一套，
     // 否则这里写死 24 会让执行器里的默认值失效，大型项目仍会在收尾前被截断。
-    const maxTurns = Number.isInteger(requestedTurns) && requestedTurns >= 1 && requestedTurns <= 120 ? requestedTurns : cliDefaultMaxTurns(env);
+    // Claude Code 与内置模型都用 60：模型的一步就是一次工具调用，30 步写不完一套作业文件。
+    // 其它 CLI 仍按各自的保守默认值（Codex 30）。
+    const maxTurns = Number.isInteger(requestedTurns) && requestedTurns >= 1 && requestedTurns <= 120
+      ? requestedTurns
+      : (executor?.id === 'claude-code' || executor?.id === 'model' ? 60 : cliDefaultMaxTurns(env));
     // 单步超时：项目工作区走 projectExecutorInput，必须在这里透传，否则计划里的 timeoutMs 会被静默丢掉。
     const requestedTimeout = Number(options?.timeoutMs);
     const timeoutMs = Number.isSafeInteger(requestedTimeout) && requestedTimeout >= 60_000 && requestedTimeout <= 7_200_000 ? requestedTimeout : 0;
@@ -498,6 +523,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       // 模型 Agent 的会话级模型与思考强度：只在模型执行器上透传，其它 CLI 不认识这些键。
       ...(isModel && typeof options?.profileId === 'string' && options.profileId.trim() ? { profileId: options.profileId.trim().slice(0, 100) } : {}),
       ...(isModel && typeof options?.effort === 'string' && options.effort.trim() ? { effort: options.effort.trim().slice(0, 10) } : {}),
+      // 协作角色要跟着模型走进项目上下文：汇总/验收写「不通过」是结论，不是这份报告失败。
+      ...(isModel && ['coordination', 'verify', 'synthesis'].includes(options?.role) ? { role: options.role } : {}),
+      ...(isModel && Number.isInteger(options?.maxSteps) && options.maxSteps >= 1 && options.maxSteps <= 60 ? { maxSteps: options.maxSteps } : {}),
       // 外部 CLI：model/effort 由各 CLI 自己决定是否拼进参数（Codex/Claude Code 已支持）。
       ...(!isModel && typeof options?.model === 'string' && options.model.trim() ? { model: options.model.trim().slice(0, 120) } : {}),
       ...(!isModel && typeof options?.effort === 'string' && options.effort.trim() && options.effort !== 'default' ? { effort: options.effort.trim().slice(0, 10) } : {}),
@@ -914,9 +942,13 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         db.put('assignment', assignment);
       }
     }
-    const status = {running:'working',awaiting_approval:'awaiting_review',completed:'completed',failed:'failed',cancelled:'cancelled'}[task.status];
+    let status = {running:'working',awaiting_approval:'awaiting_review',completed:'completed',failed:'failed',cancelled:'cancelled'}[task.status];
     const approvalSnapshot=status==='awaiting_review'?active.approval?.(task):undefined;
     if(!status || (ticket.status===status&&assignment.sessionId===task.id&&JSON.stringify(approvalSnapshot)===JSON.stringify(ticket.approvalSnapshot)))return;
+    // 完成不等于交付：契约里写了「必须落盘」的文件，缺一个就不能对外报完成。
+    // 这条检查只对声明了 deliverables 的任务生效，旧工单行为不变。
+    const missing = status === 'completed' ? missingDeliverables(ticket.contract, projectPathForTicket(ticket)) : [];
+    if (missing.length) status = 'failed';
     const terminal=activeId==='terminal';
     const cli=active.kind==='cli';
     const tool=active.kind==='tool';
@@ -946,7 +978,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       }
       return '';
     })();
-    const summary=status==='failed'?String(task.error||`${label}执行失败`).slice(0,400):{
+    const failureSummary = missing.length
+      ? `缺少交付文件：${missing.slice(0, 6).join('、')}${missing.length > 6 ? ` 等 ${missing.length} 个` : ''}`
+      : String(task.error||`${label}执行失败`);
+    const summary=status==='failed'?failureSummary.slice(0,400):{
       working:`${label}执行中`,
       awaiting_review:task.accessRequest?accessPrompt(task.accessRequest):`${label}等待确认`,
       completed:activeId==='window'?(typeof task.report?.summary==='string'&&task.report.summary.trim()?task.report.summary.trim():'窗口指令已发送'):tool?toolSummary:terminal?'终端命令执行完成':activeId==='model'?(typeof task.artifacts?.cli?.summary==='string'&&task.artifacts.cli.summary.trim()?task.artifacts.cli.summary.trim().slice(0,200):'模型 Agent 执行完成'):cli?(typeof task.artifacts?.cli?.summary==='string'&&task.artifacts.cli.summary.trim()?task.artifacts.cli.summary.trim().slice(0,300):typeof task.report?.summary==='string'&&task.report.summary.trim()?task.report.summary.trim().slice(0,300):`${label}执行完成`):'分析报告已生成',
@@ -965,6 +1000,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         ? String(task.error || summary || '执行失败')
         : [
             task.report && typeof task.report.summary === 'string' ? task.report.summary.trim() : '',
+            cli && typeof task.artifacts?.cli?.detail === 'string' ? task.artifacts.cli.detail.trim() : '',
             cli && typeof task.artifacts?.cli?.summary === 'string' ? task.artifacts.cli.summary.trim() : '',
             toolDetail || '',
             summary || ''
@@ -1008,8 +1044,14 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           // （model 的 artifacts.cli.artifacts、CLI 的 files），否则变更档案里永远是空的。
           // 失败也要记：文件确实被改过，这件事跟这次任务算不算成功无关。
           const reported = reportedFiles(task);
+          const gitFiles = status === 'completed' ? changedSinceSnapshot(ticket.id, project.path) : [];
+          // 非 Git 项目没有 diff 可用：按执行开始时间扫 mtime，否则产物页永远只有执行器主动报告的少数文件。
+          const scanStart = Date.parse(assignment?.startedAt || ticket.startedAt || ticket.createdAt || '') || 0;
+          const touched = project && !projects.isGitRepo(project.path) && scanStart
+            ? projects.filesModifiedSince(project.path, scanStart)
+            : [];
           const changedFiles = project
-            ? [...new Set([...(status === 'completed' ? changedSinceSnapshot(ticket.id, project.path) : []), ...reported])]
+            ? [...new Set([...gitFiles, ...reported, ...touched])].slice(0, 100)
             : [];
           if (project && status !== 'cancelled') {
             try {
@@ -1048,6 +1090,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         if (plan.steps.some(step => db.get('ticket', step.ticketId)?.status === 'waiting')) advancePlan(plan.id);
       }
     }
+    // 回合用尽、服务重启、超时、交付文件缺失都可续跑：计划步骤不该因为一次中断就整条作废。
+    if (finished && status === 'failed' && next.planId && Number.isSafeInteger(next.planStep)) {
+      scheduleAutoContinue(next, summary);
+    }
     if (finished) {
       const projectId = next.projectChatId ? db.get('project-chat', next.projectChatId)?.projectId : '';
       try {
@@ -1072,8 +1118,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   }
   // 验收命令在 Lagent 侧执行，项目目录优先取工单绑定的工作文件夹。
   function projectPathForTicket(ticket) {
+    // 没有绑定项目的计划也必须安全返回：db.get('project', undefined) 会抛「无效的资源 ID」。
+    const planProjectId = ticket?.planId ? db.get('plan', ticket.planId)?.projectId : '';
     const project = projectContext(ticket?.projectChatId)?.project
-      || (ticket?.planId ? db.get('project', db.get('plan', ticket.planId)?.projectId) : null)
+      || (planProjectId ? db.get('project', planProjectId) : null)
       || null;
     return project?.path || workspace;
   }
@@ -1110,6 +1158,58 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       })
       .catch(() => { /* 自动验收失败不改变工单状态，用户仍可手动验收。 */ })
       .finally(() => verifyingTickets.delete(ticket.id));
+  }
+  // 可续跑的失败：回合/步数用尽、超时、服务重启、交付文件缺失。
+  // 模型说「没做完」但原因是需求冲突之类，不会命中这些词，仍然直接失败，避免白烧预算。
+  const AUTO_CONTINUE_RE = /步数|回合|max[_-]?turns|中断|超时|中止|缺少交付文件/i;
+  const autoContinueEnabled = () => options.autoContinue !== false && env.LAGENT_AUTO_CONTINUE !== '0';
+  function scheduleAutoContinue(ticket, reason) {
+    if (!autoContinueEnabled()) return;
+    if (!AUTO_CONTINUE_RE.test(String(reason || ''))) return;
+    if (ticket.interrupted) return;
+    const attempts = Number(ticket.continuations || 0);
+    if (!Number.isSafeInteger(attempts) || attempts >= 2) return;
+    const note = `【续跑 ${attempts + 1}/2】上一次执行因为「${String(reason || '中断').slice(0, 120)}」结束。先检查项目里已经落盘的文件和已有改动，不要重做完成的部分；只补缺失的文件、修未通过的验证，完成后给出 final。`;
+    // 只有本来就带 executorInput 的执行器才能改预算；分析/终端这类执行器传了会直接 400。
+    const original = ticket.executorInput && typeof ticket.executorInput === 'object' && !Array.isArray(ticket.executorInput)
+      ? { ...ticket.executorInput }
+      : null;
+    let patch;
+    if (original) {
+      // 内置模型经过校验后存的是 maxSteps，外部 CLI 存的是 maxTurns；两种预算都要补。
+      if (original.maxSteps !== undefined) {
+        const previousSteps = Number(original.maxSteps) || 0;
+        original.maxSteps = Math.min(60, Math.max(previousSteps + 20, 60));
+      } else {
+        const previousTurns = Number(original.maxTurns) || 0;
+        original.maxTurns = Math.min(120, Math.max(previousTurns + 20, 60));
+      }
+      if (typeof original.prompt === 'string') {
+        original.prompt = `${original.prompt}\n\n${note}`;
+        patch = { executorInput: original };
+      } else {
+        patch = { executorInput: original, command: `${ticket.command}\n\n${note}` };
+      }
+    } else {
+      patch = { command: `${ticket.command}\n\n${note}` };
+    }
+    // 等这一轮 sync 写完失败记录并推进完计划再续跑，避免在事务中间重入 start。
+    setTimeout(() => {
+      try {
+        const current = privateTicket(ticket.id);
+        if (!current || !['failed', 'blocked'].includes(current.status)) return;
+        const plan = current.planId ? db.get('plan', current.planId) : null;
+        if (plan && plan.status === 'failed') revivePlan(plan.id, current.planStep);
+        const waiting = { ...current, ...patch, status: 'waiting', attention: undefined, summary: `自动续跑（${attempts + 1}/2）：${String(reason).slice(0, 120)}`, continuations: attempts + 1, updatedAt: now() };
+        write(waiting);
+        start(privateTicket(ticket.id), {}, undefined);
+      } catch (error) {
+        const current = privateTicket(ticket.id);
+        if (!current) return;
+        write({ ...current, status: 'failed', summary: `自动续跑失败：${String(error?.message || error).slice(0, 300)}`, updatedAt: now() });
+        if (current.planId) advancePlan(current.planId);
+      }
+    }, 0);
   }
   function blockWithoutDataset(ticket,assignment) {
     const summary='当前工作区没有可用数据集，请先上传数据集后再批准';
@@ -1164,8 +1264,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw workError('计划参数必须为对象');
     const goal = typeof input.goal === 'string' ? input.goal.trim() : '';
     if (!goal || goal.length > 4000) throw workError('计划目标须为 1–4000 字');
-    // 受管回合要在用户步骤前后各加一个 Lagent 步骤，因此放宽到 7；手动计划仍是 2–5 步。
-    const maxSteps = input.managed === true ? 7 : 5;
+    // 受管回合要在执行步骤前后各加 Lagent 步骤，多 Agent 模式还要为每一路加交叉验收，
+    // 3 个协作方时最多 1 分工 + 3 执行 + 3 验收 + 1 汇总 = 8 步；手动计划仍是 2–5 步。
+    const maxSteps = input.managed === true ? 10 : 5;
     if (!Array.isArray(input.steps) || input.steps.length < 2 || input.steps.length > maxSteps) throw workError(`计划必须包含 2–${maxSteps} 个步骤`);
     // 会话里的受管回合：每个 Agent 都复用会话自己的隐藏执行对话，避免跨会话串 session。
     const managedConversation = typeof input.conversationId === 'string' && input.conversationId.trim()
@@ -1239,7 +1340,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const compensate = normalizeCompensation(step.compensate);
       // 受管回合用 role 标出「分工/协作/汇总」，会话投影据此决定展示位置。
       const role = typeof step.role === 'string' && CONVERSATION_ROLES.includes(step.role) ? step.role : '';
-      return { targetId, target, text, rawInput: step.executorInput, datasetId, dependsOn: [...dependsOn], chat, scope, verify, contract, compensate, role };
+      // 契约以前只存不用：执行器根本看不到验收标准和交付清单。
+      // 现在把它拼进步骤正文，内置模型、Claude Code、Codex 都能直接读到。
+      const brief = contractBrief(contract);
+      return { targetId, target, text: brief ? `${text}\n\n${brief}` : text, rawInput: step.executorInput, datasetId, dependsOn: [...dependsOn], chat, scope, verify, contract, compensate, role };
     });
     for (const step of prepared) {
       if (projectRecord && !step.chat && PROJECT_CHAT_EXECUTORS.includes(step.targetId)) {
@@ -1408,9 +1512,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         }
         let target = null;
         try { target = executors.requireAvailable(ticket.executor); } catch { /* 执行器已不可用。 */ }
-        const allowed = executorAllowed(ticket.executor);
-        if (!target || !allowed) {
-          const summary = target ? '目标执行器未获当前策略允许' : '目标执行器不可用';
+        const denial = target ? executorDenial(ticket.executor) : null;
+        if (!target || denial) {
+          const summary = target ? denial.reason : '目标执行器不可用';
           const blocked = { ...ticket, status: 'blocked', attention: undefined, summary, updatedAt: now() };
           transaction.put('ticket', blocked); tickets[step.index] = blocked; changed = true;
           transaction.event('ticket', blocked);
@@ -1739,7 +1843,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       conversationId: conversation.id,
       ...(turnId ? { turnId } : {}),
       agentId,
-      ...(role === 'synthesis' || role === 'step' ? { role } : {})
+      ...(role === 'synthesis' || role === 'step' || role === 'verify' ? { role } : {})
     };
     if (conversation.projectId) {
       const chat = conversationChat(conversation, agentId, settings?.permission);
@@ -1778,6 +1882,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     db.put('ticket', conversations.linkTicket(stored, { conversationId, turnId, agentId, role }));
   }
 
+  // 目标里明确要求只读时，团队分工不能安排写文件或造交付物；这条判断优先于项目模板。
+  const readOnlyGoal = text => /(只读|不要修改|不许修改|不得修改|不要改动|禁止修改|不要写文件|不要创建文件|不运行构建|不要运行构建|不跑构建|不要跑构建|不执行构建|不要执行构建|不跑测试|不要运行测试|不要跑测试)/.test(String(text || ''));
   // 协调者的任务书：只分工，不下场改文件，避免把步数烧光。
   function coordinatorPrompt(goal, collaborators) {
     const others = collaborators.map(id => `${id}（协作 Agent）`).join('、');
@@ -1785,25 +1891,50 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       '你是 Lagent，多 Agent 团队的主控，负责先把任务想清楚再分派。这一步不要修改任何文件。',
       `目标：${goal}`,
       `接下来会交给：${others}。`,
+      '原始目标里的限制优先于任何分工建议：目标要求只读、不要修改文件或不要构建时，分工里就不许安排写文件，也不要把创建脚本、报告当成交付物；此时每个协作 Agent 的产出就是检查结论。',
       '请先用两三句话说明你如何理解这个任务，再逐条写清每个协作 Agent 要做什么、交付什么、验收标准是什么。',
-      '分派时把每个人要写的文件写清楚，避免两个 Agent 抢同一个文件；简单任务不要硬拆成多份。',
+      '每个协作 Agent 都要独立完成一份实际执行工作，不能把其中某个人只安排成验收方；交叉验收由后续单独的步骤完成。',
+      '需要写文件时才写清每个人负责的文件，避免两个人抢同一个文件；简单任务不要硬拆成多份。',
+      '给每个协作 Agent 留一条可被另一位 Agent 独立验收的标准（能跑什么命令、该看到什么结果）。',
       '这一步只做分工：最多翻目录、看一两个关键文件确认结构，工具调用不要超过 4 次，然后直接写结论。'
     ].join('\n\n');
   }
 
-  function synthesisPrompt(goal, collaborators) {
+  function synthesisPrompt(goal, collaborators, { crossTested = false } = {}) {
     return [
       '你是 Lagent，这次协作的主控。前面几位协作 Agent 已经把结果交回给你（见上方材料）。',
       `原始目标：${goal}`,
       `参与者：${collaborators.join('、')}。`,
+      crossTested
+        ? '材料里包含执行结果和交叉验收记录：先看验收方指出的问题，判断哪些必须修、哪些只是建议。'
+        : '',
       '请写一份团队汇总：每个人做了什么、结果是否达成目标、还有什么没做完或不可靠。',
+      crossTested
+        ? '明确写出每一路验收的结论（通过 / 有条件通过 / 不通过），以及仍未解决的冲突和风险。'
+        : '',
+      '这一步是汇总，不要重新执行整个任务：材料已经足够，只在必须核对关键事实时做一两次只读检查；不要为了凑齐格式反复翻目录。',
+      '如果原始目标要求只读、不要修改文件，就不要因为“没有生成脚本/报告文件”判失败，结论本身就是交付物。',
       '如果目标里点名了具体文件，先列目录确认它们都在，缺了必须写明缺哪个，不要笼统说“完成了”。',
       '最后明确「下一步建议交给谁、做什么」。只依据给定材料，不要编造。'
-    ].join('\n');
+    ].filter(Boolean).join('\n');
+  }
+
+  // 交叉验收：让执行者去检查另一位执行者的产出，而不是再独立答一遍题。
+  function crossTestPrompt(goal, reviewer, target) {
+    return [
+      `你是 ${reviewer}，这次协作里的交叉验收方。你要验收 ${target} 的工作，不要重写他的产出。`,
+      `原始目标：${goal}`,
+      `你负责验收：${target} 的交付。`,
+      '先在前序材料里找到对方做了什么、声称怎么验证的；能跑就跑一遍测试或构建，能看就看一遍关键文件。',
+      '重点核对：是否满足 Lagent 分工里的验收标准、有没有把没做完的部分说成完成。原始目标要求只读时，不要以“没有生成文件”为由判不通过。',
+      '只有原始目标或分工明确要求产出文件时，才检查交付文件是否真实存在；分工里的文件清单与原始目标冲突时，以原始目标为准。',
+      '不要替对方改文件；发现问题时写清文件、复现方式、期望结果和建议修法。',
+      '最后给出明确结论：「通过」「有条件通过」或「不通过」，并列出必须修的问题。'
+    ].join('\n\n');
   }
 
   // 把模型/权限设置翻译成单个步骤的 executorInput；不同执行器只认识自己的字段。
-  function managedExecutorInput(executorId, { settings, models, executorInputs, prompt }) {
+  function managedExecutorInput(executorId, { settings, models, executorInputs, prompt, maxSteps = 6, role = '' }) {
     const base = executorInputs?.[executorId] && typeof executorInputs[executorId] === 'object' && !Array.isArray(executorInputs[executorId])
       ? { ...executorInputs[executorId] }
       : {};
@@ -1814,7 +1945,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         ...(settings?.effort ? { effort: settings.effort } : {}),
         ...(settings?.permission ? { permission: settings.permission } : {}),
         ...(prompt ? { prompt } : {}),
-        maxSteps: 6
+        ...(role ? { role } : {}),
+        maxSteps
       };
     }
     const active = executors.list().find(agent => agent.id === executorId);
@@ -1837,12 +1969,86 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
    * - 计划模式：Lagent 先拆步骤，再把整体收进同一轮会话。
    */
   function buildManagedSteps({ goal, collaborators, mode, settings, models, executorInputs, suggestedSteps = [] }) {
+    // 多 Agent 模式：Lagent 拆解分发 → 各自执行 → 互相验收 → Lagent 汇总。
+    if (mode === 'multi') {
+      const others = collaborators.filter(id => id !== LAGENT_EXECUTOR_ID);
+      if (others.length) {
+        const steps = [{
+          executorId: LAGENT_EXECUTOR_ID,
+          text: `理解并拆解：${goal}`,
+          role: 'coordination',
+          executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: coordinatorPrompt(goal, others), maxSteps: 8, role: 'coordination' })
+        }];
+        const workIndices = [];
+        others.forEach((executorId, index) => {
+          const workIndex = steps.length;
+          workIndices.push(workIndex);
+          steps.push({
+            executorId,
+            text: `执行任务第 ${index + 1} 部分`,
+            role: 'answer',
+            dependsOn: [0],
+            executorInput: managedExecutorInput(executorId, {
+              settings,
+              models,
+              executorInputs,
+              prompt: [
+                '你是这次协作里的执行者之一，负责其中一部分。',
+                `整个任务：${goal}`,
+                '原始目标里的限制优先于分工：目标要求只读、不要修改文件或不要构建时，绝对不要创建文件，也不要按分工里冲突的文件清单落盘。',
+                '先看前序材料里 Lagent 的分工，只做分给你的部分；分工没有点名你时，按你的能力补位并说明理由。分工把你安排成“验收别人”时，仍然先独立完成自己那份检查，不要只复述对方的结论。',
+                `同时参与的还有：${others.filter(id => id !== executorId).join('、') || '无'}。不要替别人改他要负责的文件。`,
+                '做完后写清：检查或改动了哪些文件、怎么验证的、还有什么没做完。后面会有另一位 Agent 按 Lagent 的验收标准检查你的产出。'
+              ].join('\n\n')
+            })
+          });
+        });
+        const testIndices = [];
+        // 只有一个协作方时没有「对方」可测，交给 Lagent 在汇总时验收。
+        if (others.length >= 2) {
+          others.forEach((executorId, index) => {
+            const targetIndex = (index + 1) % others.length;
+            const target = others[targetIndex];
+            const testIndex = steps.length;
+            testIndices.push(testIndex);
+            steps.push({
+              executorId,
+              text: `交叉验收：${target} 的工作`,
+              role: 'verify',
+              dependsOn: [0, workIndices[targetIndex]],
+              executorInput: managedExecutorInput(executorId, {
+                settings,
+                models,
+                executorInputs,
+                prompt: crossTestPrompt(goal, executorId, target),
+                role: 'verify'
+              })
+            });
+          });
+        }
+        steps.push({
+          executorId: LAGENT_EXECUTOR_ID,
+          text: '汇总结果与下一步',
+          role: 'synthesis',
+          dependsOn: testIndices.length ? testIndices : workIndices,
+          executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, {
+            settings,
+            models,
+            executorInputs,
+            prompt: synthesisPrompt(goal, others, { crossTested: testIndices.length > 0 }),
+            maxSteps: 10,
+            role: 'synthesis'
+          })
+        });
+        return steps;
+      }
+    }
     if (mode === 'plan' && suggestedSteps.length) {
       const body = suggestedSteps
         .filter(step => step && step.executorId && step.executorId !== LAGENT_EXECUTOR_ID)
         .slice(0, 5);
       if (body.length) {
-        const steps = [{ executorId: LAGENT_EXECUTOR_ID, text: `理解并拆解：${goal}`, role: 'coordination', executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: coordinatorPrompt(goal, body.map(step => step.executorId)) }) }];
+        const steps = [{ executorId: LAGENT_EXECUTOR_ID, text: `理解并拆解：${goal}`, role: 'coordination', executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: coordinatorPrompt(goal, body.map(step => step.executorId)), maxSteps: 8, role: 'coordination' }) }];
         body.forEach((step, index) => {
           const dependsOn = Array.isArray(step.dependsOn) && step.dependsOn.length
             ? [...new Set([0, ...step.dependsOn.map(item => Number(item) + 1).filter(item => item > 0 && item <= body.length)])]
@@ -1871,7 +2077,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           text: '汇总结果与下一步',
           role: 'synthesis',
           dependsOn: body.map((_, index) => index + 1),
-          executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: synthesisPrompt(goal, body.map(step => step.executorId)) })
+          executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: synthesisPrompt(goal, body.map(step => step.executorId)), maxSteps: 10, role: 'synthesis' })
         });
         return steps;
       }
@@ -1882,7 +2088,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       executorId: LAGENT_EXECUTOR_ID,
       text: `理解并拆解：${goal}`,
       role: 'coordination',
-      executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: coordinatorPrompt(goal, others) })
+      executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: coordinatorPrompt(goal, others), maxSteps: 8, role: 'coordination' })
     }];
     others.forEach((executorId, index) => {
       steps.push({
@@ -1908,7 +2114,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       text: '汇总结果与下一步',
       role: 'synthesis',
       dependsOn: others.map((_, index) => index + 1),
-      executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: synthesisPrompt(goal, others) })
+      executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: synthesisPrompt(goal, others), maxSteps: 10, role: 'synthesis' })
     });
     return steps;
   }
@@ -1947,7 +2153,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       .filter(step => step.ticketId)
       .map(step => ({ ticketId: step.ticketId, agentId: step.executorId || LAGENT_EXECUTOR_ID, role: CONVERSATION_ROLES.includes(step.role) ? step.role : 'step' }));
     if (!runs.length) throw workError('受管回合没有生成可执行的步骤', 500);
-    const { turn } = conversations.addTurn(conversation.id, { id: turnId, prompt: text, mode: mode === 'plan' ? 'plan' : 'review', agentIds: [LAGENT_EXECUTOR_ID, ...collaborators], runs });
+    const turnMode = mode === 'plan' ? 'plan' : mode === 'multi' ? 'multi' : 'review';
+    const { turn } = conversations.addTurn(conversation.id, { id: turnId, prompt: text, mode: turnMode, agentIds: [LAGENT_EXECUTOR_ID, ...collaborators], runs });
     for (const run of runs) linkConversationTicket(run, conversation.id, turnId, run.agentId, run.role);
     const synthesis = planSteps.filter(step => step.role === 'synthesis' && step.ticketId).at(-1);
     if (synthesis) conversations.setSynthesis(conversation.id, turnId, { ticketId: synthesis.ticketId, agentId: LAGENT_EXECUTOR_ID });
@@ -2342,6 +2549,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const running=db.list('assignment').filter(row=>row.status==='working').length;
       return {
         capabilities:{work:true},
+        // 服务级总开关：为 false 时，策略里勾选外部执行器也不会生效，界面据此给出提示。
+        externalExecutors:externalExecutorsEnabled(env),
         // 并发占用：工单显示「排队中」时，界面要能说清楚是在等空位，而不是卡住了。
         queue:{maxConcurrent:policy.budgets.maxConcurrent,running,queued:tickets.filter(ticket=>ticket.status==='queued').length,full:running>=policy.budgets.maxConcurrent},
         // 未绑定工作文件夹的对话，Agent 就在这个目录里读写。
@@ -2575,14 +2784,14 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         if(!PROJECT_CHAT_EXECUTORS.includes(executorId))throw workError('这条消息指定的执行器不支持项目对话',400);
         if(executorId==='window'&&chat.executorId!=='window')throw workError('窗口 Agent 需要先在项目中绑定窗口对话',400);
         executors.requireAvailable(executorId);
-        if(!executorAllowed(executorId))throw workError(`执行器「${executorId}」未获当前策略允许`,403);
+        const denial=executorDenial(executorId);if(denial)throw workError(denial.reason,403);
       }
       if(targets.length>1&&targets.includes('window'))throw workError('窗口 Agent 不能和其它 Agent 并行执行同一条任务',400);
       const executorInput={};
       if(typeof input?.profileId==='string'&&input.profileId.trim())executorInput.profileId=input.profileId.trim();
       if(typeof input?.model==='string'&&input.model.trim())executorInput.model=input.model.trim();
       if(typeof input?.effort==='string'&&input.effort.trim())executorInput.effort=input.effort.trim();
-      const conversation={...(typeof input?.conversationId==='string'&&input.conversationId.trim()?{conversationId:input.conversationId.trim()}:{}),...(typeof input?.turnId==='string'&&input.turnId.trim()?{turnId:input.turnId.trim()}:{}),...(typeof input?.agentId==='string'&&input.agentId.trim()?{agentId:input.agentId.trim()}:{}),...(input?.role==='synthesis'||input?.role==='step'?{role:input.role}:{})};
+      const conversation={...(typeof input?.conversationId==='string'&&input.conversationId.trim()?{conversationId:input.conversationId.trim()}:{}),...(typeof input?.turnId==='string'&&input.turnId.trim()?{turnId:input.turnId.trim()}:{}),...(typeof input?.agentId==='string'&&input.agentId.trim()?{agentId:input.agentId.trim()}:{}),...(['synthesis','step','verify'].includes(input?.role)?{role:input.role}:{})};
       const baseRequest=typeof input?.clientRequestId==='string'&&input.clientRequestId.trim()?input.clientRequestId.trim():'';
       const tickets=targets.map(executorId=>api.command({
         text,
@@ -2617,7 +2826,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         // 窗口 Agent 不能临时切过去：它需要会话上已经绑定的窗口句柄，也不能和其它人并行。
         if(executorId==='window'&&original!=='window')throw workError('窗口 Agent 需要先在项目中绑定窗口对话',400);
         executors.requireAvailable(executorId);
-        if(!executorAllowed(executorId))throw workError(`执行器「${executorId}」未获当前策略允许`,403);
+        const denial=executorDenial(executorId);if(denial)throw workError(denial.reason,403);
       }
       if(targets.length>2&&targets.includes('window'))throw workError('窗口 Agent 不能和其它 Agent 并行执行同一条任务',400);
       const materialized=materializeConversationForChat(chat.id);
@@ -2862,7 +3071,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const row=conversations.getRaw(id);
       const text=typeof input?.text==='string'?input.text.trim():'';
       if(!text||text.length>3000)throw workError('消息须为 1–3000 字',400);
-      const mode=['auto','plan','review'].includes(input?.mode)?input.mode:'auto';
+      // multi 是当前界面的「多 Agent」；plan/review 保留给旧调用与历史会话。
+      const mode=['auto','plan','review','multi'].includes(input?.mode)?input.mode:'auto';
       // 主控始终在名单里：前端传外部 Agent 时自动补上 Lagent，不能出现「绕过主控」的回合。
       let agentIds=normalizeManagedAgents(Array.isArray(input?.agentIds)?input.agentIds:[]);
       if(!agentIds.length)agentIds=normalizeManagedAgents(row.participants||[]);
@@ -3037,7 +3247,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const conversationId=typeof input?.conversationId==='string'&&input.conversationId.trim()?input.conversationId.trim().slice(0,120):'';
       const turnId=typeof input?.turnId==='string'&&input.turnId.trim()?input.turnId.trim().slice(0,120):'';
       const agentId=typeof input?.agentId==='string'&&input.agentId.trim()?input.agentId.trim().slice(0,60):activeId;
-      const role=input?.role==='synthesis'||input?.role==='step'?input.role:'answer';
+      const role=['synthesis','step','verify'].includes(input?.role)?input.role:'answer';
       const record={id:randomUUID(),title:(typeof input?.title==='string'&&input.title.trim()?input.title.trim():headline).slice(0,60),status:auto?'queued':'awaiting_review',stage:direct?(auto?'launch':'approval'):'dataset',source:'manual',executor:activeId,summary:auto?(activeId==='model'?modelCopy:activeId==='terminal'?'终端命令执行中':cli?'CLI 执行中':'执行中'):confirmCopy,attention:auto?undefined:review(preview.risk==='high'?previewQuestion(active.name,preview):reviewQuestion(activeId,project?((projectChatView?.executorId||project.chat.executorId)==='window'?'window':'write'):undefined)),createdAt:stamp,updatedAt:stamp,command:trigger.text,clientRequestId:trigger.clientRequestId,origin,datasetId,executorInput,preview,...(verify?{verify}:{}),...(contract?{contract}:{}),...(project?{projectChatId:project.chat.id}:{}),...(conversationId?{conversationId,turnId:turnId||null,agentId,role}:{})};
       // write() 返回的是 publicTicket（会剥掉 executorInput），直接执行必须用原始记录，否则会写回一份空的执行输入。
       const created=write(record);
@@ -3289,7 +3499,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const projectId=typeof input?.projectId==='string'?input.projectId.trim():'';
       const scope={...(projectChatId?{projectChatId}:{}),...(projectId&&!projectChatId?{projectId}:{})};
       const profileId=typeof input?.profileId==='string'?input.profileId.trim():'';
-      const requested=Array.isArray(input?.agentIds)?input.agentIds.filter(id=>typeof id==='string'&&id.trim()).map(id=>id.trim()).slice(0,4):[];
+      // 与受管会话保持一致：主控之外最多 3 个协作方，交叉验收时恰好 3 个验收依赖。
+      const requested=Array.isArray(input?.agentIds)?[...new Set(input.agentIds.filter(id=>typeof id==='string'&&id.trim()&&id.trim()!=='model').map(id=>id.trim()))].slice(0,3):[];
       if(!requested.length)throw workError('团队协作至少选择一个 Agent',400);
       const models=input?.models&&typeof input.models==='object'&&!Array.isArray(input.models)?input.models:{};
       const analysis=await api.analyze({goal,executors:requested.length?requested:undefined,...scope});
@@ -3318,20 +3529,42 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       // 这里只补非项目场景，避免重复。
       const coordinatorLibrary=projectRecord?'':buildLibraryContext(activeLibrary(),{executorId:'model'});
       const others=chosen.map(step=>`${step.executorId}（${step.title}）`).join('、');
+      // 项目协作先把要求落成一份「交付清单.md」：后面的 Agent 都读它，而不是各自猜范围。
+      // 非项目协作没有安全的落盘位置，仍然只做口头分工。
+      const hasProject=Boolean(projectRecord);
+      const readOnly=readOnlyGoal(goal);
+      // 只读任务即使在项目里也不建交付清单、不要求落盘；结论本身就是交付物。
+      const planFiles=hasProject&&!readOnly;
+      const checklistFile=planFiles?'交付清单.md':'';
       const steps=[{
         executorId:'model',
         text:`理解并拆解：${goal}`,
         executorInput:{prompt:[
-          '你在一个多 Agent 团队里担任协调者，负责先把任务想清楚再分派，这一步不要修改任何文件。',
+          '你在一个多 Agent 团队里担任协调者，负责先把任务想清楚再分派。',
           `目标：${goal}`,
           brief&&brief!==goal?`我的初步理解：\n${brief}`:'',
           coordinatorLibrary,
+          planFiles
+            ? '先读项目根目录里的课程/作业要求文档（.md/.txt 直接读；.docx/.pptx 直接用 read_office{path} 读文字，不要用 PowerShell 解压），把要求整理成一份交付清单。'
+            : '',
+          planFiles
+            ? `把清单写到项目根目录的 ${checklistFile}：逐行列出必须产出的文件或目录，并在行尾标出负责的执行器 id。只写这一份清单，不要改代码或其它文档。`
+            : '这一步不要修改或创建任何文件。',
+          planFiles
+            ? '清单必须覆盖要求里出现的全部交付物：需求分析、数据库设计与建表 SQL（含 E-R 图）、后端代码、前端页面与样式、测试脚本与测试用例、实验报告、演示 PPT 等；材料没写清的地方按目标补全并注明假设。'
+            : '',
+          readOnly
+            ? '原始目标要求只读：分工里不许安排写文件、不许造交付清单或报告；每个协作 Agent 的产出就是检查结论。'
+            : '',
           `接下来会并行交给：${others}。`,
+          '每个协作 Agent 都要独立完成一份实际工作，不能把其中某个人只安排成验收方；交叉验收由后续单独步骤完成。',
           '请先用两三句话说明你如何理解这个任务，再逐条写清每个执行者要做什么、交付什么、验收标准是什么。',
-          '分派时把每个人要写的文件写清楚，避免两个 Agent 抢同一个文件。',
-          // 协调者容易一头扎进去通读代码，把步数烧光还没写出一句分工；给个明确的次数上限。
-          '这一步只做分工：最多翻目录、看一两个关键文件确认结构，工具调用不要超过 4 次，然后直接写结论。',
-        ].filter(Boolean).join('\n\n'),...(profileId?{profileId}:{}),maxSteps:6}
+          planFiles ? '分派时把每个人要写的文件写清楚，避免两个 Agent 抢同一个文件。' : '',
+          planFiles
+            ? '最多读 6 个文件、写 1 份清单；工具调用不超过 10 次，然后直接写结论。'
+            // 协调者容易一头扎进去通读代码，把步数烧光还没写出一句分工；给个明确的次数上限。
+            : '这一步只做分工：最多翻目录、看一两个关键文件确认结构，工具调用不要超过 4 次，然后直接写结论。',
+        ].filter(Boolean).join('\n\n'),...(profileId?{profileId}:{}),maxSteps:planFiles?12:6,role:'coordination'}
       }];
       chosen.forEach(step=>{
         const model=typeof models[step.executorId]==='string'?models[step.executorId].trim():'';
@@ -3342,11 +3575,19 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         const prompt=[
           `你是这次协作里的执行者之一，负责其中一部分。`,
           `整个任务：${goal}`,
-          `你负责的部分：${step.title||'执行任务'}${Array.isArray(step.scope)&&step.scope.length?`（改动范围：${step.scope.join('、')}）`:''}${step.output?`\n期望产出：${step.output}`:''}`,
+          `你负责的部分：${step.title||'执行任务'}${Array.isArray(step.scope)&&step.scope.length?`（建议改动范围：${step.scope.join('、')}）`:''}${step.output?`\n期望产出：${step.output}`:''}`,
+          planFiles
+            ? `先读项目根目录的 ${checklistFile}（如果存在），只做清单里标给你的部分；清单把多组文件分给你时，按顺序全部完成。清单与建议范围冲突时，以清单为准。`
+            : '',
+          readOnly
+            ? '原始目标要求只读：不要创建或修改任何文件，也不要按分工里的文件清单落盘；独立完成检查并给出结论即可。'
+            : '',
           `同时参与的还有：${others}。只做你这一部分，不要替别人改他要负责的文件。`,
           agentLibrary,
-          '做事要求：先看现状再动手；改完确认真的生效（命令能跑通、页面能看到、语法没错）；',
-          '最后用几句话说清：你改了哪些文件、怎么验证的、还有什么没做完。',
+          planFiles
+            ? '做事要求：清单里的每个文件都要真实落盘，不要用一份总结文档代替代码、SQL、文档、测试或 PPT；改完确认真的生效（命令能跑通、页面能看到、语法没错）；'
+            : '做事要求：先看现状再动手；改完确认真的生效（命令能跑通、页面能看到、语法没错）；',
+          '最后用几句话说清：你改了哪些文件、怎么验证的、还有什么没做完。后面会有另一位 Agent 按验收标准检查你的产出。',
         ].filter(Boolean).join('\n\n');
         steps.push({
           executorId:step.executorId,
@@ -3356,27 +3597,67 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           ...(model?{executorInput:{prompt,model}}:{executorInput:{prompt}}),
         });
       });
+      const workStepIndices=chosen.map((_,index)=>index+1);
+      const verifyStepIndices=[];
+      // 交叉验收按环状互测：每位执行者检查下一位的产出，最后由 Lagent 汇总验收结论。
+      if(chosen.length>=2){
+        chosen.forEach((step,index)=>{
+          const target=chosen[(index+1)%chosen.length];
+          const model=typeof models[step.executorId]==='string'?models[step.executorId].trim():'';
+          const library=projectRecord?'':buildLibraryContext(activeLibrary(),{executorId:step.executorId});
+          const prompt=[crossTestPrompt(goal,step.executorId,target.executorId),library].filter(Boolean).join('\n\n');
+          verifyStepIndices.push(steps.length);
+          steps.push({
+            executorId:step.executorId,
+            text:`交叉验收：${target.executorId} 的工作`,
+            role:'verify',
+            dependsOn:[0,workStepIndices[(index+1)%chosen.length]],
+            ...(model?{executorInput:{prompt,model}}:{executorInput:{prompt}}),
+          });
+        });
+      }
+      const crossTested=verifyStepIndices.length>0;
       steps.push({
         executorId:'model',
         text:'汇总结果与下一步',
-        dependsOn:chosen.map((_,index)=>index+1),
+        dependsOn:crossTested?verifyStepIndices:workStepIndices,
         executorInput:{prompt:[
           '你是团队的协调者。前面几位 Agent 已经把结果交回给你（见上方材料）。',
+          crossTested
+            ? '材料里包含执行结果和交叉验收记录：先看验收方指出的问题，判断哪些必须修、哪些只是建议。'
+            : '',
+          planFiles
+            ? `先读项目根目录的 ${checklistFile}，并用 list_files 核对清单里的文件是否都存在。`
+            : '如果目标里点名了具体文件（比如 index.html、game.js），先列目录确认它们都在；只读任务不要求落盘。',
+          readOnly
+            ? '原始目标要求只读：不要因为“没有生成脚本/报告文件”判失败，结论本身就是交付物；也不要重新执行整个任务，基于材料汇总即可。'
+            : '',
+          planFiles
+            ? '不要逐份通读已经存在的文档或代码：列一次目录、确认缺哪些文件后，直接把缺的写出来，把步数留给落盘。'
+            : '',
+          planFiles
+            ? '缺 README.md、实验报告、演示 PPT 时优先补这三样：README 写部署与演示步骤；实验报告按课程格式写完整正文；PPT 写 10~12 页逐页大纲，本机有 python-pptx 就生成 .pptx。'
+            : '',
+          planFiles
+            ? '属于你的汇总职责之外、但清单里缺失且你能补的文件，直接补写；补不了的逐条列出，不要笼统说"完成了"。'
+            : '缺了必须写明缺哪个，不要笼统说"完成了"；没有要求落盘时不要创建文件。',
+          crossTested
+            ? '逐路写出验收结论（通过 / 有条件通过 / 不通过），把仍未解决的冲突和风险单列出来。'
+            : '这一轮只有一位协作 Agent，没有交叉验收；请你顺便按分工里的验收标准复核它的产出。',
           '请写一份团队汇总：每个人做了什么、结果是否达成目标、还有什么没做完或不可靠，',
-          '如果目标里点名了具体文件（比如 index.html、game.js），先列目录确认它们都在，缺了必须写明缺哪个，不要笼统说"完成了"。',
           '并明确「下一步建议交给谁、做什么」，方便继续分派。只依据给定材料，不要编造。',
-        ].join('\n'),...(profileId?{profileId}:{})}
+        ].filter(Boolean).join('\n'),...(profileId?{profileId}:{}),...(planFiles?{maxSteps:60}:{maxSteps:10}),role:'synthesis'}
       });
-      const plan=startPlan({goal,steps,...scope,...(parentChatId?{parentChatId}:{}),autoRun:input?.autoRun===true,clientRequestId:typeof input?.clientRequestId==='string'?input.clientRequestId:''});
+      const plan=startPlan({goal,steps,managed:true,...scope,...(parentChatId?{parentChatId}:{}),autoRun:input?.autoRun===true,clientRequestId:typeof input?.clientRequestId==='string'?input.clientRequestId:''});
       // 一次协作只对应一个 Lagent 会话：所有步骤（含协调者与各 Agent）都挂在这一轮里。
       let conversationId='';
       try{
         const turnId=`turn-collab-${plan.id}`;
         const created=conversations.create({id:`conv-collab-${plan.id}`,title:goal,goal,...(projectRecord?{projectId:projectRecord.id}:{}),agentIds:requested});
         conversationId=created.id;
-        const runs=(plan.steps||[]).filter(step=>step.ticketId).map(step=>({ticketId:step.ticketId,agentId:step.executorId||'lagent',role:'step'}));
-        if(runs.length)conversations.addTurn(conversationId,{id:turnId,prompt:goal,mode:'review',agentIds:requested,runs});
-        for(const run of runs)linkConversationTicket(run,conversationId,turnId,run.agentId,'step');
+        const runs=(plan.steps||[]).filter(step=>step.ticketId).map(step=>({ticketId:step.ticketId,agentId:step.executorId||'lagent',role:step.role||'step'}));
+        if(runs.length)conversations.addTurn(conversationId,{id:turnId,prompt:goal,mode:'multi',agentIds:requested,runs});
+        for(const run of runs)linkConversationTicket(run,conversationId,turnId,run.agentId,run.role);
         // 主对话就是这个会话的入口：项目页只显示它，从属对话已被标成隐藏。
         if(parentChatId){
           const host=db.get('project-chat',parentChatId);

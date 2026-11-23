@@ -2,11 +2,14 @@ import { cliDefaultMaxTurns, createCliExecutor, normalizeCliInput, parseJsonLine
 import { findClaudeCodeCli } from './discover.js';
 
 const MAX_SUMMARY = 6000;
+// 这些工具的输出参数就是被写入的文件；其余工具（Read/Grep/Bash）不产生产物。
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
 export function parseClaudeOutput({ stdout, stderr, exitCode }) {
   const { events, malformed } = parseJsonLines(stdout);
   const summaries = [];
   const errors = [];
+  const artifacts = [];
   const stats = { events: events.length, malformedLines: malformed, assistantMessages: 0, resultMessages: 0, tools: 0 };
   let usage = {};
   let resultSummary = '';
@@ -20,7 +23,11 @@ export function parseClaudeOutput({ stdout, stderr, exitCode }) {
       const content = Array.isArray(event.message?.content) ? event.message.content : Array.isArray(event.content) ? event.content : [];
       for (const block of content) {
         if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim()) summaries.push(block.text.trim());
-        if (block?.type === 'tool_use') stats.tools += 1;
+        if (block?.type === 'tool_use') {
+          stats.tools += 1;
+          const file = block.input && typeof block.input.file_path === 'string' ? block.input.file_path.trim() : '';
+          if (file && WRITE_TOOLS.has(block.name) && !artifacts.includes(file)) artifacts.push(file);
+        }
       }
       if (event.message?.usage) usage = event.message.usage;
     }
@@ -42,7 +49,7 @@ export function parseClaudeOutput({ stdout, stderr, exitCode }) {
     summary: sanitizeText(resultSummary || summaries.at(-1) || '', MAX_SUMMARY),
     usage,
     error: errors.find(Boolean) || '',
-    artifacts: [],
+    artifacts,
     stats,
     ...(sessionId ? { sessionId } : {})
   };

@@ -72,7 +72,7 @@ export interface WorkTicket {
   parentTicketId?: string | null; chainRootId?: string | null; handoffDepth?: number; handoffSummary?: string; handoffChildId?: string | null;
   planId?: string | null; planStep?: number | null; planTotal?: number | null; projectChatId?: string | null;
   /** 会话归属：一条工单是哪个会话、哪一轮里哪个 Agent 的一次 run。 */
-  conversationId?: string | null; turnId?: string | null; agentId?: string | null; role?: 'answer' | 'synthesis' | 'step' | string | null;
+  conversationId?: string | null; turnId?: string | null; agentId?: string | null; role?: 'answer' | 'synthesis' | 'step' | 'coordination' | 'verify' | string | null;
   preview?: WorkPreview | null; verify?: WorkVerifySpec | null; acceptance?: WorkAcceptance | null; review?: WorkReview | null; contract?: WorkTaskContract | null;
   handoff?: WorkHandoff | null;
   /** 详情接口在长时间无心跳时返回；列表投影不带。 */
@@ -95,7 +95,7 @@ export interface WorkRosterEntry {
 export interface WorkTeamTemplateRole { role: string; executorId: string; permissions: 'read' | 'workspace' | 'full' }
 export interface WorkTeamTemplate {
   id: string; name: string; roles: WorkTeamTemplateRole[];
-  defaultMode: 'auto' | 'plan' | 'review';
+  defaultMode: 'auto' | 'plan' | 'review' | 'multi';
   projectId?: string;
   createdAt: string; updatedAt: string;
 }
@@ -273,9 +273,9 @@ export interface WorkRun {
   error: string | null;
 }
 // 会话：用户可见的唯一对话容器。每个被选中的 Agent 只是会话里的一次 run。
-export interface WorkConversationRun { ticketId: string; agentId: string; role: 'answer' | 'synthesis' | 'step' | string }
+export interface WorkConversationRun { ticketId: string; agentId: string; role: 'answer' | 'synthesis' | 'step' | 'coordination' | 'verify' | string }
 export interface WorkConversationTurn {
-  id: string; index: number; prompt: string; mode: 'auto' | 'review' | 'plan' | string;
+  id: string; index: number; prompt: string; mode: 'auto' | 'review' | 'plan' | 'multi' | string;
   agentIds: string[]; runs: WorkConversationRun[];
   synthesisTicketId?: string; synthesisAgentId?: string; createdAt: string;
 }
@@ -287,6 +287,8 @@ export interface WorkConversationSummary {
 export interface WorkConversation extends WorkConversationSummary { turns: WorkConversationTurn[] }
 export interface WorkBootstrap {
   capabilities: { work: boolean };
+  /** 服务级外部执行器总开关（LAGENT_ALLOW_EXTERNAL_EXECUTORS）；false 时策略里的 CLI 勾选不生效。 */
+  externalExecutors?: boolean;
   /** 执行器并发占用：工单显示「排队中」时用来解释是在等空位。 */
   queue?: { maxConcurrent: number; running: number; queued: number; full: boolean };
   tickets: WorkTicket[];

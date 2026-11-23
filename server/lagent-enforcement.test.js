@@ -43,6 +43,7 @@ test('纯规则：Lagent 永远在参与者首位，外部协作最多 3 个', (
   assert.deepEqual(collaboratorsOf(['model', 'codex']), ['codex']);
   assert.equal(managedTurnShape({ mode: 'auto', collaborators: [] }).kind, 'direct');
   assert.equal(managedTurnShape({ mode: 'review', collaborators: ['codex'] }).kind, 'coordinated');
+  assert.equal(managedTurnShape({ mode: 'multi', collaborators: ['codex'] }).kind, 'multi');
   assert.equal(managedTurnShape({ mode: 'plan', collaborators: ['codex'] }).kind, 'plan');
   assert.equal(isExecutorAllowed({ allowedExecutors: [] }, 'model'), true, '策略不能关掉主控');
   assert.equal(isExecutorAllowed({ allowedExecutors: [] }, 'codex'), false);
@@ -69,6 +70,60 @@ test('只选外部 Agent 时仍由 Lagent 分工与汇总', async t => {
     assert.equal(ticket.conversationId, conversation.id);
     assert.equal(ticket.turnId, loaded.turns[0].id);
   }
+});
+
+test('多 Agent 模式：Lagent 拆解分发，协作方执行并互相验收，最后汇总', async t => {
+  const { engine } = harness(t);
+  const { conversation } = engine.createConversation({ goal: '实现导出并写测试', agentIds: ['claude-code', 'codex'] });
+  const result = await engine.conversationMessage(conversation.id, {
+    text: '实现导出按钮并补测试',
+    mode: 'multi',
+    agentIds: ['claude-code', 'codex'],
+    autoRun: false
+  });
+  assert.deepEqual(result.tickets.map(ticket => ticket.role), ['coordination', 'answer', 'answer', 'verify', 'verify', 'synthesis']);
+  assert.deepEqual(result.tickets.map(ticket => ticket.executor), ['model', 'claude-code', 'codex', 'claude-code', 'codex', 'model']);
+  const loaded = engine.getConversation(conversation.id).conversation;
+  assert.equal(loaded.turns[0].mode, 'multi');
+  assert.equal(loaded.turns[0].synthesisAgentId, 'model');
+  const verify = result.plan.steps.filter(step => step.role === 'verify');
+  assert.equal(verify.length, 2, '两位协作方按环状互相验收');
+  assert.deepEqual(result.plan.steps.at(-1).dependsOn, verify.map(step => step.index));
+});
+
+test('多 Agent 分工与汇总提示词优先遵守只读目标，并给主控留足核对步数', async t => {
+  const { engine, store } = harness(t);
+  const { conversation } = engine.createConversation({ goal: '只读统计文件', agentIds: ['claude-code', 'codex'] });
+  const result = await engine.conversationMessage(conversation.id, {
+    text: '只读统计 src 下的文件，不要修改任何文件',
+    mode: 'multi',
+    agentIds: ['claude-code', 'codex'],
+    autoRun: false
+  });
+  const control = ticket => store.get('work-control', ticket.id).executorInput;
+  const coordination = result.tickets.find(ticket => ticket.role === 'coordination');
+  const work = result.tickets.find(ticket => ticket.role === 'answer');
+  const synthesis = result.tickets.find(ticket => ticket.role === 'synthesis');
+  assert.match(control(coordination).prompt, /目标要求只读、不要修改文件或不要构建时，分工里就不许安排写文件/);
+  assert.match(control(coordination).prompt, /不能把其中某个人只安排成验收方/);
+  assert.equal(control(coordination).maxSteps, 8);
+  assert.equal(control(coordination).role, 'coordination');
+  assert.match(control(work).prompt, /原始目标里的限制优先于分工/);
+  assert.match(control(synthesis).prompt, /不要因为“没有生成脚本\/报告文件”判失败/);
+  assert.equal(control(synthesis).maxSteps, 10);
+  assert.equal(control(synthesis).role, 'synthesis');
+});
+
+test('多 Agent 模式只有一位协作方时，由 Lagent 在汇总里验收', async t => {
+  const { engine } = harness(t);
+  const { conversation } = engine.createConversation({ goal: '实现导出', agentIds: ['claude-code'] });
+  const result = await engine.conversationMessage(conversation.id, {
+    text: '实现导出按钮',
+    mode: 'multi',
+    agentIds: ['claude-code'],
+    autoRun: false
+  });
+  assert.deepEqual(result.tickets.map(ticket => ticket.role), ['coordination', 'answer', 'synthesis']);
 });
 
 test('只选 Lagent 时直接一张工单，不额外造协调与汇总', async t => {

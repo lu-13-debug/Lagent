@@ -28,6 +28,11 @@ test('Super-agent 指挥台：导航、派活模式、审批与移动端', async
   await page.route('**/api/work/bootstrap', route => route.fulfill({ json: bootstrap }));
   await page.route('**/api/work/command', async route => route.fulfill({ json: { ticket: { ...ticket, id: 't-new', title: '运行终端命令', status: 'working' } } }));
   let sentBody: any = null;
+  let collabBody: any = null;
+  await page.route('**/api/work/collaborate', route => {
+    collabBody = route.request().postDataJSON();
+    return route.fulfill({ status: 201, json: { plan: { id: 'plan-1', steps: [] }, steps: [], mainChatId: null, conversationId: 'conv-new-1' } });
+  });
   await page.route('**/api/work/conversations', async route => {
     if (route.request().method() !== 'POST') return route.fulfill({ json: { conversations: [] } });
     return route.fulfill({ status: 201, json: { conversation: { id: 'conv-new-1', title: '检查 GitHub 仓库状态', goal: '检查 GitHub 仓库状态', host: 'lagent', projectId: null, participants: ['model', 'claude-code'], ticketIds: [], turnCount: 0, lastPrompt: '', lastMode: 'auto', status: 'waiting', createdAt: ticket.createdAt, updatedAt: ticket.createdAt } } });
@@ -61,19 +66,17 @@ test('Super-agent 指挥台：导航、派活模式、审批与移动端', async
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: '命令面板' })).toHaveCount(0);
 
-  // 三种派活模式：自动单选、计划改发「编辑计划」、复核多选。
-  await page.getByRole('button', { name: '计划', exact: true }).click();
-  await expect(page.getByRole('button', { name: '编辑计划', exact: true })).toBeDisabled();
-  await page.locator('.sa-composer textarea').fill('检查仓库 CI 并修复失败项');
-  await expect(page.getByRole('button', { name: '编辑计划', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: '复核', exact: true }).click();
-  await expect(page.getByText('并行独立作答，再由你选一个汇总')).toBeVisible();
-  await page.getByRole('button', { name: '自动', exact: true }).click();
+  // 两种派活模式：单 Agent 只由 Lagent 执行；多 Agent 由 Lagent 拆解分发、协作方互相验收。
+  await expect(page.getByRole('button', { name: '单 Agent', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText('只由 Lagent 理解、执行并交付')).toBeVisible();
+  await page.getByRole('button', { name: '多 Agent', exact: true }).click();
+  await expect(page.getByText('Lagent 拆解 · 协作执行 · 互相验收 · Lagent 汇总')).toBeVisible();
   await page.getByRole('button', { name: /Claude Code/ }).first().click();
   await page.locator('.sa-composer textarea').fill('检查 GitHub 仓库状态');
-  await page.getByRole('button', { name: '发送' }).click();
-  // Lagent 固定主控：即使只点了 Claude Code，请求里也必须带 model。
-  await expect.poll(() => sentBody?.agentIds).toEqual(['model', 'claude-code']);
+  await page.getByRole('button', { name: '拆解并派发' }).click();
+  // 多 Agent 走团队协作入口；Lagent 由服务端强制加入，不由前端伪装。
+  await expect.poll(() => collabBody?.agentIds).toEqual(['claude-code']);
+  await expect.poll(() => collabBody?.goal).toBe('检查 GitHub 仓库状态');
 
   // 主导航收成 指挥台 / 项目 / 报告（工单已并入报告页），其余页面进「更多」。
   await page.getByRole('button', { name: '更多', exact: true }).click();

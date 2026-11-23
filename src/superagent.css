@@ -1586,6 +1586,31 @@ html[data-theme="dark"] .sa-newchat kbd {
   overflow-wrap: anywhere;
 }
 
+/* 对话里的用户消息靠右，像聊天软件里的「我」这一侧；工单标题仍走上面的左对齐样式 */
+.sa-bubble-user.is-prompt {
+  width: fit-content;
+  max-width: min(82%, 620px);
+  margin-left: auto;
+  padding: 10px 13px;
+  border-right: 2px solid var(--sa-accent);
+  border-left: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-lg) 4px 4px var(--sa-r-lg);
+  font-size: var(--sa-fs-base);
+  line-height: 1.65;
+  letter-spacing: -.005em;
+}
+
+.sa-bubble-user.is-prompt::before {
+  content: "你";
+  display: block;
+  margin-bottom: 3px;
+  color: var(--sa-text-3);
+  font-size: var(--sa-fs-2xs);
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
 .sa-thread-attention {
   display: flex;
   flex-direction: column;
@@ -1801,6 +1826,36 @@ html[data-theme="dark"] .sa-newchat kbd {
   padding: 1px 4px;
   border-radius: 4px;
   background: var(--sa-surface-2);
+  font-size: var(--sa-fs-xs);
+  color: var(--sa-text-2);
+}
+
+/* 服务级开关提示：能勾选但不会生效，必须和普通说明区分开 */
+.sa-policy-alert {
+  display: block;
+  margin: 10px 0;
+  padding: 9px 11px;
+  border: 1px solid var(--sa-line);
+  border-left: 2px solid var(--sa-warning);
+  border-radius: 4px var(--sa-r-sm) var(--sa-r-sm) 4px;
+  background: var(--sa-warning-soft);
+  color: var(--sa-warning);
+  font-size: var(--sa-fs-xs);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.sa-policy-alert svg {
+  width: 13px;
+  height: 13px;
+  margin-right: 5px;
+  vertical-align: -2px;
+}
+
+.sa-policy-alert code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--sa-surface);
   font-size: var(--sa-fs-xs);
   color: var(--sa-text-2);
 }
@@ -6351,9 +6406,10 @@ html[data-theme="dark"] .sa-brand-mono {
   border: 1px solid var(--sa-line);
   border-radius: 999px;
   color: var(--sa-text-2);
-  cursor: pointer;
   user-select: none;
 }
+
+label.sa-team-toggle { cursor: pointer; }
 
 .sa-team-toggle:hover {
   border-color: var(--sa-line-strong);
@@ -6790,7 +6846,7 @@ html[data-theme="dark"] .sa-brand-mono {
   }
 }
 
-/* 派活方式：自动 / 计划 / 复核 */
+/* 派活方式：单 Agent / 多 Agent */
 .sa-compose-modes button {
   height: 26px;
   padding: 0 11px;
@@ -7624,7 +7680,12 @@ html[data-theme="dark"] .sa-brand-mono {
   font-size: 12px;
   white-space: nowrap;
 }
-.sa-tp-orch-body { display: flex; flex-direction: column; gap: 8px; padding: 0 14px 13px 44px; }
+.sa-tp-orch-count {
+  color: var(--sa-text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sa-tp-orch-body { display: flex; flex-direction: column; gap: 12px; padding: 0 16px 15px 44px; }
 .sa-tp-orch.is-collapsed .sa-tp-orch-body { display: none; }
 .sa-tp-orch.is-collapsed .sa-tp-orch-head .sa-tp-icon { transform: rotate(-90deg); }
 
@@ -7644,43 +7705,66 @@ html[data-theme="dark"] .sa-brand-mono {
 .sa-tp-dispatch-name { font-size: 13px; color: var(--sa-text); white-space: nowrap; }
 .sa-tp-dispatch-detail { margin-left: auto; color: var(--sa-text-3); font-family: var(--sa-font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* 标签行：换行而不是横向滚动 —— 横滚会把后面的 Agent 藏起来 */
+/* 标签行：等宽分栏，图标 → 状态 → 名称 → 耗时；选中项用底部墨线接通正文 */
 .sa-tp-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 9px 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 0;
+  padding: 0;
   background: var(--sa-surface-2);
   border-bottom: 1px solid var(--sa-line);
 }
 .sa-tp-chip {
-  display: inline-flex;
+  position: relative;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 10px 0 5px;
-  border: 1px solid transparent;
-  border-radius: var(--sa-r-full);
+  gap: 7px;
+  min-width: 0;
+  height: 46px;
+  padding: 0 12px;
+  border: 0;
+  border-right: 1px solid var(--sa-line);
+  border-radius: 0;
   background: transparent;
   color: var(--sa-text-2);
   font-family: inherit;
   font-size: 13px;
+  text-align: left;
   cursor: pointer;
-  transition: background var(--sa-fast), border-color var(--sa-fast), color var(--sa-fast);
+  transition: background var(--sa-fast), color var(--sa-fast);
 }
+.sa-tp-chip:last-child { border-right: 0; }
 .sa-tp-chip:hover { background: color-mix(in srgb, var(--sa-surface) 60%, transparent); color: var(--sa-text); }
-.sa-tp-chip.is-on { background: var(--sa-surface); border-color: var(--sa-line-strong); color: var(--sa-text); box-shadow: var(--sa-shadow-sm); }
-.sa-tp-chip-name { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sa-tp-chip-time { font-family: var(--sa-font-mono); font-size: 10.5px; color: var(--sa-text-3); }
+.sa-tp-chip:focus-visible { outline: 2px solid var(--sa-accent); outline-offset: -2px; }
+.sa-tp-chip.is-on { background: var(--sa-surface); color: var(--sa-text); box-shadow: none; }
+.sa-tp-chip.is-on::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--sa-accent);
+}
+.sa-tp-chip-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sa-tp-chip.is-on .sa-tp-chip-name { font-weight: 600; }
+.sa-tp-chip-time { flex: none; font-family: var(--sa-font-mono); font-size: 10.5px; color: var(--sa-text-3); font-variant-numeric: tabular-nums; }
+
+/* 5 路以上时分栏变窄，先让 Agent 名称完整，耗时让位 */
+.sa-tp-chip { container-type: inline-size; }
+@container (max-width: 210px) {
+  .sa-tp-chip .sa-tp-chip-time { display: none; }
+}
 
 /* 正文：当前 Agent 的思考流 */
-.sa-tp-body { max-height: min(62vh, 660px); padding: 12px 14px 14px; overflow-y: auto; overscroll-behavior: contain; }
-.sa-tp-steps { display: flex; flex-direction: column; gap: 8px; }
-.sa-tp-thought { margin: 0; color: var(--sa-text); font-size: var(--sa-fs-base); line-height: 1.72; }
-.sa-tp-note { margin: 0; color: var(--sa-text-3); font-size: 11.5px; line-height: 1.6; }
-.sa-tp-pending { margin: 0; display: flex; align-items: center; gap: 8px; color: var(--sa-text-3); font-size: 13px; }
+.sa-tp-body { max-height: min(62vh, 660px); padding: 16px 18px 18px; overflow-y: auto; overscroll-behavior: contain; }
+.sa-tp-steps { display: flex; flex-direction: column; gap: 14px; }
+/* 长段思考用无衬线，行距放宽；只有命令/路径/代码继续用等宽。 */
+.sa-tp-thought { margin: 0; color: var(--sa-text); font-family: var(--sa-font); font-size: var(--sa-fs-base); line-height: 1.9; letter-spacing: .005em; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sa-tp-note { margin: 0; color: var(--sa-text-2); font-family: var(--sa-font); font-size: var(--sa-fs-sm); line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sa-tp-pending { margin: 0; display: flex; align-items: center; gap: 8px; color: var(--sa-text-3); font-family: var(--sa-font); font-size: var(--sa-fs-sm); line-height: 1.7; }
 .sa-tp-pending::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--sa-line-strong); animation: sa-tp-pulse 1.4s var(--sa-ease) infinite; }
-.sa-tp-error { margin: 0; display: flex; align-items: center; gap: 6px; color: var(--sa-danger); font-size: 13px; }
+.sa-tp-error { margin: 0; display: flex; align-items: center; gap: 6px; color: var(--sa-danger); font-family: var(--sa-font-mono); font-size: 13px; }
 .sa-tp-tool {
   display: flex;
   align-items: center;
@@ -7692,6 +7776,7 @@ html[data-theme="dark"] .sa-brand-mono {
   border-radius: var(--sa-r-full);
   background: var(--sa-surface-2);
   color: var(--sa-text-2);
+  font-family: var(--sa-font-mono);
   font-size: 11.5px;
 }
 .sa-tp-tool code { font-family: var(--sa-font-mono); font-size: 12px; color: var(--sa-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -7792,7 +7877,7 @@ html[data-theme="dark"] .sa-brand-mono {
 /* 结论块：完成的那一路把它的答案接在过程后面 */
 .sa-tp-output { margin-top: 12px; padding: 10px 12px; border-left: 2px solid var(--sa-success); border-radius: 0 var(--sa-r-sm) var(--sa-r-sm) 0; background: var(--sa-surface-2); }
 .sa-tp-output-head { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; color: var(--sa-success); font-size: 12px; font-weight: 600; }
-.sa-tp-output p { margin: 0; color: var(--sa-text); font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; }
+.sa-tp-output p { margin: 0; color: var(--sa-text); font-family: var(--sa-font); font-size: var(--sa-fs-sm); line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* 状态位：排队圆点 / 思考中转圈 / 完成对勾 */
 .sa-tp-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--sa-line-strong); flex: 0 0 auto; }

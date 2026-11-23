@@ -208,6 +208,9 @@ test('模型输入只接受 .claude/skills 下的技能，并过滤越界路径'
   assert.deepEqual(normalized.skills.map(skill => skill.name), ['demo']);
   assert.match(modelSystemPrompt({ skills: normalized.skills }), /read_skill/);
   assert.match(modelSystemPrompt({ skills: normalized.skills }), /demo/);
+  assert.match(modelSystemPrompt({}), /全程使用简体中文思考与汇报/);
+  assert.match(modelSystemPrompt({}), /单 Agent（只由 Lagent 执行）和多 Agent/);
+  assert.match(modelSystemPrompt({}), /不要编造“技能分派模式”/);
 });
 
 test('内置模型通过 read_skill 读取已启用技能正文', async () => {

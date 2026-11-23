@@ -121,14 +121,16 @@ function Steps({ steps, pending, onPermission }: { steps: ThinkingStep[]; pendin
   })}</div>;
 }
 
-export function AgentThinkingPanel({ orchestrator, agents, defaultOpen = true, onPermission }: {
+export function AgentThinkingPanel({ orchestrator, agents, defaultOpen = true, dispatchNote = '并行执行 · 互不共享上下文', onPermission }: {
   orchestrator?: ThinkingOrchestrator | null;
   agents: ThinkingAgent[];
   defaultOpen?: boolean;
+  dispatchNote?: string;
   onPermission?: (ticketId: string, requestId: string, decision: 'allow' | 'deny') => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const [orcheOpen, setOrcheOpen] = useState(true);
+  // 主控规划默认压成一行，把正文留给正在思考的 Agent；点箭头再展开分发细节。
+  const [orcheOpen, setOrcheOpen] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
   const [, setTick] = useState(0);
 
@@ -180,6 +182,7 @@ export function AgentThinkingPanel({ orchestrator, agents, defaultOpen = true, o
           <StatusGlyph status={orchestrator.endedAt ? 'completed' : 'working'} />
           <strong>{orchestrator.name}</strong>
           <span className="sa-tp-role">{orchestrator.role}</span>
+          {orchestrator.dispatch.length > 0 && <span className="sa-tp-orch-count">已分发 {orchestrator.dispatch.length} 路</span>}
           <span className="sa-tp-timer">{elapsedOf(orchestrator.startedAt, orchestrator.endedAt)}</span>
           <button type="button" className="sa-tp-icon" aria-expanded={orcheOpen} aria-label={orcheOpen ? '收起规划' : '展开规划'} onClick={() => setOrcheOpen(value => !value)}>
             <ChevronDown size={15} />
@@ -190,7 +193,7 @@ export function AgentThinkingPanel({ orchestrator, agents, defaultOpen = true, o
           {orchestrator.dispatch.length > 0 && <div className="sa-tp-dispatch">
             <div className="sa-tp-dispatch-head">
               <Sparkles size={12} />
-              <span>任务已分发 {orchestrator.dispatch.length} 路 · 并行执行 · 互不共享上下文</span>
+              <span>任务已分发 {orchestrator.dispatch.length} 路 · {dispatchNote}</span>
             </div>
             <div className="sa-tp-dispatch-rows">
               {orchestrator.dispatch.map(row => <div className="sa-tp-dispatch-row" key={row.id}>
@@ -214,7 +217,7 @@ export function AgentThinkingPanel({ orchestrator, agents, defaultOpen = true, o
           className={`sa-tp-chip${agent.id === activeId ? ' is-on' : ''}`}
           onClick={() => setPicked(agent.id)}
         >
-          <BrandGlyph brand={agent.brand} />
+          <BrandGlyph brand={agent.brand} size={24} />
           <StatusGlyph status={agent.status} />
           <span className="sa-tp-chip-name">{agent.name}</span>
           {DONE.includes(agent.status) && <span className="sa-tp-chip-time">{elapsedOf(agent.startedAt, agent.endedAt)}</span>}

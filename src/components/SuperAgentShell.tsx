@@ -5,7 +5,7 @@ import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Cl
 import { api } from '../api';
 import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
-import type { WorkAction, WorkBootstrap, WorkConversation, WorkConversationSummary, WorkConversationTurn, WorkInboxItem, WorkMcpToken, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTeamTemplate, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
+import type { WorkAction, WorkBootstrap, WorkConversation, WorkConversationRun, WorkConversationSummary, WorkConversationTurn, WorkInboxItem, WorkMcpToken, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTeamTemplate, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
 import { MemoryPanel } from './MemoryPanel';
 import { AgentConclusionList, AgentThinkingPanel } from './AgentThinkingPanel';
 import { ChatModelPicker, CliModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
@@ -372,13 +372,13 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [cliEfforts, setCliEfforts] = useState<Record<string, string>>(() => readJson<Record<string, string>>('lagent.cliefforts.v1', {}));
   const [chatModels, setChatModels] = useState<Record<string, ChatModelChoice>>({});
   const [chatPermissionBusy, setChatPermissionBusy] = useState(false);
-  // 派活方式：自动=一个 Agent 直接做；计划=先拆步骤再逐条派；复核=多个 Agent 并行、再汇总。
-  const [composeMode, setComposeMode] = useState<'auto' | 'plan' | 'review'>('auto');
+  // 派活方式只有两种：单 Agent=只由 Lagent 完成；多 Agent=Lagent 拆解分发、协作方互相验收、最后汇总。
+  const [composeMode, setComposeMode] = useState<'single' | 'multi'>('single');
   // 多 Agent 的两种用法：拆分分发（先拆成子任务再分派）与并行对比（同一问题各自作答）。
   // 指挥台：一句话目标 → 软件拆解 → 分给 Agent → 汇总。
   // 指挥台绑定的工作文件夹与「一次跑完」开关：绑定后每一步都在该目录内读写。
   // 任务理解：写目标时先本地拆一遍（谁做、改哪儿、会不会冲突），再交给规划器。
-  // 团队协作：内置模型 Agent 先拆解、再分派、最后收拢；每一步用的模型可以不同。
+  // 多 Agent 模式固定由 Lagent 拆解、分派、收拢；每一步用的模型可以不同。
   const [teamMode, setTeamMode] = useState(false);
   const [teamProfiles, setTeamProfiles] = useState<{ id: string; name: string; model: string }[]>([]);
   const [teamProfile, setTeamProfile] = useState('');
@@ -558,7 +558,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         autoOpened.current = true;
         setMaterializeError('');
         setProjectFocus(result.conversation.projectId || null);
-        setSelectedAgents(['model', ...(result.conversation.participants || []).filter(id => id !== 'model').slice(0, 3)]);
+        const participants = (result.conversation.participants || []).filter(id => id !== 'model').slice(0, 3);
+        setSelectedAgents(['model', ...participants]);
+        setComposeMode(participants.length ? 'multi' : 'single');
+        setTeamMode(participants.length > 0);
         setActiveConversationId(result.conversation.id);
         setProjectChatId(null);
         void loadConversation(result.conversation.id);
@@ -906,7 +909,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     const chat = folderState.projects.find(item => item.id === projectId)?.chats.find(item => item.id === chatId);
     if (chat?.conversationId) {
       setProjectChatId(null);
-      setSelectedAgents(['model', ...(chat.collaborators || []).filter(id => id !== 'model').slice(0, 3)]);
+      const participants = (chat.collaborators || []).filter(id => id !== 'model').slice(0, 3);
+      setSelectedAgents(['model', ...participants]);
+      setComposeMode(participants.length ? 'multi' : 'single');
+      setTeamMode(participants.length > 0);
       setActiveConversationId(chat.conversationId);
       setActiveConversation(null);
       void loadConversation(chat.conversationId);
@@ -1184,6 +1190,14 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     setActiveTicketId(null);
     setProjectChatId(null);
     setActiveDetail(null);
+    // 打开哪条会话，就按它最近的参与者恢复模式：多 Agent 会话继续多 Agent，单 Agent 只留 Lagent。
+    const summary = conversations.find(item => item.id === id);
+    if (summary) {
+      const participants = (summary.participants || []).filter(item => item !== 'model').slice(0, 3);
+      setSelectedAgents(['model', ...participants]);
+      setComposeMode(participants.length ? 'multi' : 'single');
+      setTeamMode(participants.length > 0);
+    }
     setActiveConversationId(id);
     setNavOpen(false);
     // 不必在这里直接拉取：上面的 effect 会在 id 变化后加载，重复调用只会多发一次请求。
@@ -1221,7 +1235,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     setCommand('');
     // 新对话回到「只有 Lagent 主控」，不继承上一条会话的协作名单。
     setSelectedAgents(['model']);
-    setComposeMode('auto');
+    setComposeMode('single');
+    setTeamMode(false);
     setNavOpen(false);
   };
   // 对某个窗口 Agent 新建对话：清空当前会话，并把该窗口钉为唯一执行 Agent。
@@ -1392,7 +1407,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       setSending(false);
       return;
     }
-    const chosen = selectedAgents.filter(id => id.startsWith('win:') ? windows.some(window => windowKey(window.handle) === id) : crossCapable.some(agent => agent.id === id));
+    // 单 Agent 模式只允许 Lagent：即使用户刚打开一条多 Agent 会话，也不能把旧参与者带进新回合。
+    const chosen = composeMode === 'single'
+      ? ['model']
+      : selectedAgents.filter(id => id.startsWith('win:') ? windows.some(window => windowKey(window.handle) === id) : crossCapable.some(agent => agent.id === id));
     if (!chosen.length) { notify('请至少选择一个可用 Agent。', true); return; }
     const execIdFor = (id: string) => id.startsWith('win:') ? 'window' : id;
     // 只有内置 Agent 和外部 CLI 支持对话级模型/权限；工具类执行器忽略这些设置。
@@ -1405,7 +1423,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         // 主控使用模型配置档；同一个回合里的 CLI 协作 Agent 仍可以带自己的模型名。
         const cli = cliIds.length ? cliChoiceOf(cliIds[0]) : null;
         return {
-          profileId: composerModel.profileId,
+          // 多 Agent 模式在界面上单独选了 Lagent 配置档时，以它为准。
+          profileId: composeMode === 'multi' && teamProfile ? teamProfile : composerModel.profileId,
           ...(cli?.model ? { model: cli.model } : {}),
           effort: composerModel.effort,
           permission: composerPermission
@@ -1436,7 +1455,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           const input = inputFor(id, value);
           if (input) executorInputs[execId] = input;
         }
-        const mode = composeMode === 'plan' ? 'plan' : chosen.length > 1 ? 'review' : 'auto';
+        const mode = composeMode === 'multi' ? 'multi' : 'auto';
         await api.workConversationMessage(activeConversationId, {
           text: value,
           mode,
@@ -1450,7 +1469,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         setCommand('');
         await refresh();
         await loadConversation(activeConversationId);
-        notify(composeMode === 'plan' ? '计划已加入这个会话。' : `已让 ${execIds.length} 个 Agent 在同一会话里作答。`);
+        notify(composeMode === 'multi' ? `Lagent 已把任务拆成多路并分发给 ${execIds.length} 个 Agent。` : 'Lagent 正在处理。');
       } catch (cause) { notify((cause as Error).message, true); }
       setSending(false);
       return;
@@ -1506,7 +1525,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         const input = inputFor(id, value);
         if (input) executorInputs[execId] = input;
       }
-      const mode = composeMode === 'plan' ? 'plan' : chosen.length > 1 ? 'review' : 'auto';
+      const mode = composeMode === 'multi' ? 'multi' : 'auto';
       await api.workConversationMessage(conversationId, {
         text: value,
         mode,
@@ -1668,11 +1687,21 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     const next = collaborators.includes(id) ? collaborators.filter(item => item !== id) : [...collaborators, id].slice(-3);
     return ['model', ...next];
   });
-  const switchComposeMode = (mode: 'auto' | 'plan' | 'review') => {
+  // 在单 Agent 模式下点协作 Agent，隐含的意思是「改走多 Agent」，不再需要先切模式。
+  const pickCollaborator = (id: string) => {
+    setComposeMode('multi');
+    setTeamMode(true);
+    toggleAgent(id);
+  };
+  const switchComposeMode = (mode: 'single' | 'multi') => {
     setComposeMode(mode);
-    // 自动模式最多一个协作 Agent；切回来时保留 Lagent，去掉多余的协作者。
-    if (mode === 'auto') setSelectedAgents(previous => ['model', ...previous.filter(item => item !== 'model').slice(0, 1)]);
-    if (mode !== 'review') setTeamMode(false);
+    if (mode === 'single') {
+      // 单 Agent 只留 Lagent，避免上一轮选过的人被悄悄带进来。
+      setSelectedAgents(['model']);
+      setTeamMode(false);
+      return;
+    }
+    setTeamMode(true);
   };
 
   const synthesize = async () => {
@@ -1955,8 +1984,14 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       const endedAt = terminalStatuses.includes(status) ? (detail?.ticket.updatedAt || ticket?.updatedAt) : undefined;
       return { run, ticket, status, startedAt, endedAt, steps: activityOf(liveActivity[run.ticketId], detail), output: reportText(detail) || ticket?.summary || '' };
     });
-    const completed = runs.filter(row => row.status === 'completed');
+    // 主控的分工与最后的汇总各有独立位置，不再作为「某一路 Agent」混进标签行和结论清单。
+    const displayRuns = runs.filter(row => row.run.role !== 'coordination' && row.run.ticketId !== turn.synthesisTicketId);
+    const completed = displayRuns.filter(row => row.status === 'completed');
     const pending = runs.some(row => !terminalStatuses.includes(row.status));
+    const collaborators = [...new Set(runs.map(row => row.run.agentId).filter(id => id !== 'model'))];
+    const runName = (row: { run: WorkConversationRun }) => row.run.role === 'verify'
+      ? `${agentLabel(row.run.agentId)} · 交叉验收`
+      : agentLabel(row.run.agentId);
     const synthesisTicket = turn.synthesisTicketId ? ticketMap.get(turn.synthesisTicketId) : null;
     const synthesisDetail = turn.synthesisTicketId ? conversationRunDetails[turn.synthesisTicketId] : null;
     const synthesisText = reportText(synthesisDetail) || synthesisTicket?.summary || '';
@@ -1964,24 +1999,31 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       ? `Lagent 把目标拆成 ${runs.length} 步，各步骤按依赖推进，结果都留在这一条会话里。`
       : turn.mode === 'review'
         ? `复核模式：同一个问题分给 ${runs.length} 路并行作答，互相看不到对方答案。`
-        : runs.length > 1
-          ? `同一个任务交给 ${runs.length} 个 Agent，各自作答后在同一会话里对比。`
-          : 'Lagent 直接把任务交给这个 Agent，过程与结论都留在会话里。';
+        : turn.mode === 'multi'
+          ? `多 Agent 模式：Lagent 把任务拆给 ${collaborators.length} 个协作 Agent，各自执行后互相验收，最后由 Lagent 汇总。`
+          : runs.length > 1
+            ? `同一个任务交给 ${runs.length} 个 Agent，各自作答后在同一会话里对比。`
+            : 'Lagent 直接把任务交给这个 Agent，过程与结论都留在会话里。';
     return <section className="sa-conv-turn" key={turn.id}>
-      <div className="sa-bubble-user">{turn.prompt}</div>
+      <div className="sa-bubble-user is-prompt">{turn.prompt}</div>
       <AgentThinkingPanel
+        dispatchNote={turn.mode === 'multi' ? 'Lagent 拆解分发 · 各自执行 · 交叉验收 · 最后汇总' : '并行执行 · 互不共享上下文'}
         orchestrator={{
           name: 'Lagent',
-          role: turn.mode === 'plan' ? '主控 · 计划拆解' : '主控 · 任务规划',
+          role: turn.mode === 'plan' ? '主控 · 计划拆解' : turn.mode === 'multi' ? '主控 · 拆解分发与汇总' : '主控 · 任务规划',
           startedAt: turn.createdAt,
           endedAt: pending ? undefined : (runs.at(-1)?.endedAt || turn.createdAt),
           steps: [{ kind: 'thought', text: modeNote }],
-          dispatch: runs.map(row => ({ id: row.run.agentId, name: agentLabel(row.run.agentId), brand: brandOf(row.run.agentId), status: row.status, startedAt: row.startedAt, endedAt: row.endedAt })),
-          summary: runs.length > 1 && !pending ? '几路结论互相印证才留用；分歧之处回到原始数据再查一遍。' : undefined
+          dispatch: displayRuns.map(row => ({ id: row.run.ticketId, name: runName(row), brand: brandOf(row.run.agentId), status: row.status, startedAt: row.startedAt, endedAt: row.endedAt })),
+          summary: displayRuns.length > 1 && !pending
+            ? (turn.mode === 'multi'
+              ? '执行结果先过交叉验收，再由 Lagent 汇总；验收不通过的问题会写进结论。'
+              : '几路结论互相印证才留用；分歧之处回到原始数据再查一遍。')
+            : undefined
         }}
-        agents={runs.map(row => ({
-          id: row.run.agentId,
-          name: agentLabel(row.run.agentId),
+        agents={displayRuns.map(row => ({
+          id: row.run.ticketId,
+          name: runName(row),
           brand: brandOf(row.run.agentId),
           status: row.status,
           startedAt: row.startedAt,
@@ -1992,10 +2034,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         onPermission={decidePermission}
       />
       <AgentConclusionList
-        rows={runs.map(row => ({
-          id: row.run.agentId,
+        rows={displayRuns.map(row => ({
+          id: row.run.ticketId,
           ticketId: row.run.ticketId,
-          name: agentLabel(row.run.agentId),
+          name: runName(row),
           brand: brandOf(row.run.agentId),
           status: row.status,
           summary: row.output.replace(/\s+/g, ' ').slice(0, 160)
@@ -2004,12 +2046,12 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         onApprove={ticketId => void act(ticketId, 'approve')}
       />
       {turn.synthesisTicketId && <section className="sa-agent-run">
-        <header className="sa-agent-head"><span className="sa-agent-avatar"><Sparkles size={16} /></span><div className="sa-agent-name"><strong>交叉验证汇总</strong><span>{agentLabel(turn.synthesisAgentId || 'lagent')}</span></div><Status status={runStatusOf(turn.synthesisTicketId)} /></header>
+        <header className="sa-agent-head"><span className="sa-agent-avatar"><Sparkles size={16} /></span><div className="sa-agent-name"><strong>{turn.mode === 'multi' ? 'Lagent 汇总' : '交叉验证汇总'}</strong><span>{agentLabel(turn.synthesisAgentId || 'lagent')}</span></div><Status status={runStatusOf(turn.synthesisTicketId)} /></header>
         {synthesisText ? <div className="sa-result"><div className="sa-result-text">{synthesisText}</div></div> : <p className="sa-inline-note">汇总 Agent 正在比较各方结论…</p>}
         <button type="button" className="sa-link" onClick={() => void open(turn.synthesisTicketId!)}>查看汇总工单</button>
       </section>}
-      {runs.length > 1 && !turn.synthesisTicketId && completed.length > 0 && <div className="sa-xc-summary">
-        <div><strong>交叉验证完成 {completed.length}/{runs.length}</strong><span>由 Lagent 比较各结论并指出分歧。</span></div>
+      {displayRuns.length > 1 && !turn.synthesisTicketId && completed.length > 0 && <div className="sa-xc-summary">
+        <div><strong>{turn.mode === 'multi' ? '执行与验收完成' : '交叉验证完成'} {completed.length}/{displayRuns.length}</strong><span>{turn.mode === 'multi' ? '由 Lagent 汇总交付结果与验收问题。' : '由 Lagent 比较各结论并指出分歧。'}</span></div>
         <p className="sa-inline-note">汇总者：Lagent · 主控</p>
         <button type="button" className="sa-button sa-primary" disabled={synthesizing} onClick={() => void synthesizeTurn(turn)}>{synthesizing ? <RefreshCw size={14} className="sa-spin" /> : <Sparkles size={14} />}{synthesizing ? '汇总中…' : '汇总结论'}</button>
       </div>}
@@ -2040,17 +2082,17 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           </section>)}
         </div>
         <section className="sa-picker sa-board-agents" aria-labelledby="sa-picker-title">
-          <div className="sa-picker-head"><span id="sa-picker-title">Agent</span><span className="sa-picker-hint">Lagent 固定主控 · {composeMode === 'review' ? '可加 3 个协作 Agent' : '可选 1 个协作 Agent'}</span></div>
+          <div className="sa-picker-head"><span id="sa-picker-title">Agent</span><span className="sa-picker-hint">Lagent 固定主控 · {composeMode === 'multi' ? '可加 3 个协作 Agent' : '单 Agent 模式只由 Lagent 执行'}</span></div>
           <div className="sa-picker-list">
             <button type="button" className="sa-pick on sa-pick-fixed" aria-pressed="true" aria-disabled="true" title="Lagent 负责任务拆分、分发与汇总，不能取消"><Check size={13} />Lagent · 主控</button>
             {crossCapable.filter(agent => agent.id !== 'model').map(agent => {
               const on = selectedAgents.includes(agent.id);
-              return <button key={agent.id} type="button" className={`sa-pick ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => composeMode === 'review' ? toggleAgent(agent.id) : setSelectedAgents(on ? ['model'] : ['model', agent.id])}>{on ? <Check size={13} /> : <Plus size={13} />}{executorNames[agent.id] || agent.name}</button>;
+              return <button key={agent.id} type="button" className={`sa-pick ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => on ? toggleAgent(agent.id) : pickCollaborator(agent.id)}>{on ? <Check size={13} /> : <Plus size={13} />}{executorNames[agent.id] || agent.name}</button>;
             })}
             {windows.slice(0, 4).map(window => {
               const id = windowKey(window.handle);
               const on = selectedAgents.includes(id);
-              return <button key={id} type="button" className={`sa-pick ${on ? 'on' : ''}`} title={`${window.title || window.process} · PID ${window.pid}`} aria-pressed={on} onClick={() => composeMode === 'review' ? toggleAgent(id) : setSelectedAgents(on ? ['model'] : ['model', id])}>{on ? <Check size={13} /> : <Terminal size={13} />}窗口 · {window.process}</button>;
+              return <button key={id} type="button" className={`sa-pick ${on ? 'on' : ''}`} title={`${window.title || window.process} · PID ${window.pid}`} aria-pressed={on} onClick={() => on ? toggleAgent(id) : pickCollaborator(id)}>{on ? <Check size={13} /> : <Terminal size={13} />}窗口 · {window.process}</button>;
             })}
             {!crossCapable.length && !windows.length && <span className="sa-pick-empty"><AlertTriangle size={13} />还没有可用 Agent，请到 Agent 页检查探测结果</span>}
           </div>
@@ -2095,7 +2137,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     </div> : <div className="sa-thread" ref={threadRef}>
       <div className="sa-thread-inner">
         {activeGroup ? <>
-          <div className="sa-bubble-user">{activeGroup.prompt}</div>
+          <div className="sa-bubble-user is-prompt">{activeGroup.prompt}</div>
           <AgentThinkingPanel
             orchestrator={{
               name: 'Lagent',
@@ -2199,7 +2241,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         const suggestion = lagentOnlySuggestion({
           text: command,
           collaborators,
-          mode: composeMode,
+          mode: composeMode === 'multi' ? 'multi' : 'auto',
           hasProject: Boolean(newFolder || activeConversation?.projectId || folderState.projectId),
           hasDataset: datasets.length > 0
         });
@@ -2209,16 +2251,15 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           <Sparkles size={14} />
           <p><strong>这件事可以只用 Lagent。</strong>{suggestion.reason}</p>
           <div>
-            <button type="button" className="sa-button sa-primary" onClick={() => { setSelectedAgents(['model']); setDismissedSuggestion(key); }}>仅用 Lagent</button>
+            <button type="button" className="sa-button sa-primary" onClick={() => { switchComposeMode('single'); setDismissedSuggestion(key); }}>仅用 Lagent</button>
             <button type="button" className="sa-link" onClick={() => setDismissedSuggestion(key)}>仍交给协作 Agent</button>
           </div>
         </div>;
       })()}
-      <form className="sa-composer" onSubmit={event => { event.preventDefault(); if (!projectChatId && !activeConversationId && composeMode === 'plan') { setPlanOpen(true); return; } void send(); }}>
+      <form className="sa-composer" onSubmit={event => { event.preventDefault(); void send(); }}>
         {!projectChatId && <div className="sa-compose-modes" role="group" aria-label="派活方式">
-          <button type="button" className={composeMode === 'auto' ? 'active' : ''} aria-pressed={composeMode === 'auto'} onClick={() => switchComposeMode('auto')} title="一个 Agent 直接做">自动</button>
-          <button type="button" className={composeMode === 'plan' ? 'active' : ''} aria-pressed={composeMode === 'plan'} onClick={() => switchComposeMode('plan')} title="先拆成步骤，再逐条派给 Agent">计划</button>
-          <button type="button" className={composeMode === 'review' ? 'active' : ''} aria-pressed={composeMode === 'review'} onClick={() => switchComposeMode('review')} title="多个 Agent 并行独立作答，再选一个汇总">复核</button>
+          <button type="button" className={composeMode === 'single' ? 'active' : ''} aria-pressed={composeMode === 'single'} onClick={() => switchComposeMode('single')} title="只由 Lagent 理解、执行并交付">单 Agent</button>
+          <button type="button" className={composeMode === 'multi' ? 'active' : ''} aria-pressed={composeMode === 'multi'} onClick={() => switchComposeMode('multi')} title="Lagent 拆解并分发，协作 Agent 执行后互相验收，最后由 Lagent 汇总">多 Agent</button>
         </div>}
         {!lagentReady && <div className="sa-lagent-blocked" role="alert">
           <AlertTriangle size={14} />
@@ -2241,7 +2282,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           }) : <span className="sa-inline-note">没有可用 Agent</span>}
           <span className="sa-compose-hint">可多选 · 最多 4 个 · 每条任务都能换</span>
         </div>}
-        {(composeMode === 'review' || Boolean(activeConversationId)) && !projectChatId && <div className="sa-agent-picks" role="group" aria-label="选择协作 Agent">
+        {composeMode === 'multi' && !projectChatId && <div className="sa-agent-picks" role="group" aria-label="选择协作 Agent">
           <span className="sa-picks-label">协作</span>
           <button type="button" className="sa-agent-pick on sa-agent-fixed" aria-pressed="true" aria-disabled="true" title="Lagent 负责拆分、分发与汇总"><Check size={12} />Lagent · 主控</button>
           {crossCapable.filter(agent => agent.id !== 'model').map(agent => <button key={agent.id} type="button" className={`sa-agent-pick ${selectedAgents.includes(agent.id) ? 'on' : ''}`} aria-pressed={selectedAgents.includes(agent.id)} onClick={() => toggleAgent(agent.id)}>{selectedAgents.includes(agent.id) ? <Check size={12} /> : <Plus size={12} />}{executorNames[agent.id] || agent.name}</button>)}
@@ -2252,19 +2293,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           })}
           <span className="sa-compose-hint">Lagent 固定主控 · 最多 3 个协作 Agent</span>
         </div>}
-        {composeMode === 'auto' && !isLanding && !projectChatId && !activeConversationId && <div className="sa-agent-picks" role="group" aria-label="选择协作 Agent">
-          <span className="sa-picks-label">协作</span>
-          <button type="button" className="sa-agent-pick on sa-agent-fixed" aria-pressed="true" aria-disabled="true" title="Lagent 负责拆分、分发与汇总"><Check size={12} />Lagent · 主控</button>
-          {crossCapable.filter(agent => agent.id !== 'model').map(agent => {
-            const on = selectedAgents.includes(agent.id);
-            return <button key={agent.id} type="button" className={`sa-agent-pick ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => on ? setSelectedAgents(['model']) : setSelectedAgents(['model', agent.id])}>{on ? <Check size={12} /> : <Plus size={12} />}{executorNames[agent.id] || agent.name}</button>;
-          })}
-          {windows.slice(0, 4).map(window => {
-            const id = windowKey(window.handle);
-            const on = selectedAgents.includes(id);
-            return <button key={id} type="button" className={`sa-agent-pick ${on ? 'on' : ''}`} title={`${window.title || window.process} · PID ${window.pid}`} aria-pressed={on} onClick={() => on ? setSelectedAgents(['model']) : setSelectedAgents(['model', id])}>{on ? <Check size={12} /> : <Plus size={12} />}窗口 · {window.process}</button>;
-          })}
-        </div>}
         {isLanding && folderState.projects.length > 0 && <div className="sa-scope">
           <FolderGit2 size={13} />
           <label htmlFor="sa-scope-select">工作文件夹</label>
@@ -2274,17 +2302,14 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           </select>
           <span className="sa-scope-hint">{newFolder ? 'Agent 会在这个目录里读写文件，工单仍需你确认' : work?.workspace ? `不选则在 ${work.workspace} 里读写文件` : '选择一个文件夹，Agent 才能改项目里的文件'}</span>
         </div>}
-        {composeMode === 'review' && selectedAgents.length > 1 && <div className="sa-team">
-          <label className="sa-team-toggle">
-            <input type="checkbox" checked={teamMode} onChange={event => setTeamMode(event.target.checked)} />
-            <Sparkles size={12} />Lagent 统筹
-          </label>
-          {teamMode && <select className="sa-team-select" value={teamProfile} onChange={event => setTeamProfile(event.target.value)} aria-label="Lagent 使用的模型">
+        {composeMode === 'multi' && selectedAgents.length > 1 && <div className="sa-team">
+          <span className="sa-team-toggle"><Sparkles size={12} />Lagent 统筹 · 拆解 / 分发 / 汇总</span>
+          <select className="sa-team-select" value={teamProfile} onChange={event => setTeamProfile(event.target.value)} aria-label="Lagent 使用的模型">
             <option value="">{teamProfiles.length ? '默认模型' : '尚未配置模型'}</option>
             {teamProfiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-          </select>}
-          {teamMode && !teamProfiles.length && <span className="sa-team-hint">还没有模型配置，Lagent 会先按本地规则拆解。</span>}
-          {teamMode && selectedAgents.filter(id => !id.startsWith('win:')).length > 0 && <details className="sa-team-models">
+          </select>
+          {!teamProfiles.length && <span className="sa-team-hint">还没有模型配置，Lagent 会先按本地规则拆解。</span>}
+          {selectedAgents.filter(id => !id.startsWith('win:')).length > 0 && <details className="sa-team-models">
             <summary>分配模型</summary>
             <div className="sa-team-model-list">
               {selectedAgents.filter(id => !id.startsWith('win:')).map(id => <label key={id}>
@@ -2293,15 +2318,16 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
               </label>)}
             </div>
           </details>}
+          <button type="button" className="sa-link" onClick={() => setPlanOpen(true)}>手动编排多步计划</button>
         </div>}
-        <textarea id="sa-command" value={command} maxLength={3000} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); if (!projectChatId && !activeConversationId && composeMode === 'plan') { setPlanOpen(true); return; } void send(); }} rows={2} placeholder={projectChatId ? '回复这个项目对话，例如：先跑一遍测试，再修失败项' : activeConversationId ? '继续这个会话，或换一组 Agent 再问一轮…' : composeMode === 'review' ? '描述要对比的问题，例如：审查这段鉴权逻辑是否有漏洞？' : composeMode === 'plan' ? '描述目标，Lagent 会先拆成 2–5 步再逐条派活' : '描述目标，例如：检查 Lagent 仓库的 CI，修复失败项并开 PR'} />
+        <textarea id="sa-command" value={command} maxLength={3000} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} rows={2} placeholder={projectChatId ? '回复这个项目对话，例如：先跑一遍测试，再修失败项' : activeConversationId ? '继续这个会话，或换一组 Agent 再问一轮…' : composeMode === 'multi' ? '描述目标，Lagent 会拆解、分派，并让协作 Agent 互相验收' : '描述目标，仅由 Lagent 完成，例如：检查仓库 CI 并修复失败项'} />
         {!projectChatId && singleExecutor === 'analysis' && (datasets.length > 1 ? <div className="sa-executor-fields"><label className="sa-field"><span>数据集</span><select value={datasetId} onChange={event => setDatasetId(event.target.value)}><option value="">请选择数据集</option>{datasets.map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.name} · {dataset.rowCount.toLocaleString()} 行</option>)}</select></label></div> : datasets.length === 1 ? <div className="sa-executor-fields"><span className="sa-inline-note"><Check size={13} />数据集：{datasets[0].name}</span></div> : <div className="sa-executor-fields"><span className="sa-inline-note">还没有数据集，请先在工作区上传或加载示例数据。</span></div>)}
         {!projectChatId && singleExecutor === 'terminal' && <div className="sa-executor-fields"><label className="sa-field"><span>程序</span><select value={terminalProgram} onChange={event => setTerminalProgram(event.target.value)}><option value="git">git</option><option value="npm">npm</option><option value="ls">ls</option><option value="pwd">pwd</option></select></label><label className="sa-field"><span>参数</span><input value={terminalArgs} onChange={event => setTerminalArgs(event.target.value)} placeholder="status --short" /></label></div>}
         {!projectChatId && singleExecutor === 'browser' && <div className="sa-executor-fields"><label className="sa-field"><span>页面地址</span><input type="url" value={browserUrl} onChange={event => setBrowserUrl(event.target.value)} placeholder="https://example.com/page" /></label></div>}
         {!projectChatId && singleExecutor === 'github' && <div className="sa-executor-fields"><label className="sa-field"><span>GitHub 动作</span><select value={githubAction} onChange={event => setGithubAction(event.target.value)}><option value="repo">仓库</option><option value="issues">Issues</option><option value="pulls">Pull Requests</option><option value="checks">CI Checks</option><option value="file">文件</option></select></label><label className="sa-field"><span>owner</span><input value={githubOwner} onChange={event => setGithubOwner(event.target.value)} placeholder="acme" /></label><label className="sa-field"><span>repo</span><input value={githubRepo} onChange={event => setGithubRepo(event.target.value)} placeholder="lagent" /></label>{['issues', 'pulls', 'checks'].includes(githubAction) && <label className="sa-field"><span>编号</span><input inputMode="numeric" value={githubNumber} onChange={event => setGithubNumber(event.target.value)} placeholder="7" /></label>}{githubAction === 'file' && <label className="sa-field"><span>文件路径</span><input value={githubPath} onChange={event => setGithubPath(event.target.value)} placeholder="docs/readme.md" /></label>}</div>}
         <div className="sa-composer-foot">
           <div className="sa-chips sa-composer-tools">
-            {!projectChatId && composeMode === 'auto' && (() => {
+            {!projectChatId && composeMode === 'single' && (() => {
               // 主控的模型/强度始终可选；有 CLI 协作者时再并排显示它自己的模型。
               const collaborator = selectedAgents.find(id => id !== 'model' && !id.startsWith('win:') && agents.find(agent => agent.id === id)?.kind === 'cli');
               if (!selectedAgents.includes('model') && !collaborator) return null;
@@ -2328,13 +2354,12 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
                 {(Object.keys(PERMISSION_LABELS) as ConversationPermission[]).map(value => <option key={value} value={value}>{PERMISSION_LABELS[value]}</option>)}
               </select>
             </label>}
-            {(!singleAvailableAgent || composeMode !== 'auto') && !projectChatId && <span className="sa-compose-hint">{composeMode === 'auto' ? '一个 Agent 直接执行' : composeMode === 'plan' ? '先确认步骤，再逐条派活' : '并行独立作答，再由你选一个汇总'}</span>}
-            {singleAvailableAgent && composeMode === 'auto' && !projectChatId && singleExecutor !== 'model' && singleAvailableAgent.kind === 'cli' && <span className="sa-compose-hint">CLI 权限＝只读/可写</span>}
+            {!projectChatId && <span className="sa-compose-hint">{composeMode === 'multi' ? 'Lagent 拆解 · 协作执行 · 互相验收 · Lagent 汇总' : '只由 Lagent 理解、执行并交付'}</span>}
           </div>
-          <button className="sa-send" type="submit" disabled={!command.trim() || sending || !lagentReady} aria-label={composeMode === 'plan' ? (activeConversationId ? '拆成计划并派活' : '编辑计划') : '发送指令'} title={lagentReady ? undefined : '请先配置 Lagent 模型'}>{sending ? <RefreshCw size={16} className="sa-spin" /> : composeMode === 'plan' ? <ListChecks size={16} /> : <Send size={16} />}<span>{sending ? '提交中' : !lagentReady ? '先配置模型' : composeMode === 'plan' ? (activeConversationId ? '拆成计划' : '编辑计划') : composeMode === 'review' ? '交叉复核' : '发送'}</span></button>
+          <button className="sa-send" type="submit" disabled={!command.trim() || sending || !lagentReady} aria-label={composeMode === 'multi' ? '拆解并派发' : '发送指令'} title={lagentReady ? undefined : '请先配置 Lagent 模型'}>{sending ? <RefreshCw size={16} className="sa-spin" /> : composeMode === 'multi' ? <Users size={16} /> : <Send size={16} />}<span>{sending ? '提交中' : !lagentReady ? '先配置模型' : composeMode === 'multi' ? '拆解并派发' : '发送'}</span></button>
         </div>
       </form>
-      <p className="sa-note"><ShieldCheck size={14} />{composeMode === 'review' ? '多个 Agent 会并行独立作答，方便对比；会消耗对应执行器的额度。' : composeMode === 'plan' ? '计划会先落成待确认的工单，你可以改完再开始。' : '只会执行你明确授权或规则允许的操作；需要你确认的会停在右侧「需要你」。'}<span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
+      <p className="sa-note"><ShieldCheck size={14} />{composeMode === 'multi' ? '多 Agent 模式由 Lagent 先拆解分发，协作 Agent 完成后互相验收，最后统一汇总；会消耗对应执行器的额度。' : '单 Agent 模式只由 Lagent 完成，不会调用其他执行器。'}<span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
     </div>
   </div>;
 
@@ -2404,6 +2429,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     </section>
     <section className="sa-providers">
       <p className="sa-inline-note"><ShieldCheck size={13} />按 PATH / PATHEXT 解析命令并读取版本，探测结果不会保存输出原文；开关写入执行器策略，停用的 Agent 不会出现在新对话的选择里。</p>
+      {work?.externalExecutors === false && <p className="sa-policy-alert"><AlertTriangle size={14} />服务未开启外部执行器总开关，这里的 CLI/ACP 开关虽然能打开，派任务时仍会被拒绝。请设置 <code>LAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code> 后重启服务；用「启动 Lagent.cmd」或 <code>npm run dev</code> 启动会自动开启。</p>}
       <div className="sa-agent-group"><h2>内置</h2><span>不用安装，用「规划设置」里的默认模型运行</span></div>
       <ul className="sa-agent-list">
         <li className={`sa-agent-row${enabledExecutors.includes('model') ? ' is-on' : ''}${modelAgentStatus === 'available' ? '' : ' is-off'}`}>
@@ -2451,6 +2477,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   })}{!tools.length && <p className="sa-empty">工具状态载入中。</p>}</div></section>;
 
   const settingsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">偏好</p><h1>设置</h1><p>主题、模型与执行权限。</p></div></header><div className="sa-settings-grid"><article className="sa-card"><h2>外观与模型</h2><p>主题与显示密度，以及 Agent 使用的默认模型和凭据。</p><div className="sa-settings-actions"><button className="sa-button" onClick={() => setAppearanceOpen(true)}><SunMoon size={15} />显示设置</button><button className="sa-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} />模型与 API</button></div></article>{runtime.mode === 'cloud' && <article className="sa-card"><h2><ShieldCheck size={16} />账号与安全</h2><p>修改密码、绑定手机号，或退出当前账号。</p><div className="sa-settings-actions"><button className="sa-button" onClick={() => setAccountOpen(true)}><ShieldCheck size={15} />账号与安全</button></div></article>}<article className="sa-card sa-policy-card"><h2>执行器与权限</h2><p>与「Agent」页的开关同步，勾选即时生效；这里还可设置权限模式、预算与额外目录。外部执行器还需 <code>LAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code>。</p>
+    {work?.externalExecutors === false && <p className="sa-policy-alert"><AlertTriangle size={14} />服务未开启外部执行器总开关，下面勾选的 CLI/ACP Agent 不会生效。请设置 <code>LAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code> 后重启服务；用「启动 Lagent.cmd」或 <code>npm run dev</code> 启动会自动开启。</p>}
     {policy ? <><div className="sa-policy-executors">{executorIds.map(id => <label key={id}><input type="checkbox" checked={(policy.allowedExecutors || []).includes(id)} disabled={executorBusy === id} onChange={() => void setExecutorEnabled(id, !(policy.allowedExecutors || []).includes(id))} />{executorNames[id]}</label>)}</div>
       <div className="sa-permissions" role="radiogroup" aria-label="权限模式">{[{ id: 'read', name: '仅查看', desc: '只能读文件、跑只读命令，不改任何东西。' }, { id: 'workspace', name: '仅工作区内修改', desc: '项目目录里直接改；目录之外、递归删除、非白名单命令会弹窗问你。' }, { id: 'full', name: '完全权限', desc: '不再逐次确认；系统目录、.git、.ssh、密钥仍然拒绝。' }].map(option => <button key={option.id} type="button" role="radio" aria-checked={(policy.permission || 'workspace') === option.id} className={`sa-permission${(policy.permission || 'workspace') === option.id ? ' is-on' : ''}`} onClick={() => setPolicy(previous => previous ? { ...previous, permission: option.id as 'read' | 'workspace' | 'full' } : previous)}><strong>{option.name}</strong><em>{option.desc}</em></button>)}</div>
       {(policy.permission || 'workspace') === 'workspace' && <label className="sa-policy-toggle"><input type="checkbox" checked={policy.limits?.confirmDanger !== false} onChange={event => setPolicy(previous => previous ? { ...previous, limits: { ...(previous.limits || { browserHosts: [], githubRepos: [] }), confirmDanger: event.target.checked } } : previous)} /><span>危险操作再确认<em>递归删除、白名单外的命令，即使目录已授权也会再弹一次窗。</em></span></label>}

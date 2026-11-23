@@ -433,7 +433,13 @@ export function ProjectsPanel({ notify, allowedExecutors = ['claude-code', 'code
 
           {tab === 'artifacts' && <div className="pj-artifact-workspace">
             <aside className="pj-artifact-pane" aria-label="项目产物">
-              <div className="pj-artifact-head"><strong>项目产物</strong><span>{artifactRows.length} 个文件</span></div>
+              <div className="pj-artifact-head">
+                <strong>项目产物</strong>
+                <span className="pj-artifact-head-side">
+                  <span>{artifactRows.length} 个文件</span>
+                  <button type="button" className="pj-link" onClick={() => setTab('files')} title="产物只列出 Agent 写过的文件，全部项目文件在这里浏览">全部文件</button>
+                </span>
+              </div>
               {artifactRows.length ? <ul className="pj-artifact-list">
                 {artifactRows.map(row => <li key={row.path}>
                   <button

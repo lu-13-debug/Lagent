@@ -21,7 +21,8 @@ export const EXECUTOR_LABELS: Record<string, string> = {
   qoder: 'Qoder',
   iflow: 'iFlow',
   kimi: 'Kimi CLI',
-  workbuddy: 'WorkBuddy'
+  workbuddy: 'WorkBuddy',
+  manual: '人工补录'
 };
 
 export function executorLabel(id: string, agents?: { id: string; name?: string }[]): string {

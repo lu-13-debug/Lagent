@@ -645,6 +645,47 @@ export function projectService(db, { environment = process.env, home = os.homedi
       return [];
     }
   }
+  // 非 Git 项目没法用 diff 找改动，退回按 mtime 扫一遍工作区：
+  // 只取本次执行开始后被写过的文件，跳过依赖/构建/代理自身的目录。
+  const SCAN_SKIP = new Set(['.git', '.lagent', '.claude', '.spec-workflow', '.memsearch', 'node_modules', 'vendor', 'dist', 'build', 'coverage', '.next', '.nuxt', '.cache', '__pycache__', '.venv', 'venv', '.idea', '.vscode']);
+  function filesModifiedSince(projectPath, sinceMs, limit = CHANGE_LIMITS.maxFiles) {
+    const root = typeof projectPath === 'string' && projectPath.trim() ? path.resolve(projectPath.trim()) : '';
+    if (!root || !Number.isFinite(sinceMs) || sinceMs <= 0) return [];
+    const found = [];
+    const seen = new Set();
+    const walk = (dir, depth) => {
+      if (found.length >= limit * 3 || depth > 12) return;
+      let entries;
+      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        if (found.length >= limit * 3) return;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (!SCAN_SKIP.has(entry.name)) walk(full, depth + 1);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        let info;
+        try { info = statSync(full); } catch { continue; }
+        if (info.mtimeMs < sinceMs) continue;
+        const relative = path.relative(root, full).split(path.sep).join('/');
+        if (!relative || relative.startsWith('..') || seen.has(relative)) continue;
+        seen.add(relative);
+        found.push({ path: relative, mtimeMs: info.mtimeMs });
+      }
+    };
+    walk(root, 0);
+    return found.sort((left, right) => right.mtimeMs - left.mtimeMs).slice(0, limit).map(item => item.path);
+  }
+  function isGitRepo(projectPath) {
+    if (typeof projectPath !== 'string' || !projectPath.trim()) return false;
+    try {
+      const stdout = execFileSync('git', ['-C', projectPath.trim(), 'rev-parse', '--is-inside-work-tree'], { cwd: os.tmpdir(), timeout: 5000, windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      return String(stdout).trim().toLowerCase() === 'true';
+    } catch {
+      return false;
+    }
+  }
   function recordChange(projectId, input = {}, { source = 'manual' } = {}) {
     const project = getProject(projectId);
     const body = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
@@ -749,6 +790,8 @@ export function projectService(db, { environment = process.env, home = os.homedi
     recordChange,
     deleteChange,
     gitChangedFilesSync,
+    filesModifiedSince,
+    isGitRepo,
     briefMarkdown
   };
 }

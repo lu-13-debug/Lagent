@@ -97,7 +97,7 @@ test('Work契约字段、命令幂等、输入校验及严格投影', t => {
   assert.throws(() => f.engine.command({ text: '不同指令', clientRequestId: 'once', datasetId: 'dataset-one' }), { status: 409 });
   assert.deepEqual(Object.keys(ticket).sort(), ['acceptance', 'attention', 'chainRootId', 'contract', 'createdAt', 'datasetId', 'executor', 'handoff', 'handoffChildId', 'handoffDepth', 'handoffSummary', 'id', 'parentTicketId', 'planId', 'planStep', 'planTotal', 'preview', 'source', 'stage', 'status', 'summary', 'title', 'updatedAt', 'verify']);
   const bootstrap = f.engine.bootstrap();
-  assert.deepEqual(Object.keys(bootstrap).sort(), ['activeProfile', 'agents', 'attention', 'capabilities', 'conversations', 'datasets', 'lagent', 'plans', 'policy', 'profiles', 'projects', 'queue', 'tickets', 'tools', 'workspace']);
+  assert.deepEqual(Object.keys(bootstrap).sort(), ['activeProfile', 'agents', 'attention', 'capabilities', 'conversations', 'datasets', 'externalExecutors', 'lagent', 'plans', 'policy', 'profiles', 'projects', 'queue', 'tickets', 'tools', 'workspace']);
   assert.deepEqual(bootstrap.projects, []);
   assert.deepEqual(bootstrap.conversations, []);
   assert.equal(bootstrap.capabilities.work, true);
@@ -944,6 +944,31 @@ test('E9 计划步骤失败后停止推进', async t => {
   assert.equal(stopped.status, 'failed');
   assert.equal(f.engine.detail(plan.steps[1].ticketId).ticket.status, 'blocked');
   assert.throws(() => f.engine.action(plan.steps[1].ticketId, 'approve'), { status: 409 });
+});
+
+test('E9 计划步骤因回合上限失败后自动续跑，整条计划不跟着作废', async t => {
+  const f = fixture(t);
+  const plan = f.engine.plan({ goal: '续跑计划', steps: [
+    { executorId: 'analysis', text: '第一步', datasetId: 'dataset-one' },
+    { executorId: 'analysis', text: '第二步', datasetId: 'dataset-one', dependsOn: [0] }
+  ] });
+  const first = plan.steps[0].ticketId;
+  f.engine.action(first, 'approve');
+  await waitFor(() => f.engine.detail(first).ticket.status === 'working', '第一步未开始');
+  const assignment = f.engine.detail(first).assignments[0];
+  const task = f.store.get('task', assignment.sessionId);
+  f.store.put('task', { ...task, status: 'failed', error: 'Claude Code error_max_turns' });
+  await waitFor(() => f.engine.detail(first).ticket.continuations === 1 && f.engine.detail(first).ticket.status === 'working', '没有自动续跑');
+  assert.equal(f.engine.getPlan(plan.id).status, 'active');
+  assert.equal(f.engine.detail(first).assignments.length, 2);
+  assert.equal(f.engine.detail(first).ticket.continuations, 1);
+  const secondTask = f.store.get('task', f.engine.detail(first).assignments[0].sessionId);
+  f.store.put('task', { ...secondTask, status: 'completed', report: { id: 'report-resume', summary: '续跑完成' } });
+  await waitFor(() => f.engine.detail(first).ticket.status === 'completed', '续跑后仍未完成');
+  assert.equal(f.engine.getPlan(plan.id).status, 'active');
+  assert.equal(f.engine.getPlan(plan.id).currentStep, 1);
+  await completeWork(f, plan.steps[1].ticketId);
+  assert.equal(f.engine.getPlan(plan.id).status, 'completed');
 });
 
 test('E10 规划建议经引擎校验且不创建工单', async t => {

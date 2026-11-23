@@ -73,7 +73,7 @@ npm.cmd run dev
 
 指挥台（`/api/work/*`）默认启用；只有显式设置 `LAGENT_WORK_ENABLED=0` 才会关闭接口。接入外部 Agent 还需要 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1`，并在「设置 → 执行器策略」中勾选对应执行器。
 
-**主界面**：左侧存放对话记录与功能入口（指挥台、项目、团队、运行、工具、记忆、设置），右侧上方是 Agent 的思考与执行流，输入框固定在底部。**每个对话都由内置 Lagent 主控**：Lagent 固定负责拆分、分发与汇总，外部 Agent（含窗口 Agent）只能作为协作 Agent 加入，自动模式最多 1 个、复核模式最多 3 个。未配置模型时发送会被阻断，外部 Agent 不能绕过。任务明显简单时，界面会用本地规则提示「仅用 Lagent 完成」，不会额外调用模型。数据分析执行器作为内置工具保留，派活前需要先选择数据集；项目工作文件夹里只能派给外部 Agent、窗口 Agent 与内置模型。
+**主界面**：左侧存放对话记录与功能入口（指挥台、项目、团队、运行、工具、记忆、设置），右侧上方是 Agent 的思考与执行流，输入框固定在底部。派活方式只有两种：**单 Agent** 只由内置 Lagent 理解、执行并交付；**多 Agent** 由 Lagent 先拆解并分发，协作 Agent 各自执行后按环状互相验收，最后由 Lagent 汇总。外部 Agent（含窗口 Agent）最多 3 个，不能绕过 Lagent 主控；未配置模型时发送会被阻断。任务明显简单时，界面会用本地规则提示「仅用 Lagent 完成」，不会额外调用模型。所有 Agent 的思考过程与结论默认要求使用简体中文。数据分析执行器作为内置工具保留，派活前需要先选择数据集。
 
 **报告与工单**：工单页是执行记录与审批索引；报告页按会话聚合最近结论与产物，可预览并导出 Markdown，不再只是会话列表的另一个入口。项目文件夹里的旧对话在打开时会惰性并入同一条 Lagent 会话，原有 CLI session 与窗口绑定保留在隐藏执行对话里。
 
@@ -122,7 +122,7 @@ claude mcp add --transport http lagent http://127.0.0.1:3001/api/mcp \
 - **Markdown 导出**：`GET /api/work/projects/:id/brief.md` 返回完整文本；MCP 工具 `work_project_brief` 让外部 Agent 直接读取，`work_record_change` 用于回写修改。
 - 删除项目时，简报、变更记录与项目对话一并清理，不影响 Agent 端的会话文件。
 
-命令：`npm run dev`（前端）配合启用了 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1` 的服务。注意：CLI 执行器是一次性进程，不会在 Claude Code / Codex 桌面端自动打开该会话；软件内的项目对话只维护会话 ID 与消息记录。
+命令：`npm run dev` 会同时启动前端与后端，并默认设置 `LAGENT_ALLOW_EXTERNAL_EXECUTORS=1`（显式传 `=0` 可关闭）；正式部署仍按上一节设置环境变量。注意：CLI 执行器是一次性进程，不会在 Claude Code / Codex 桌面端自动打开该会话；软件内的项目对话只维护会话 ID 与消息记录。
 
 ### 协作与自动化（P1）
 

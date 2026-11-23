@@ -32,7 +32,7 @@ const TICKET_FILTERS = [
   { value: 'failed', label: '失败' },
   { value: 'done', label: '已完成' }
 ];
-const ROLE_LABELS: Record<string, string> = { coordination: '分工', synthesis: '汇总', answer: '作答', step: '步骤', host: '主控' };
+const ROLE_LABELS: Record<string, string> = { coordination: '分工', synthesis: '汇总', answer: '作答', step: '步骤', verify: '验收', host: '主控' };
 const TICKET_GROUPS: Record<string, string[]> = {
   attention: ['awaiting_review', 'queued', 'waiting'],
   running: ['working'],
