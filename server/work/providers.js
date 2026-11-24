@@ -77,8 +77,10 @@ function withNodeShim(resolved) {
 
 // 云端探测跑在服务器容器里，看不到用户电脑上装的 CLI；本机节点上报的 Agent 已经能真正执行任务，
 // 对用户来说就是「已安装」。不并入的话，「团队」页会把它们标成未安装，看起来像没识别到。
-export function withNodeProviders(providers, executors = []) {
-  const nodes = (Array.isArray(executors) ? executors : [])
+// nodes 是节点在本机探测到的产品清单（含 WorkBuddy 这类没有可调用适配器的桌面产品）。
+export function withNodeProviders(providers, executors = [], nodes = []) {
+  const registry = Array.isArray(executors) ? executors : [];
+  const runnable = registry
     .filter(executor => executor?.nodeBacked)
     .map(executor => ({
       id: executor.id,
@@ -92,16 +94,58 @@ export function withNodeProviders(providers, executors = []) {
       capabilities: Array.isArray(executor.capabilities) ? executor.capabilities : [],
       message: '通过本机执行节点接入，任务在这台电脑上执行。'
     }));
-  if (!nodes.length) return providers;
+  const productList = [];
+  const seenProducts = new Set();
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    for (const product of node?.detected || []) {
+      if (!product?.id || seenProducts.has(product.id)) continue;
+      seenProducts.add(product.id);
+      productList.push(product);
+    }
+  }
+  if (!runnable.length && !productList.length) return providers;
+
   const used = new Set();
   const merged = (providers || []).map(provider => {
-    const match = nodes.find(node => !used.has(node.id) && (node.executorId === provider.executorId || node.baseId === provider.id));
-    if (!match) return provider;
-    used.add(match.id);
-    return { ...provider, installed: true, status: 'ready', executorId: match.executorId, message: match.message };
+    const match = runnable.find(node => !used.has(node.id) && (node.executorId === provider.executorId || node.baseId === provider.id));
+    if (match) {
+      used.add(match.id);
+      return { ...provider, installed: true, status: 'ready', executorId: match.executorId, message: match.message };
+    }
+    if (provider.installed) return provider;
+    const product = productList.find(item => item.id === provider.id);
+    if (!product) return provider;
+    return {
+      ...provider,
+      installed: true,
+      status: product.status === 'ready' ? 'ready' : product.status,
+      // 只有节点真能调起来的才有执行器；WorkBuddy 这种只显示「仅识别」，不给开关。
+      executorId: product.executorId || (registry.some(item => item.id === provider.executorId) ? provider.executorId : null),
+      kind: product.kind || provider.kind || 'cli',
+      version: product.version || provider.version || null,
+      command: product.command || null,
+      message: product.status === 'ready' ? '本机已安装（通过执行节点识别）' : '本机已安装；登录状态需要在该应用里确认'
+    };
   });
+
+  const extraProducts = productList
+    .filter(product => !merged.some(provider => provider.id === product.id))
+    .map(product => ({
+      id: product.id,
+      name: product.name,
+      executorId: product.executorId || null,
+      kind: product.kind || 'cli',
+      command: product.command || null,
+      installed: true,
+      version: product.version || null,
+      status: product.status === 'ready' ? 'ready' : product.status,
+      message: product.status === 'ready' ? '本机已安装（通过执行节点识别）' : '本机已安装；登录状态需要在该应用里确认',
+      auth: { loggedIn: null, method: null, message: '由本机应用管理' },
+      capabilities: []
+    }));
+
   // 同一 Agent 在第二台电脑上会带节点前缀，清单里没有对应条目，单独补一行。
-  return [...merged, ...nodes.filter(node => !used.has(node.id))];
+  return [...merged, ...runnable.filter(node => !used.has(node.id)), ...extraProducts];
 }
 
 export function resolveLocalCommand(command, env = process.env) {

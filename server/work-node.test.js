@@ -63,7 +63,11 @@ test('节点注册后执行器出现、进入策略白名单，断开后全部�
   const { agents } = hub.registerNode({
     nodeId: 'abcdef1234567890',
     userId: 'u1',
-    agents: [{ id: 'claude-code', name: 'Claude Code', kind: 'cli' }, { id: 'codex', name: 'Codex', kind: 'cli' }]
+    agents: [{ id: 'claude-code', name: 'Claude Code', kind: 'cli' }, { id: 'codex', name: 'Codex', kind: 'cli' }],
+    detected: [
+      { id: 'workbuddy', name: 'WorkBuddy', kind: 'desktop', version: '1.0.0', command: 'D:\\workbuddy\\WorkBuddy.exe', status: 'ready' },
+      { id: 'BAD ID', name: '不合法 id' }
+    ]
   });
   // 服务器上原本没有同名执行器时，直接沿用 claude-code / codex 这两个 id，界面无需改动。
   assert.deepEqual(agents.map(agent => agent.executorId), ['claude-code', 'codex']);
@@ -74,6 +78,11 @@ test('节点注册后执行器出现、进入策略白名单，断开后全部�
   assert.equal(registry.list().find(agent => agent.id === 'model').nodeBacked, false);
   assert.equal(registry.resolve('codex').name, 'Codex（本机）');
   assert.ok(policy.allowedExecutors.includes('claude-code'), '节点执行器要自动进入策略白名单');
+  // 本机装了但没有可调用适配器的产品（WorkBuddy）只做识别，非法条目直接丢弃。
+  assert.deepEqual(hub.listNodes()[0].detected, [{
+    id: 'workbuddy', name: 'WorkBuddy', kind: 'desktop', version: '1.0.0',
+    command: 'D:\\workbuddy\\WorkBuddy.exe', status: 'ready', executorId: ''
+  }]);
 
   hub.unregisterNode('abcdef1234567890');
   assert.deepEqual(registry.list().map(agent => agent.id), ['model']);

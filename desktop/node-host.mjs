@@ -18,6 +18,7 @@ import path from 'node:path';
 import { claudeCodeExecutor } from '../server/work/executors/claude-code.js';
 import { codexExecutor } from '../server/work/executors/codex.js';
 import { localAgentExecutors } from '../server/work/executors/local-agent.js';
+import { createProviderRegistry } from '../server/work/providers.js';
 
 const origin = String(process.env.LAGENT_NODE_URL || '').replace(/\/+$/, '');
 const stateDir = process.env.LAGENT_NODE_STATE || path.join(homedir(), '.lagent-node');
@@ -56,6 +57,30 @@ if (!agents.length) {
 }
 log(`检测到本机 Agent：${agents.map(agent => agent.name).join('、')}；工作目录：${workspace}`);
 
+// 云端探测跑在服务器上，看不到这台电脑装了什么。节点用同一套探测在本机跑一遍，
+// 把「装了但暂时没有可调用适配器」的产品（WorkBuddy、桌面版、仅识别的 CLI）也报上去。
+const providerRegistry = createProviderRegistry({ env: process.env });
+const detectedProducts = (async () => {
+  try {
+    const snapshots = await providerRegistry.snapshots({ force: true });
+    const products = snapshots.filter(item => item.installed).map(item => ({
+      id: item.id,
+      name: item.name,
+      kind: item.kind,
+      version: item.version || '',
+      command: item.command || '',
+      status: item.status === 'ready' ? 'ready' : item.status,
+      // 只有这台电脑真的能调起来的才给执行器 id；WorkBuddy 这类桌面产品只做识别。
+      executorId: executors.some(executor => executor.id === item.executorId) ? item.executorId : ''
+    }));
+    if (products.length) log(`本机已安装的产品：${products.map(product => product.name).join('、')}`);
+    return products;
+  } catch (error) {
+    log(`本机产品探测失败：${error?.message || error}`);
+    return [];
+  }
+})();
+
 function readState() {
   try {
     const value = JSON.parse(readFileSync(stateFile, 'utf8'));
@@ -83,7 +108,7 @@ async function register() {
   const response = await fetch(`${origin}/api/node/register`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
-    body: JSON.stringify({ agents })
+    body: JSON.stringify({ agents, detected: await detectedProducts })
   });
   if (!response.ok) throw new Error(`注册失败：HTTP ${response.status} ${(await response.text()).slice(0, 200)}`);
   const body = await response.json();

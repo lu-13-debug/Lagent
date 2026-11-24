@@ -45,7 +45,7 @@ export function registerNodeRoutes(mount, { resolveHub, authenticate, secret, no
       const hub = resolveHub(userId);
       if (!hub) return res.status(503).json({ error: '工作区暂不可用' });
       const nodeId = randomUUID();
-      const result = hub.registerNode({ nodeId, userId, agents: req.body?.agents });
+      const result = hub.registerNode({ nodeId, userId, agents: req.body?.agents, detected: req.body?.detected });
       const token = signNodeToken(secret, { nodeId, userId, now: now() });
       res.status(201).json({ nodeId, token, agents: result.agents });
     } catch (error) { next(error); }

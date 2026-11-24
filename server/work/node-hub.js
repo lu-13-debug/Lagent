@@ -16,6 +16,7 @@ const AGENT_ID = /^[a-z][a-z0-9_-]{0,39}$/;
 const MAX_ACTIVITY = 40;
 const MAX_NODES = 8;
 const MAX_AGENTS = 12;
+const MAX_PRODUCTS = 32;
 const MAX_QUEUE = 32;
 export const NODE_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 export const NODE_IDLE_MS = 90_000;
@@ -77,6 +78,30 @@ function cleanAgents(input) {
     });
   }
   return agents;
+}
+
+// 节点上报的「本机已安装产品」：WorkBuddy、桌面版、没有适配器的 CLI 只做识别，
+// 有适配器且节点能调起来的才带 executorId。
+function cleanProducts(input) {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set();
+  const products = [];
+  for (const raw of input.slice(0, MAX_PRODUCTS)) {
+    const id = typeof raw?.id === 'string' ? raw.id.trim().toLowerCase() : '';
+    if (!AGENT_ID.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    const executorId = typeof raw?.executorId === 'string' ? raw.executorId.trim().toLowerCase() : '';
+    products.push({
+      id,
+      name: text(raw?.name, 60).trim() || id,
+      kind: text(raw?.kind, 20).trim() || 'cli',
+      version: text(raw?.version, 40).trim(),
+      command: text(raw?.command, 300).trim(),
+      status: ['ready', 'needs_auth', 'error'].includes(raw?.status) ? raw.status : 'ready',
+      executorId: AGENT_ID.test(executorId) ? executorId : ''
+    });
+  }
+  return products;
 }
 
 export function createNodeHub({ store, registry, engine = null, now = Date.now, idleMs = NODE_IDLE_MS }) {
@@ -224,14 +249,14 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
     return true;
   }
 
-  function registerNode({ nodeId, userId, agents }) {
+  function registerNode({ nodeId, userId, agents, detected }) {
     if (typeof nodeId !== 'string' || !nodeId || nodeId.length > 80) throw Object.assign(new Error('节点 id 无效'), { status: 400 });
     if (typeof userId !== 'string' || !userId) throw Object.assign(new Error('节点缺少账号'), { status: 400 });
     const list = cleanAgents(agents);
     if (!list.length) throw Object.assign(new Error('节点没有上报任何可用 Agent'), { status: 400 });
     if (!nodes.has(nodeId) && nodes.size >= MAX_NODES) throw Object.assign(new Error('本账号连接的电脑已达上限'), { status: 429 });
     unregisterNode(nodeId);
-    const node = { nodeId, userId, agents: [], executors: new Map(), previous: new Map(), queue: [], waiters: [], lastSeen: now(), closed: false };
+    const node = { nodeId, userId, agents: [], detected: cleanProducts(detected), executors: new Map(), previous: new Map(), queue: [], waiters: [], lastSeen: now(), closed: false };
     for (const agent of list) {
       const existing = registry.resolve(agent.id);
       // 默认沿用原来的 id（claude-code / codex），界面上的图标、名称和策略都不用改。
@@ -337,7 +362,8 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
     return [...nodes.values()].map(node => ({
       nodeId: node.nodeId,
       lastSeen: node.lastSeen,
-      agents: node.agents.map(agent => ({ ...agent }))
+      agents: node.agents.map(agent => ({ ...agent })),
+      detected: (node.detected || []).map(product => ({ ...product }))
     }));
   }
 

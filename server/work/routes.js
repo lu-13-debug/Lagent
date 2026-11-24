@@ -409,7 +409,7 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   const stopRoutines=process.env.LAGENT_WORK_ROUTINES==='0'?()=>{}:routines.start();
   app.get('/api/work/effects',(req,res)=>res.json({effects:engine.listEffects({ticketId:req.query?.ticketId,kind:req.query?.kind,status:req.query?.status,limit:Number(req.query?.limit)||200})}));
   app.post('/api/work/effects/:id/retry',(req,res)=>{try{res.json({effect:engine.retryEffect(req.params.id)});}catch(error){res.status(error?.status||500).json({error:error?.message||'重试失败'});}});
-  if(providerRegistry)app.get('/api/work/providers',async(req,res)=>res.json({providers:withNodeProviders(await providerRegistry.snapshots({force:req.query?.refresh==='1'}),executor.list())}));
+  if(providerRegistry)app.get('/api/work/providers',async(req,res)=>res.json({providers:withNodeProviders(await providerRegistry.snapshots({force:req.query?.refresh==='1'}),executor.list(),app.locals.nodeHub?.listNodes?.()||[])}));
   if(windowBridge){
     const findWindow=async id=>{
       const windows=await windowBridge.listWindows().catch(()=>[]);

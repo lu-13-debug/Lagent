@@ -19,7 +19,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 # DeepSeek Harness 的 ACP 适配器，供云端指挥台直接驱动。
 RUN npm i -g dsh-acp --registry=https://registry.npmmirror.com && npm cache clean --force
-RUN apt-get -o Acquire::ForceIPv4=true update && apt-get -o Acquire::ForceIPv4=true install -y --no-install-recommends python3 python3-venv fonts-noto-cjk \
+RUN apt-get -o Acquire::ForceIPv4=true update && apt-get -o Acquire::ForceIPv4=true install -y --no-install-recommends python3 python3-venv fonts-noto-cjk git \
     && npx playwright install --with-deps chromium \
     && chmod -R a+rX /opt/playwright \
     && rm -rf /var/lib/apt/lists/*

@@ -154,3 +154,33 @@ test('云端探测结果并入本机节点 Agent：能执行的不能标成未�
   assert.equal(merged.find(item => item.id === 'gemini').installed, false, '没连上节点的 Agent 照旧是未安装');
   assert.equal(merged.filter(item => item.id === 'claude-code').length, 1, '同一个 Agent 不能出现两行');
 });
+
+test('节点本机探测到的产品并入清单：WorkBuddy 这类只识别、不给开关', () => {
+  const providers = [
+    { id: 'workbuddy', name: 'WorkBuddy', executorId: 'workbuddy', installed: false, status: 'not_installed' },
+    { id: 'gemini', name: 'Gemini CLI', executorId: 'gemini', installed: false, status: 'not_installed' },
+    { id: 'trae-agent', name: 'Trae Agent（字节）', executorId: null, installed: false, status: 'not_installed' }
+  ];
+  const executors = [
+    { id: 'analysis', name: '数据分析', kind: 'analysis', nodeBacked: false },
+    { id: 'gemini', name: 'Gemini CLI（本机）', kind: 'cli', nodeBacked: true, capabilities: [] }
+  ];
+  const nodes = [{
+    nodeId: 'n1',
+    detected: [
+      { id: 'workbuddy', name: 'WorkBuddy', kind: 'desktop', version: '1.0.0', command: 'D:\\workbuddy\\WorkBuddy.exe', status: 'ready', executorId: '' },
+      { id: 'trae-agent', name: 'Trae Agent（字节）', kind: 'cli', version: '0.2.0', command: 'C:\\Trae\\trae.exe', status: 'ready', executorId: '' }
+    ]
+  }];
+  const merged = withNodeProviders(providers, executors, nodes);
+  const workbuddy = merged.find(item => item.id === 'workbuddy');
+  assert.equal(workbuddy.installed, true, '装了 WorkBuddy 就必须识别出来');
+  assert.equal(workbuddy.executorId, null, '没有可调用适配器时不能给开关');
+  assert.equal(workbuddy.kind, 'desktop');
+  assert.match(workbuddy.message, /执行节点识别/);
+  const trae = merged.find(item => item.id === 'trae-agent');
+  assert.equal(trae.installed, true);
+  assert.equal(trae.command, 'C:\\Trae\\trae.exe');
+  // 节点能调起来的 CLI 仍然挂在运行中的执行器上。
+  assert.equal(merged.find(item => item.id === 'gemini').executorId, 'gemini');
+});
