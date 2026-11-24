@@ -22,7 +22,7 @@ try {
   assert.equal(result.serverUrl, fixture.origin);
   assert.equal(result.nodeIsolated, true);
   assert.equal(result.loginPage, true);
-  assert.equal(result.anonymousStatus, 401);
+  assert.equal(result.bootstrapStatus, 401);
   assert.equal(result.packaged, true, '冒烟验收必须使用真实打包程序');
   await writeFile(path.join(directory, 'result.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify({ ...result, directory }, null, 2));
