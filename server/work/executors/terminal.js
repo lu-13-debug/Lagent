@@ -32,9 +32,16 @@ function validateLs(args) {
 }
 
 function validateGit(args) {
-  const command = args[0];
+  // 用户的项目一般在自己目录下的子目录里，不允许 -C 就永远只有一个「不是 git 仓库」的结果。
+  // 只放行工作区内的相对路径：绝对路径和 .. 一律拒绝，避免跳出工作区去读别的仓库。
+  let start = 0;
+  if (args[0] === '-C') {
+    if (!safeRelative(args[1])) throw statusError('git -C 只接受工作区内的相对路径');
+    start = 2;
+  }
+  const command = args[start];
   if (!command || !SAFE_GIT_COMMANDS.has(command)) throw statusError('git 子命令不在只读白名单内');
-  for (const arg of args.slice(1)) {
+  for (const arg of args.slice(start + 1)) {
     if (UNSAFE_GIT_OPTIONS.test(arg)) throw statusError(`git 参数不受支持：${arg}`);
     if (arg.startsWith('--no-pager=')) throw statusError('git 参数不受支持');
   }
