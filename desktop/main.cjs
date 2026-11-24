@@ -206,6 +206,7 @@ async function showConnection({ serverUrl = lastServerUrl, error = '' } = {}) {
 // ── 本机执行节点 ───────────────────────────────────────────────
 // 连云端时，把用户自己电脑上的 CLI Agent 注册到账号下；本地模式已经有这些执行器，不需要节点。
 let nodeHost = null;
+let nodeCookieWatch = null;
 const nodeStateDir = () => path.join(app.getPath('userData'), 'node');
 
 async function syncNodeCookie() {
@@ -218,7 +219,24 @@ async function syncNodeCookie() {
   } catch { /* 还没登录，节点会自己重试 */ }
 }
 
+// 用户是在页面加载之后才登录的：会话 cookie 一出现就得立刻写给节点，
+// 否则节点会拿着启动时那份空 cookie 一直 401，看起来就像「识别不到本机 Agent」。
+function watchNodeCookie() {
+  stopNodeCookieWatch();
+  try {
+    nodeCookieWatch = (_event, cookie) => { if (cookie?.name === 'da_session') void syncNodeCookie(); };
+    session.defaultSession.cookies.on('changed', nodeCookieWatch);
+  } catch { nodeCookieWatch = null; }
+}
+
+function stopNodeCookieWatch() {
+  if (!nodeCookieWatch) return;
+  try { session.defaultSession.cookies.removeListener('changed', nodeCookieWatch); } catch { /* 会话已销毁。 */ }
+  nodeCookieWatch = null;
+}
+
 function stopNodeHost() {
+  stopNodeCookieWatch();
   if (!nodeHost) return;
   try { nodeHost.kill(); } catch { /* 已经退出 */ }
   nodeHost = null;
@@ -228,6 +246,7 @@ async function startNodeHost() {
   stopNodeHost();
   if (!cloudOrigin || isLocalServerUrl(cloudOrigin)) return;
   await syncNodeCookie();
+  watchNodeCookie();
   const dir = nodeStateDir();
   mkdirSync(dir, { recursive: true });
   let out;

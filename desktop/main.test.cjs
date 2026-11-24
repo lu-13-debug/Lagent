@@ -10,9 +10,12 @@ const runtime = require('./runtime.cjs');
 // and URL policy, replacing only Electron's native shell and network probe.
 function mainHarness({ savedState, displays = [{ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }], failRead = false, failWrite = false, testUpdater, choices = [], failClipboard = false, failExternal = false } = {}) {
   let persistedState = savedState;
-  const windows = [], operations = [], externals = [], exitCodes = [], copied = [], dialogs = []; let menu;
+  const windows = [], operations = [], externals = [], exitCodes = [], copied = [], dialogs = [], cookieWrites = []; let menu;
   const failures = new Set();
+  // 会话 cookie 用真实的事件源模拟：登录发生在页面加载之后，主进程要靠 changed 事件同步给节点。
+  const cookies = Object.assign(new EventEmitter(), { value: [], async get() { return cookies.value.slice(); } });
   const session = Object.assign(new EventEmitter(), {
+    cookies,
     setPermissionRequestHandler() {}, setPermissionCheckHandler() {},
     async clearStorageData({ origin }) { operations.push(['storage', origin]); },
     async clearAuthCache() { operations.push(['auth']); },
@@ -62,11 +65,11 @@ function mainHarness({ savedState, displays = [{ workArea: { x: 0, y: 0, width: 
     shell: { openExternal: async url => { externals.push(url); if (failExternal) throw new Error('private external error'); } },
   };
   const context = vm.createContext({
-    require: name => name === 'electron' ? electron : name === './runtime.cjs' ? { ...runtime, probeCloudServer: async value => value } : name === 'node:fs' ? { mkdirSync() {}, appendFileSync() {}, existsSync() { return false; }, renameSync() {}, readFileSync() { if (failRead || persistedState === undefined) throw new Error('read failed'); return persistedState; }, writeFileSync(file, value) { if (failWrite) throw new Error('write failed'); if (file.endsWith('window-state.json')) persistedState = value; } } : require(name),
+    require: name => name === 'electron' ? electron : name === './runtime.cjs' ? { ...runtime, probeCloudServer: async value => value } : name === 'node:fs' ? { mkdirSync() {}, appendFileSync() {}, existsSync() { return false; }, renameSync() {}, readFileSync() { if (failRead || persistedState === undefined) throw new Error('read failed'); return persistedState; }, writeFileSync(file, value) { if (failWrite) throw new Error('write failed'); if (file.endsWith('window-state.json')) persistedState = value; if (file.endsWith('session-cookie.txt')) cookieWrites.push(String(value)); } } : require(name),
     __dirname, process: { argv: [], env: {}, versions: {} }, console, setTimeout, setImmediate, clearTimeout, testUpdater,
   });
   vm.runInContext(readFileSync(path.join(__dirname, 'main.cjs'), 'utf8'), context, { filename: 'main.cjs' });
-  return { windows, operations, externals, failures, exitCodes, copied, dialogs, getMenu: () => menu, getState: () => persistedState, run: expression => vm.runInContext(expression, context) };
+  return { windows, operations, externals, failures, exitCodes, copied, dialogs, cookies, cookieWrites, getMenu: () => menu, getState: () => persistedState, run: expression => vm.runInContext(expression, context) };
 }
 
 test('主进程连续检查复用已下载更新，稍后可再次定位文件', async () => {
@@ -78,6 +81,26 @@ test('主进程连续检查复用已下载更新，稍后可再次定位文件',
   assert.equal(installs, 0);
   await h.run('checkForUpdates()');
   assert.equal(checks, 1); assert.equal(installs, 1);
+});
+
+test('登录后会话 cookie 变化会立刻同步给本机节点，节点不用重启', async () => {
+  const tick = () => new Promise(resolve => setImmediate(resolve));
+  const h = mainHarness();
+  await h.run("connectToServer('https://cloud.example')");
+  await tick(); await tick();
+  // 节点是在用户登录之前拉起的，这时只能先写空 cookie；节点会带着它一直 401。
+  assert.equal(h.cookieWrites.at(-1), '');
+
+  h.cookies.value = [{ name: 'da_session', value: 'token-1' }];
+  h.cookies.emit('changed', {}, { name: 'da_session', value: 'token-1' });
+  await tick(); await tick();
+  assert.equal(h.cookieWrites.at(-1), 'da_session=token-1', '登录后必须立刻把 cookie 写给节点');
+
+  // 退出登录同样要同步：节点不能继续带着旧凭据上报。
+  h.cookies.value = [];
+  h.cookies.emit('changed', {}, { name: 'da_session', value: '', removed: true });
+  await tick(); await tick();
+  assert.equal(h.cookieWrites.at(-1), '');
 });
 
 test('连接页连续切换服务器不会导航至空页，旧服务仅清理一次', async () => {
