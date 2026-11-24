@@ -2,6 +2,11 @@
 // 只聚合已有数据（agents + tickets + work-usage），不引入新的状态存储。
 const FINISHED = new Set(['completed', 'failed', 'blocked', 'cancelled']);
 
+// Agent 是能被派进对话、自己理解目标的同事；工具是受 Agent 调用的受控能力。
+// 未知 kind 一律按工具处理：宁可少一个「同事」，也不该把终端、浏览器这类执行器摆进 Agent 选择里。
+const AGENT_KINDS = new Set(['model', 'cli', 'window']);
+export const executorCategory = kind => (AGENT_KINDS.has(kind) ? 'agent' : 'tool');
+
 const bestForOf = capabilities => {
   const has = capability => capabilities.includes(capability);
   if (has('commands') || has('terminal')) return '验证与命令';
@@ -63,6 +68,7 @@ export function buildRoster({ agents = [], tickets = [], usage = [], policy = nu
       id: agent.id,
       name: agent.name,
       kind: agent.kind,
+      category: executorCategory(agent.kind),
       health: healthOf(agent),
       capabilities: Array.isArray(agent.capabilities) ? [...agent.capabilities] : [],
       permissions: {

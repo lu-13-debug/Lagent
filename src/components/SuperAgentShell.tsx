@@ -2405,20 +2405,37 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       </div>
     </li>;
   };
-  const agentsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">执行者</p><h1>团队</h1><p>本机 Agent、能力边界与开关；停用的 Agent 不会出现在新对话的选择里。</p></div>
-    <button type="button" className="sa-button" disabled={providersLoading} onClick={() => void loadProviders(true)}>{providersLoading ? '探测中…' : '重新探测'}</button></header>
-    {roster.length > 0 && <section className="sa-roster">
-      <div className="sa-agent-group"><h2>Agent 档案</h2><span>成功率、用量与擅长任务，来自历史工单</span></div>
-      <div className="sa-roster-grid">{roster.map(entry => <article className="sa-roster-card" key={entry.id}>
-        <header><strong>{entry.name}</strong><Status status={entry.health === 'available' ? 'available' : entry.health} /></header>
-        <p>{entry.bestFor}{entry.permissions.allowed ? '' : ' · 未启用'}</p>
-        <div className="sa-roster-stats">
+  // 档案里 Agent 和工具分开列：终端、浏览器、GitHub、数据分析是被 Agent 调用的能力，
+  // 既不能当协作方派出去，也不该按「成功率 / tokens」这套同事指标去衡量。
+  const agentRoster = roster.filter(entry => entry.category !== 'tool');
+  const toolRoster = roster.filter(entry => entry.category === 'tool');
+  const rosterCard = (entry: typeof roster[number]) => <article className="sa-roster-card" key={entry.id}>
+    <header><strong>{entry.name}</strong><Status status={entry.health === 'available' ? 'available' : entry.health} /></header>
+    <p>{entry.bestFor}{entry.permissions.allowed ? '' : ' · 未启用'}</p>
+    <div className="sa-roster-stats">
+      {entry.category === 'tool'
+        ? <>
+          <span>调用 {entry.reliability.finished}</span>
+          <span>{entry.permissions.allowed ? '已启用' : '未启用'}</span>
+          <span>最近 {entry.lastUsedAt ? shortTime(entry.lastUsedAt) : '未使用'}</span>
+        </>
+        : <>
           <span>成功率 {entry.reliability.successRate === null ? '—' : `${Math.round(entry.reliability.successRate * 100)}%`}</span>
           <span>完成 {entry.reliability.finished}</span>
           <span>平均 {entry.costProfile.avgTokens.toLocaleString()} tokens</span>
           <span>最近 {entry.lastUsedAt ? shortTime(entry.lastUsedAt) : '未使用'}</span>
-        </div>
-      </article>)}</div>
+        </>}
+    </div>
+  </article>;
+  const agentsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">执行者</p><h1>团队</h1><p>本机 Agent、能力边界与开关；停用的 Agent 不会出现在新对话的选择里。</p></div>
+    <button type="button" className="sa-button" disabled={providersLoading} onClick={() => void loadProviders(true)}>{providersLoading ? '探测中…' : '重新探测'}</button></header>
+    {agentRoster.length > 0 && <section className="sa-roster">
+      <div className="sa-agent-group"><h2>Agent 档案</h2><span>能被派进对话、自己完成目标的同事；成功率、用量与擅长任务来自历史工单</span></div>
+      <div className="sa-roster-grid">{agentRoster.map(rosterCard)}</div>
+    </section>}
+    {toolRoster.length > 0 && <section className="sa-roster">
+      <div className="sa-agent-group"><h2>工具档案</h2><span>由 Agent 调用的受控能力，不能单独发起协作；开关在「设置 → 执行器策略」</span></div>
+      <div className="sa-roster-grid">{toolRoster.map(rosterCard)}</div>
     </section>}
     <section className="sa-roster">
       <div className="sa-agent-group"><h2>团队模板</h2><span>角色与权限预设，派活时一键套用</span></div>
@@ -2468,10 +2485,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     </section>
   </section>;
 
-  const toolsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">本机能力</p><h1>工具</h1><p>软件自带工具的状态一览；启用或停用统一在「设置 → 执行器策略」里调整。</p></div></header><div className="sa-card-grid">{tools.map(tool => {
+  const toolsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">本机能力</p><h1>工具</h1><p>工具由 Agent 调用，不能单独在对话里发起协作；状态一览，启用或停用统一在「设置 → 执行器策略」里调整。</p></div></header><div className="sa-card-grid">{tools.map(tool => {
     const enabled = (policy?.allowedExecutors || []).includes(tool.id);
     const action = tool.id === 'window';
-    return <article className="sa-card" key={tool.id}><div className="sa-card-icon">{toolIcon(tool.id)}</div><div className="sa-card-title"><h2>{tool.name}</h2><Status status={tool.status} /></div><p className="sa-mono">{tool.kind}</p><div className="sa-tags">{tool.permissions.map(item => <span key={item}>{item}</span>)}</div>
+    return <article className="sa-card" key={tool.id}><div className="sa-card-icon">{toolIcon(tool.id)}</div><div className="sa-card-title"><h2>{tool.name}</h2><Status status={tool.status} /></div><p className="sa-mono">{tool.kind === 'tool' ? '受控工具' : tool.kind}</p><div className="sa-tags">{tool.permissions.map(item => <span key={item}>{item}</span>)}</div>
       {tool.id === 'github' && tool.status === 'needs_setup' && <p className="sa-inline-note">需要配置 GITHUB_TOKEN 并允许外部执行器。</p>}
       {tool.id === 'browser' && tool.status === 'needs_setup' && <p className="sa-inline-note">正在安装或缺少 Chromium。</p>}
       {action ? <div className="sa-plan-actions-inline"><span className={`sa-tag ${enabled ? 'sa-tag-ok' : ''}`}>{enabled ? '已启用' : '未启用'}</span><button className="sa-button" onClick={() => setView('agents')}>打开窗口 Agent</button><button className="sa-link" onClick={() => setView('settings')}>在策略中调整</button></div> : tool.id === 'terminal' ? <span className="sa-tag-ok"><Check size={13} />内置可用</span> : <div className="sa-plan-actions-inline"><span className={`sa-tag ${enabled ? 'sa-tag-ok' : ''}`}>{enabled ? '已启用' : tool.status === 'needs_setup' ? '待配置' : '未启用'}</span><button className="sa-link" onClick={() => setView('settings')}>在策略中调整</button></div>}

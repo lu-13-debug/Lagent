@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Store } from './store.js';
 import { createWorkEngine } from './work/engine.js';
 import { createExecutorRegistry } from './work/executors/index.js';
-import { buildRoster } from './work/roster.js';
+import { buildRoster, executorCategory } from './work/roster.js';
 
 const agents = [
   { id: 'claude-code', name: 'Claude Code', kind: 'cli', status: 'available', capabilities: ['code', 'writes'] },
@@ -46,6 +46,19 @@ test('档案按历史工单与用量计算成功率、成本与擅长任务', ()
 
   // available 的排前面，needs_setup 的排后面。
   assert.ok(roster.findIndex(entry => entry.health === 'available') < roster.findIndex(entry => entry.health === 'needs_setup'));
+});
+
+test('档案区分 Agent 与工具：终端、浏览器不能被当成可协作的同事', () => {
+  assert.equal(executorCategory('model'), 'agent');
+  assert.equal(executorCategory('cli'), 'agent');
+  assert.equal(executorCategory('window'), 'agent');
+  // 工具类执行器，以及将来新增的未知 kind，都归到工具：宁可少一个协作方，也不把命令执行器摆进 Agent 列表。
+  for (const kind of ['tool', 'terminal', 'analysis', 'browser', 'github', 'something-new']) assert.equal(executorCategory(kind), 'tool');
+
+  const roster = buildRoster({ agents, tickets: [], usage: [], policy: { allowedExecutors: [] } });
+  assert.equal(roster.find(entry => entry.id === 'claude-code').category, 'agent');
+  assert.equal(roster.find(entry => entry.id === 'terminal').category, 'tool');
+  assert.equal(roster.find(entry => entry.id === 'browser').category, 'tool');
 });
 
 test('引擎 agentRoster 聚合真实工单与用量', async t => {

@@ -24,6 +24,11 @@ type MobileBootstrap = {
   plans?: { id: string; goal: string; status: string; currentStep: number; totalSteps: number; updatedAt?: string }[];
 };
 
+// 与后端 roster 的分类一致：model/cli/window 才是能自己干活的 Agent，
+// 数据分析、受控终端、浏览器、GitHub 是被调用工具，界面上不能和 Agent 混在一个列表里。
+const AGENT_KINDS = new Set(['model', 'cli', 'window']);
+const isAgentKind = (kind?: string) => AGENT_KINDS.has(kind || '');
+
 const DEVICE_KEY = 'lagent:mobile:device:v1';
 const BOOT_APPEARANCE_KEY = 'lagent:appearance:boot:v1';
 const statusNames: Record<string, string> = { ...STATUS_LABELS, accepted: '已接受', budget_warning: '预算告警' };
@@ -336,10 +341,14 @@ function CommandView({ token, bootstrap, loading, error, allowed, agents, datase
 
   useEffect(() => {
     if (!available.length) { setExecutorId(''); return; }
-    if (!available.some(agent => agent.id === executorId)) setExecutorId(available[0].id);
+    // 默认落在 Agent 上；工具是给 Agent 用的，不该成为「谁来干活」的默认答案。
+    if (!available.some(agent => agent.id === executorId)) setExecutorId((available.find(agent => isAgentKind(agent.kind)) || available[0]).id);
   }, [available, executorId]);
   useEffect(() => { if (datasets.length === 1) setDatasetId(datasets[0].id); }, [datasets]);
 
+  const executorOption = (agent: MobileAgent) => <option key={agent.id} value={agent.id} disabled={agent.status !== 'available'}>{agent.name}{agent.status !== 'available' ? '（不可用）' : ''}</option>;
+  const agentOptions = available.filter(agent => isAgentKind(agent.kind)).map(executorOption);
+  const toolOptions = available.filter(agent => !isAgentKind(agent.kind)).map(executorOption);
   const current = available.find(agent => agent.id === executorId);
   const needsDataset = executorId === 'analysis';
   const canSend = Boolean(text.trim() && executorId && current?.status === 'available' && (!needsDataset || datasetId) && !busy);
@@ -378,7 +387,10 @@ function CommandView({ token, bootstrap, loading, error, allowed, agents, datase
     <form className="mob-composer" onSubmit={submit}>
       <textarea value={text} onChange={event => setText(event.target.value)} rows={4} placeholder="例如：检查仓库 CI，修复失败项并总结结果" aria-label="指令" />
       <div className="mob-field-row">
-        <label>执行器<select value={executorId} onChange={event => setExecutorId(event.target.value)}>{available.length ? available.map(agent => <option key={agent.id} value={agent.id} disabled={agent.status !== 'available'}>{agent.name}{agent.status !== 'available' ? '（不可用）' : ''}</option>) : <option value="">无可用执行器</option>}</select></label>
+        <label>执行者<select value={executorId} onChange={event => setExecutorId(event.target.value)}>{available.length ? <>
+          {agentOptions.length > 0 && <optgroup label="Agent">{agentOptions}</optgroup>}
+          {toolOptions.length > 0 && <optgroup label="工具">{toolOptions}</optgroup>}
+        </> : <option value="">无可用执行器</option>}</select></label>
         {needsDataset && <label>数据集<select value={datasetId} onChange={event => setDatasetId(event.target.value)}><option value="">{datasets.length ? '请选择数据集' : '暂无数据集'}</option>{datasets.map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.name}{dataset.rowCount ? ` · ${dataset.rowCount.toLocaleString()} 行` : ''}</option>)}</select></label>}
       </div>
       {executorId === 'terminal' && <div className="mob-field-row">
@@ -457,7 +469,8 @@ function TicketDetail({ detail, ticket, busy, agents, allowed, datasets, onBack,
   onAct: (ticketId: string, action: string, input?: Record<string, unknown>) => Promise<void>;
   onHandoff: (ticketId: string, executorId: string, text?: string) => Promise<void>;
 }) {
-  const available = agents.filter(agent => allowed.includes(agent.id) && agent.status === 'available' && ['analysis', 'codex', 'claude-code'].includes(agent.id) && (agent.id !== 'analysis' || datasets.length > 0 || Boolean(ticket?.datasetId)));
+  // 交接是两个 Agent 之间的事：数据分析、终端这类工具不参与接力。
+  const available = agents.filter(agent => allowed.includes(agent.id) && agent.status === 'available' && ['codex', 'claude-code'].includes(agent.id) && isAgentKind(agent.kind));
   const [target, setTarget] = useState('');
   const [note, setNote] = useState('');
   useEffect(() => { if (!target && available.length) setTarget(available[0].id); }, [available, target]);

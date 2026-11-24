@@ -83,6 +83,8 @@ export interface WorkAgent { id: string; name: string; kind: 'analysis' | 'claud
 /** Agent 档案：能力、权限、成本、可靠性与最近使用，用于路由解释。 */
 export interface WorkRosterEntry {
   id: string; name: string; kind: string;
+  // agent：能被派进对话、自己完成目标的同事；tool：由 Agent 调用的受控能力。
+  category: 'agent' | 'tool';
   health: 'available' | 'needs_setup' | 'unavailable' | string;
   capabilities: string[];
   permissions: { allowed: boolean; mode: string };
