@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
-import { createProviderRegistry, resolveLocalCommand } from './work/providers.js';
+import { createProviderRegistry, resolveLocalCommand, withNodeProviders } from './work/providers.js';
 
 function fakeSpawn(version = '1.2.3') {
   const calls = [];
@@ -130,4 +130,27 @@ test('Provider 探测版本、登录状态并缓存', async t => {
   assert.equal(fake.calls.length, callCount);
   await registry.snapshots({ force: true });
   assert.ok(fake.calls.length > callCount);
+});
+
+test('云端探测结果并入本机节点 Agent：能执行的不能标成未安装', () => {
+  const providers = [
+    { id: 'claude-code', name: 'Claude Code CLI', executorId: 'claude-code', installed: false, status: 'not_installed' },
+    { id: 'gemini', name: 'Gemini CLI', executorId: 'gemini', installed: false, status: 'not_installed' }
+  ];
+  const executors = [
+    { id: 'claude-code', name: 'Claude Code CLI（本机）', kind: 'cli', nodeBacked: true, capabilities: [] },
+    // 第二台电脑的同名 Agent 带节点前缀，探测清单里没有对应条目。
+    { id: 'node-1a2b3c4d-codex', name: 'Codex CLI（本机）', kind: 'cli', nodeBacked: true, capabilities: [] },
+    { id: 'analysis', name: '数据分析', kind: 'analysis', nodeBacked: false }
+  ];
+  const merged = withNodeProviders(providers, executors);
+  const claude = merged.find(item => item.id === 'claude-code');
+  assert.equal(claude.installed, true);
+  assert.equal(claude.status, 'ready');
+  assert.match(claude.message, /本机执行节点/);
+  const codex = merged.find(item => item.id === 'node-1a2b3c4d-codex');
+  assert.equal(codex.installed, true, '第二台电脑的 Agent 也要出现在列表里');
+  assert.equal(codex.executorId, 'node-1a2b3c4d-codex');
+  assert.equal(merged.find(item => item.id === 'gemini').installed, false, '没连上节点的 Agent 照旧是未安装');
+  assert.equal(merged.filter(item => item.id === 'claude-code').length, 1, '同一个 Agent 不能出现两行');
 });

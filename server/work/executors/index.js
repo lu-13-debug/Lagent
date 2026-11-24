@@ -13,6 +13,8 @@ function metadata(executor) {
     name: executor.name.trim(),
     kind: typeof executor.kind === 'string' && executor.kind ? executor.kind : executor.id,
     available: executor.available !== false,
+    // 本机执行节点动态注册的执行器：探测清单里没有它们，但用户电脑上确实装了。
+    nodeBacked: executor.__nodeBacked === true,
     capabilities: Object.freeze([...new Set(capabilities)])
   });
 }

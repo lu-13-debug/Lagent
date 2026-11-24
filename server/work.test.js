@@ -492,8 +492,8 @@ test('E1 执行器注册表校验 ID、可用性与真实 bootstrap 投影', t =
   };
   const registry = createExecutorRegistry([analysis, offline]);
   assert.deepEqual(registry.list(), [
-    { id: 'analysis', name: '数据分析', kind: 'analysis', available: true, capabilities: ['analysis', 'report'] },
-    { id: 'offline', name: '离线执行器', kind: 'tool', available: false, capabilities: ['tool'] }
+    { id: 'analysis', name: '数据分析', kind: 'analysis', available: true, nodeBacked: false, capabilities: ['analysis', 'report'] },
+    { id: 'offline', name: '离线执行器', kind: 'tool', available: false, nodeBacked: false, capabilities: ['tool'] }
   ]);
   assert.throws(() => registry.requireAvailable('missing'), { status: 400 });
   assert.throws(() => registry.requireAvailable('offline'), /不可用/);

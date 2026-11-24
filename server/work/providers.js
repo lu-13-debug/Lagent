@@ -75,6 +75,35 @@ function withNodeShim(resolved) {
   return { command: process.execPath, args: [entry], shell: false, entry, via: resolved.command };
 }
 
+// 云端探测跑在服务器容器里，看不到用户电脑上装的 CLI；本机节点上报的 Agent 已经能真正执行任务，
+// 对用户来说就是「已安装」。不并入的话，「团队」页会把它们标成未安装，看起来像没识别到。
+export function withNodeProviders(providers, executors = []) {
+  const nodes = (Array.isArray(executors) ? executors : [])
+    .filter(executor => executor?.nodeBacked)
+    .map(executor => ({
+      id: executor.id,
+      name: executor.name,
+      executorId: executor.id,
+      // node-<节点短 id>-<agent id> 要退回原始 agent id，才能和探测清单里的同一条对上。
+      baseId: String(executor.id).replace(/^node-[a-z0-9]{1,8}-/, ''),
+      installed: true,
+      status: 'ready',
+      kind: executor.kind || 'cli',
+      capabilities: Array.isArray(executor.capabilities) ? executor.capabilities : [],
+      message: '通过本机执行节点接入，任务在这台电脑上执行。'
+    }));
+  if (!nodes.length) return providers;
+  const used = new Set();
+  const merged = (providers || []).map(provider => {
+    const match = nodes.find(node => !used.has(node.id) && (node.executorId === provider.executorId || node.baseId === provider.id));
+    if (!match) return provider;
+    used.add(match.id);
+    return { ...provider, installed: true, status: 'ready', executorId: match.executorId, message: match.message };
+  });
+  // 同一 Agent 在第二台电脑上会带节点前缀，清单里没有对应条目，单独补一行。
+  return [...merged, ...nodes.filter(node => !used.has(node.id))];
+}
+
 export function resolveLocalCommand(command, env = process.env) {
   if (typeof command !== 'string' || !command.trim() || command.length > 500) return null;
   const value = command.trim();

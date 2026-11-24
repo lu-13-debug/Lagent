@@ -69,6 +69,9 @@ test('节点注册后执行器出现、进入策略白名单，断开后全部�
   assert.deepEqual(agents.map(agent => agent.executorId), ['claude-code', 'codex']);
   const listed = registry.list().map(agent => agent.id);
   assert.ok(listed.includes('claude-code'));
+  // 探测清单要靠这个标记把节点执行器认成「已安装」，否则云端「团队」页全显示未安装。
+  assert.equal(registry.list().find(agent => agent.id === 'claude-code').nodeBacked, true);
+  assert.equal(registry.list().find(agent => agent.id === 'model').nodeBacked, false);
   assert.equal(registry.resolve('codex').name, 'Codex（本机）');
   assert.ok(policy.allowedExecutors.includes('claude-code'), '节点执行器要自动进入策略白名单');
 
