@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 const agents = [
   { id: 'analysis', name: '分析执行器', kind: 'analysis', status: 'available', capabilities: ['data analysis'] },
-  { id: 'codex', name: 'Codex CLI', kind: 'codex', status: 'available', capabilities: ['readonly code'] },
+  { id: 'codex', name: 'Codex CLI', kind: 'cli', status: 'available', capabilities: ['readonly code'] },
   { id: 'terminal', name: '受控终端', kind: 'terminal', status: 'available', capabilities: ['git'] },
 ];
 const done = {

@@ -14,12 +14,18 @@ const bootstrap = {
   tickets: [ticket],
   attention: [{ ticketId: 't-1', title: ticket.title, question: ticket.attention.question, options: ticket.attention.options, createdAt: ticket.createdAt }],
   datasets: [{ id: 'd1', name: '演示数据', rowCount: 120, source: 'demo' }],
-  agents: [{ id: 'analysis', name: '分析执行器', kind: 'analysis', status: 'available', capabilities: ['data analysis'] }],
-  policy: { mode: 'personal', allowedExecutors: ['analysis'] },
+  agents: [
+    { id: 'analysis', name: '分析执行器', kind: 'analysis', status: 'available', capabilities: ['data analysis'] },
+    { id: 'terminal', name: '受控终端', kind: 'terminal', status: 'available', capabilities: ['git'] }
+  ],
+  policy: { mode: 'personal', allowedExecutors: ['analysis', 'terminal'] },
   plans: [{ id: 'plan-1', goal: '检查并修复', status: 'active', currentStep: 0, totalSteps: 2, updatedAt: '2026-11-05T03:01:00.000Z' }],
+  projects: [],
+  conversations: [],
+  lagent: { name: 'Lagent', executorId: 'model', ready: true, configured: true }
 };
 
-test('手机配对后可查看任务、审批并下达指令', async ({ page }, info) => {
+test('手机配对后默认可对话，并能从抽屉执行工具指令、查看任务与审批', async ({ page }, info) => {
   await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'cloud', authRequired: true, capabilities: { superagent: true } } }));
   await page.route('**/api/mobile/pair/claim', route => route.fulfill({ status: 201, json: { deviceId: 'device-mobile-1', deviceToken: 'A'.repeat(43), expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString() } }));
   await page.route('**/api/mobile/events', route => route.abort());
@@ -36,9 +42,9 @@ test('手机配对后可查看任务、审批并下达指令', async ({ page }, 
   await page.getByLabel('六位配对码').fill('123456');
   await page.getByRole('button', { name: '连接', exact: true }).click();
 
+  // 默认进入「对话」：没有会话时显示空状态。
   await expect(page.getByRole('heading', { name: '今天想让我做什么？' })).toBeVisible();
-  await expect(page.getByLabel('数据集')).toHaveValue('d1');
-  await page.screenshot({ path: info.outputPath('mobile-command.png'), fullPage: true });
+  await page.screenshot({ path: info.outputPath('mobile-chat.png'), fullPage: true });
 
   await page.locator('.mob-nav').getByRole('button', { name: /收件箱/ }).click();
   await expect(page.locator('.mob-attention').getByText('检查 GitHub 仓库状态')).toBeVisible();
@@ -52,8 +58,12 @@ test('手机配对后可查看任务、审批并下达指令', async ({ page }, 
   await expect(page.getByText('检查并修复')).toBeVisible();
   await expect(page.getByText(/计划第 1\/2 步/)).toBeVisible();
 
-  await page.locator('.mob-nav').getByRole('button', { name: '指挥', exact: true }).click();
-  await page.getByLabel('指令').fill('检查仓库 CI 并总结失败项');
+  // 旧「指挥」tab 已移到会话抽屉的「工具指令」。
+  await page.locator('.mob-nav').getByRole('button', { name: '对话', exact: true }).click();
+  await page.getByRole('button', { name: '会话列表' }).click();
+  await page.getByRole('button', { name: /工具指令/ }).click();
+  await page.getByRole('dialog', { name: '工具指令' }).getByRole('textbox', { name: '指令' }).fill('运行 git status');
+  await page.getByRole('combobox').selectOption('terminal');
   await page.getByRole('button', { name: '发送指令' }).click();
   await expect(page.getByRole('heading', { name: '运行终端命令' })).toBeVisible();
   await expect(page.getByText('指令已进入执行队列。')).toBeVisible();
@@ -62,4 +72,5 @@ test('手机配对后可查看任务、审批并下达指令', async ({ page }, 
   await page.locator('.mob-nav').getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.getByRole('heading', { name: '设置' })).toBeVisible();
   await expect(page.getByText('撤销这台设备')).toBeVisible();
+  await expect(page.getByText('可为会话选择 Lagent 模型与各 Agent 思考强度')).toBeVisible();
 });
