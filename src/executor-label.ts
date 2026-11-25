@@ -1,7 +1,6 @@
 // 执行器显示名的唯一静态兜底表。
 // 页面应优先用 /api/work/bootstrap 返回的 agents[].name；这张表只负责离线、首帧和旧数据。
 export const EXECUTOR_LABELS: Record<string, string> = {
-  analysis: '数据分析',
   terminal: '受控终端',
   browser: '浏览器',
   github: 'GitHub',

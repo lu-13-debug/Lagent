@@ -5,7 +5,6 @@ export interface AgentChoiceInput {
   collaborators: string[];
   mode: 'auto' | 'plan' | 'review' | string;
   hasProject?: boolean;
-  hasDataset?: boolean;
 }
 
 export interface AgentChoice {
@@ -24,7 +23,6 @@ export function lagentOnlySuggestion(input: AgentChoiceInput): AgentChoice {
   // 旧的 auto 与当前的 multi 都可能出现「只是问了句话」的情况；单 Agent 模式无需再提示。
   if (input.mode !== 'auto' && input.mode !== 'multi') return { suggestLagentOnly: false, reason: '' };
   if (!text || text.length > 120) return { suggestLagentOnly: false, reason: '' };
-  if (input.hasDataset) return { suggestLagentOnly: false, reason: '' };
   if (MULTI_SENTENCE.test(text)) return { suggestLagentOnly: false, reason: '' };
   if (MULTI_STEP.test(text)) return { suggestLagentOnly: false, reason: '' };
   if (WORK_SIGNAL.test(text)) return { suggestLagentOnly: false, reason: '' };

@@ -9,6 +9,16 @@ import { DatabaseSync } from 'node:sqlite';
 import { request } from 'node:http';
 const module = await import('./cloud-app.js').catch(() => ({}));
 const password = 'account-password-2026';
+async function walkFiles(dir) {
+  const out = [];
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...await walkFiles(full));
+    else out.push(full);
+  }
+  return out;
+}
+
 test('Memory云端需登录、A/B隔离及拒绝跨账号修改',async t=>{
  const s=await setup(t);assert.equal((await s.client().api('/api/memory')).status,401);
  const a=await s.register('memoryowner'),b=await s.register('memoryother');
@@ -18,15 +28,14 @@ test('Memory云端需登录、A/B隔离及拒绝跨账号修改',async t=>{
  assert.equal((await b.api(`/api/memory/${saved.memory.id}`,'DELETE')).status,404);
  assert.equal((await a.api('/api/memory')).memories[0].value,'先核对币种');
 });
-const taskBody = (datasetId, extra = {}) => ({ title: '账号分析', goal: '核对活跃与收入', domain: 'game', mode: 'automatic', useAI: false, datasetId, ...extra });
 
 test('模型用量需要登录并按账号隔离',async t=>{
  const s=await setup(t);assert.equal((await s.client().api('/api/model-usage?days=all')).status,401);
  const a=await s.register('usageowner'),b=await s.register('usageother');
  const boot=await a.api('/api/bootstrap');await b.api('/api/bootstrap');
  const db=new DatabaseSync(path.join(s.dir,'users',a.user.id,'lagent.sqlite'));
- const entry={id:'owner-call',taskId:boot.tasks[0].id,stageId:'insights',stageName:'洞察',kind:'stage',provider:'测试',model:'mock',recordedAt:new Date().toISOString(),inputTokens:7,outputTokens:3,totalTokens:10};
- db.prepare('INSERT INTO entities(kind,id,body) VALUES(?,?,?)').run('model-call',entry.id,JSON.stringify(entry));db.close();
+ const entry={id:'owner-call',taskId:'usage-task',stageId:'insights',stageName:'洞察',kind:'stage',provider:'测试',model:'mock',recordedAt:new Date().toISOString(),inputTokens:7,outputTokens:3,totalTokens:10};
+ db.prepare('INSERT INTO entities(kind,id,body) VALUES(?,?,?)').run('task','usage-task',JSON.stringify({id:'usage-task',status:'completed'}));db.prepare('INSERT INTO entities(kind,id,body) VALUES(?,?,?)').run('model-call',entry.id,JSON.stringify(entry));db.close();
  assert.equal((await a.api('/api/model-usage?days=all')).totals.calls,1);
  assert.equal((await b.api('/api/model-usage?days=all')).totals.calls,0);
  assert.equal((await a.api('/api/runtime')).capabilities.modelUsage,true);
@@ -36,13 +45,26 @@ test('Super-agent Work需登录且按云账号隔离',async t=>{
  const s=await setup(t,{workEnabled:true});assert.equal((await s.client().api('/api/work/bootstrap')).status,401);
  const a=await s.register('workowner'),b=await s.register('workother');
  assert.equal((await a.api('/api/runtime')).capabilities.superagent,true);
- const created=await a.api('/api/work/command','POST',{text:'检查留存',clientRequestId:'cloud-work-once'});assert.equal(created.status,201,created.error);
- const ticket=created.ticket;assert.equal((await a.api('/api/work/command','POST',{text:' 检查留存 ',clientRequestId:'cloud-work-once'})).ticket.id,ticket.id);
+ const created=await a.api('/api/work/command','POST',{text:'检查留存',clientRequestId:'cloud-work-once',executorInput:{program:'pwd',args:[]}});assert.equal(created.status,201,created.error);
+ const ticket=created.ticket;assert.equal((await a.api('/api/work/command','POST',{text:' 检查留存 ',clientRequestId:'cloud-work-once',executorInput:{program:'pwd',args:[]}})).ticket.id,ticket.id);
  const otherBoot=await b.api('/api/work/bootstrap');assert.equal(otherBoot.tickets.some(item=>item.id===ticket.id),false);assert.equal(otherBoot.attention.some(item=>item.ticketId===ticket.id),false);
  assert.equal((await b.api('/api/work/tickets/'+ticket.id)).status,404);
  assert.equal((await b.api('/api/work/tickets/'+ticket.id+'/actions','POST',{action:'stop'})).status,404);
  const own=await a.api('/api/work/tickets/'+ticket.id);assert.equal(own.status,200);assert.equal(own.ticket.id,ticket.id);
 });
+test('云端移动文件接口进入鉴权而不是被路由白名单拦成 404', async t => {
+  const s = await setup(t, { workEnabled: true });
+  const anon = s.client();
+  assert.equal((await anon.api('/api/mobile/tickets/demo/files')).status, 401);
+  assert.equal((await anon.api('/api/mobile/tickets/demo/file/preview?path=report.md')).status, 401);
+  assert.equal((await anon.api('/api/mobile/tickets/demo/file/link', 'POST', { path: 'report.md' })).status, 401);
+  const token = await anon.api('/api/mobile/files/bad-token');
+  assert.equal(token.status, 401);
+  assert.match(token.error, /下载链接已过期或无效/);
+  // 未登记的手机接口仍然保持 404，避免把 /api/mobile 变成任意路由入口。
+  assert.equal((await anon.api('/api/mobile/unknown')).status, 404);
+});
+
 async function setup(t, options = {}) {
   assert.equal(typeof module.createCloudApp, 'function', '必须提供 createCloudApp');
   const dir = await mkdtemp(path.join(tmpdir(), 'lagent-cloud-'));
@@ -79,58 +101,6 @@ async function setup(t, options = {}) {
   return { client, register, dir, get app() { return app; }, get base() { return base; }, restart: async () => { await close(); await start(); } };
 }
 
-test('cloud report sharing is scoped, redacted, revocable and counts deduplicated visits and registrations', async t => {
-  let time = Date.now(); const s = await setup(t, { now: () => time });
-  const owner = await s.register('share_owner'); const other = await s.register('share_other'); const anon = s.client();
-  const boot = await owner.api('/api/bootstrap'); const task = boot.tasks.find(x => x.status === 'completed');
-  assert.equal((await anon.api(`/api/tasks/${task.id}/shares`, 'POST', { expiresInDays: 7, hideRevenue: true })).status, 401);
-  assert.equal((await other.api(`/api/tasks/${task.id}/shares`, 'POST', { expiresInDays: 7, hideRevenue: true })).status, 404);
-  assert.equal((await owner.api(`/api/tasks/${task.id}/shares`, 'POST', { expiresInDays: 5, hideRevenue: true })).status, 400);
-  const created = await owner.api(`/api/tasks/${task.id}/shares`, 'POST', { expiresInDays: 7, hideRevenue: true });
-  assert.equal(created.status, 201); assert.match(created.token, /^[A-Za-z0-9_-]{43}$/);
-  const result = await anon.api('/api/public/shares/read', 'POST', { token: created.token }); assert.equal(result.status, 200);
-  assert.equal(result.report.sample, true); assert.equal(result.report.sampleNotice, '本报告使用示例数据，不代表真实业务。');
-  assert.equal(result.headers['cache-control'], 'no-store'); assert.equal(result.headers['referrer-policy'], 'no-referrer');
-  const serialized = JSON.stringify(result.report); assert.doesNotMatch(serialized, /"revenue"|"payers"|pay_rate|arppu|arpdau|summary|findings|recommendations|records|user_id|apiKey|username/i);
-  const visitorToken = 'a'.repeat(43);
-  for (let i = 0; i < 2; i++) assert.equal((await anon.api('/api/public/shares/visit', 'POST', { token: created.token, visitorToken })).status, 200);
-  const newcomer = s.client(); assert.equal((await newcomer.api('/api/auth/register', 'POST', { username: 'share_newcomer', displayName: '新用户', password, shareToken: created.token, visitorToken })).status, 201);
-  const listed = await owner.api(`/api/tasks/${task.id}/shares`); assert.equal(listed.shares[0].views, 1); assert.equal(listed.shares[0].registrations, 1); assert.equal(JSON.stringify(listed).includes(created.token), false);
-  assert.equal((await other.api(`/api/shares/${created.share.id}`, 'DELETE')).status, 404);
-  assert.equal((await owner.api(`/api/shares/${created.share.id}`, 'DELETE')).status, 200);
-  assert.equal((await anon.api('/api/public/shares/read', 'POST', { token: created.token })).status, 404);
-  assert.equal((await anon.api('/api/public/shares/read', 'POST', { token: 'b'.repeat(43) })).error, (await anon.api('/api/public/shares/read', 'POST', { token: created.token })).error);
-  const late = s.client(); assert.equal((await late.api('/api/auth/register', 'POST', { username: 'share_late', displayName: '迟到', password, shareToken: created.token, visitorToken })).status, 201);
-  assert.equal((await owner.api(`/api/tasks/${task.id}/shares`)).shares[0].registrations, 1);
-  const db = new DatabaseSync(path.join(s.dir, 'accounts.sqlite')); try { assert.equal(JSON.stringify(db.prepare('SELECT * FROM shares').all()).includes(created.token), false); } finally { db.close(); }
-});
-
-test('sharing expires, remains a snapshot, limits attribution, and does not charge a wallet', async t => {
-  let time = Date.now(); const s = await setup(t, { now: () => time }); const owner = await s.register('share_expiry');
-  const boot = await owner.api('/api/bootstrap'); const task = boot.tasks.find(x => x.status === 'completed');
-  const wallet = (await owner.api('/api/wallet')).wallet;
-  const created = await owner.api(`/api/tasks/${task.id}/shares`, 'POST', { expiresInDays: 1, hideRevenue: false });
-  assert.equal(created.status, 201); const anon = s.client();
-  const initial = await anon.api('/api/public/shares/read', 'POST', { token: created.token }); assert.equal(initial.report.currency, 'CNY');
-  const db = new DatabaseSync(path.join(s.dir, 'accounts.sqlite'));
-  try { db.prepare('UPDATE shares SET snapshot=? WHERE id=?').run(JSON.stringify({ marker: 'fixed' }), created.share.id); } finally { db.close(); }
-  assert.equal((await anon.api('/api/public/shares/read', 'POST', { token: created.token })).report.marker, 'fixed');
-  assert.deepEqual((await owner.api('/api/wallet')).wallet, wallet);
-  time += 86400000;
-  assert.equal((await anon.api('/api/public/shares/read', 'POST', { token: created.token })).status, 404);
-  const late = s.client(); assert.equal((await late.api('/api/auth/register', 'POST', { username:'expiry_late', displayName:'迟到', password, shareToken:created.token, visitorToken:'a'.repeat(43) })).status, 201);
-  assert.equal((await owner.api(`/api/tasks/${task.id}/shares`)).shares[0].registrations, 0);
-});
-async function waitFor(c, id, status) {
-  for (let i = 0; i < 200; i++) { const r = await c.api(`/api/tasks/${id}`); if (r.task?.status === status) return r; if (r.task?.status === 'failed') throw new Error(r.task.error); await new Promise(resolve => setTimeout(resolve, 10)); }
-  throw new Error(`任务未达到 ${status}`);
-}
-async function files(dir) {
-  const result = [];
-  for (const e of await readdir(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) result.push(...await files(p)); else result.push(p); }
-  return result;
-}
-
 test('OpenCode Go requires an explicit cloud allowlist and keeps credentials session scoped', async t => {
   const baseUrl = 'https://opencode.ai/inference/go/openai/v1';
   const closed = await setup(t); const blocked = await closed.register('go_blocked');
@@ -150,7 +120,7 @@ test('OpenCode Go requires an explicit cloud allowlist and keeps credentials ses
 test('cloud runtime, password hashing, opaque secure cookie and duplicate identity validation', async t => {
   const s = await setup(t, { production: true });
   const anon = s.client();
-  assert.deepEqual(await anon.api('/api/runtime'), { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: APP_VERSION, registrationOpen: true, modelHosts: ['api.deepseek.com', 'api.anthropic.com', 'api.openai.com'], capabilities: { taskEvents: true, taskRecovery: true, taskSkip: true, taskSummaries: true, idempotentTasks: true, walletVersion: true, reportExplore: true, reportMetadata: true, reportContinuation: true, modelHub: true, reportPdf: true, agentTrace: true, memory: true, modelUsage: true, superagent: true, reportSharing: true }, status: 200, setCookie: null });
+  assert.deepEqual(await anon.api('/api/runtime'), { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: APP_VERSION, registrationOpen: true, modelHosts: ['api.deepseek.com', 'api.anthropic.com', 'api.openai.com'], capabilities: { memory: true, modelUsage: true, modelHub: true, superagent: true }, status: 200, setCookie: null });
   assert.equal((await anon.api('/api/bootstrap')).status, 401);
   assert.equal((await anon.api('/api/auth/session')).user, null);
   const r = await anon.api('/api/auth/register', 'POST', { username: 'Alice_01', displayName: '阿丽丝', password });
@@ -211,49 +181,6 @@ test('注册关闭时运行时返回开关，注册接口直接拒绝', async t 
   assert.equal((await anon.api('/api/auth/register', 'POST', { username: 'closed_user', displayName: '关注册', password: 'Passw0rd!2026' })).status, 403);
 });
 
-test('A/B resources, task operations, reports and trial ledgers remain isolated', async t => {
-  const s = await setup(t); const a = await s.register('alice'); const b = await s.register('bob');
-  const ab = await a.api('/api/bootstrap'); const bb = await b.api('/api/bootstrap');
-  assert.equal(ab.wallet.balance, 500); assert.equal(bb.wallet.balance, 500);
-  assert.notEqual(ab.datasets[0].id, bb.datasets[0].id);
-  const form = new FormData(); form.append('files', new Blob(['user_id,registered_at,channel\na,2026-10-01,自然\n']), 'users.csv');
-  const uploaded = await a.api('/api/datasets/upload', 'POST', form); assert.equal(uploaded.status, 201, uploaded.error);
-  const id = uploaded.dataset.id;
-  assert.equal(uploaded.dataset.inspection?.version, 1);
-  assert.equal(Object.hasOwn(uploaded.dataset, 'records'), false);
-  assert.equal((await b.api('/api/bootstrap')).datasets.some(dataset => dataset.id === id), false);
-  assert.deepEqual((await a.api(`/api/datasets/${id}`)).dataset.inspection, uploaded.dataset.inspection);
-  assert.equal((await b.api(`/api/datasets/${id}`)).status, 404);
-  assert.equal((await b.api(`/api/datasets/${id}`, 'DELETE')).status, 404);
-  assert.equal((await b.api('/api/tasks', 'POST', taskBody(id))).status, 404);
-  const created = await a.api('/api/tasks', 'POST', taskBody(ab.datasets[0].id));
-  assert.equal(created.status, 201); await waitFor(a, created.task.id, 'completed');
-  for (const [suffix, method, body] of [['', 'GET'], ['/report.md', 'GET'], ['/cancel', 'POST', {}], ['/approve', 'POST', {}], ['/message', 'POST', { message: '越权' }]]) assert.equal((await b.api(`/api/tasks/${created.task.id}${suffix}`, method, body)).status, 404);
-  assert.equal((await a.api(`/api/tasks/${created.task.id}/report.md`)).status, 200);
-  assert.deepEqual((await a.api('/api/wallet')).wallet, { balance: 480, frozen: 0, spent: 20 });
-  assert.deepEqual((await b.api('/api/wallet')).wallet, { balance: 500, frozen: 0, spent: 0 });
-});
-
-test('same-account sessions isolate API keys; account settings, data and wallet survive restart', async t => {
-  const seen = [];
-  const s = await setup(t, { modelHosts: ['model.example.test'], fetchImpl: async (_url, init) => { seen.push(init.headers.authorization); assert.equal(init.redirect, 'error'); return new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }] })); } });
-  const a = await s.register('session_user'); const b = s.client();
-  assert.equal((await b.api('/api/auth/login', 'POST', { username: 'SESSION_USER', password })).status, 200);
-  const opts = { provider: '供应商', baseUrl: 'https://model.example.test/v1', model: 'same-account' };
-  await a.api('/api/settings', 'PUT', { ...opts, apiKey: 'secret-session-alpha' });
-  assert.equal((await b.api('/api/settings')).settings.hasKey, false);
-  await b.api('/api/settings', 'PUT', { ...opts, apiKey: 'secret-session-beta' });
-  assert.equal((await a.api('/api/settings/test', 'POST', {})).status, 200);
-  assert.equal((await b.api('/api/settings/test', 'POST', {})).status, 200);
-  assert.deepEqual(seen, ['Bearer secret-session-alpha', 'Bearer secret-session-beta']);
-  const boot = await a.api('/api/bootstrap'); const created = await a.api('/api/tasks', 'POST', taskBody(boot.datasets[0].id)); await waitFor(a, created.task.id, 'completed');
-  for (const file of await files(s.dir)) { const contents = await readFile(file); for (const secret of ['secret-session-alpha', 'secret-session-beta', password, a.cookie().split('=')[1]]) assert.equal(contents.includes(Buffer.from(secret)), false, path.basename(file)); }
-  await s.restart();
-  assert.equal((await a.api('/api/auth/session')).user.id, a.user.id);
-  const restored = await a.api('/api/bootstrap'); assert.equal(restored.wallet.spent, 20); assert.equal(restored.settings.model, opts.model); assert.equal(restored.settings.hasKey, false);
-  const login = s.client(); assert.equal((await login.api('/api/auth/login', 'POST', { username: a.user.username, password })).status, 200);
-});
-
 test('logout, password changes and expiry revoke sessions and memory credentials', async t => {
   let time = Date.now(); const s = await setup(t, { now: () => time, sessionTtlMs: 10000 });
   const a = await s.register('revoke_user'); const stale = s.client(a.cookie());
@@ -278,42 +205,6 @@ test('host and same-origin validation rejects cross-site writes and ignores spoo
   assert.equal((await c.api('/api/auth/login', 'POST', { username: 'different', password }, { 'x-forwarded-for': '10.0.0.100' })).status, 429);
 });
 
-test('model whitelist is exact HTTPS and denies requests before credentials or wallet are affected', async t => {
-  let calls = 0; const s = await setup(t, { modelHosts: ['model.example.test'], fetchImpl: async () => { calls++; return new Response('{}'); } });
-  const a = await s.register('whitelist_user');
-  for (const baseUrl of ['https://evil.test/v1', 'https://model.example.test.evil.test/v1', 'http://127.0.0.1:9888/v1', 'https://model.example.test:444/v1']) assert.equal((await a.api('/api/settings', 'PUT', { baseUrl, apiKey: 'not-persisted' })).status, 400);
-  assert.equal((await a.api('/api/settings/test', 'POST', {})).status, 400);
-  const boot = await a.api('/api/bootstrap'); assert.equal((await a.api('/api/tasks', 'POST', taskBody(boot.datasets[0].id, { useAI: true }))).status, 400);
-  assert.equal(calls, 0); assert.equal((await a.api('/api/wallet')).wallet.balance, 500);
-  assert.throws(() => module.createCloudApp({ dataDir: s.dir, production: true, publicUrl: 'http://example.test' }), /HTTPS/);
-});
-
-test('cloud caps concurrent tasks, dataset count and active workspaces without evicting paused tasks', async t => {
-  const s = await setup(t, { maxWorkspaces: 1, workspaceIdleMs: 1 }); const a = await s.register('capacity_a'); const b = await s.register('capacity_b');
-  const boot = await a.api('/api/bootstrap');
-  const one = await a.api('/api/tasks', 'POST', taskBody(boot.datasets[0].id, { mode: 'collaborative' })); await waitFor(a, one.task.id, 'awaiting_approval');
-  const two = await a.api('/api/tasks', 'POST', taskBody(boot.datasets[0].id, { mode: 'collaborative' })); await waitFor(a, two.task.id, 'awaiting_approval');
-  assert.equal((await a.api('/api/tasks', 'POST', taskBody(boot.datasets[0].id))).status, 429);
-  assert.equal((await b.api('/api/bootstrap')).status, 503);
-  await a.api(`/api/tasks/${one.task.id}/cancel`, 'POST', {}); await a.api(`/api/tasks/${two.task.id}/cancel`, 'POST', {});
-  assert.equal((await b.api('/api/bootstrap')).status, 200);
-  assert.equal((await a.api('/api/bootstrap')).wallet.balance, 500);
-  for (let i = 1; i < 20; i++) assert.equal((await a.api('/api/datasets/demo', 'POST', {})).status, 201);
-  assert.equal((await a.api('/api/datasets/demo', 'POST', {})).status, 429);
-});
-
-test('unconfigured development service accepts its actual loopback port while production requires PUBLIC_URL', async t => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'lagent-cloud-dynamic-'));
-  const app = module.createCloudApp({ dataDir: dir, production: false });
-  const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); app.locals.close(); await rm(dir, { recursive: true, force: true }); });
-  const base = `http://127.0.0.1:${server.address().port}`;
-  assert.equal((await fetch(base + '/api/runtime')).status, 200);
-  const registration = await fetch(base + '/api/auth/register', { method: 'POST', headers: { origin: base, 'content-type': 'application/json' }, body: JSON.stringify({ username: 'dynamic_user', displayName: '随机端口', password }) });
-  assert.equal(registration.status, 201);
-  assert.throws(() => module.createCloudApp({ dataDir: dir, production: true }), /PUBLIC_URL/);
-});
-
 test('disconnecting a model-test client cannot evict its workspace while the async operation is in flight', async t => {
   let release; let entered;
   const gate = new Promise(resolve => { release = resolve; }); const started = new Promise(resolve => { entered = resolve; });
@@ -327,24 +218,6 @@ test('disconnecting a model-test client cannot evict its workspace while the asy
   const extra = a.api('/api/settings/test', 'POST', {}); await new Promise(resolve => setTimeout(resolve, 30)); release();
   assert.equal(blocked.status, 503);
   assert.equal((await extra).status, 429);
-});
-
-test('running AI task keeps its original session snapshot after logout and another session changes settings', async t => {
-  const seen = [];
-  const s = await setup(t, { modelHosts: ['first.example.test', 'second.example.test'], fetchImpl: async (url, init) => {
-    seen.push({ url, model: JSON.parse(init.body).model, authorization: init.headers.authorization });
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: '聚合指标分析', findings: [], recommendations: ['补充背景'] }) } }] }));
-  } });
-  const a = await s.register('snapshot_cloud'); const b = s.client(); await b.api('/api/auth/login', 'POST', { username: 'snapshot_cloud', password });
-  await a.api('/api/settings', 'PUT', { baseUrl: 'https://first.example.test/v1', model: 'first-model', apiKey: 'first-session-snapshot' });
-  const boot = await a.api('/api/bootstrap'); const created = await a.api('/api/tasks', 'POST', taskBody(boot.datasets[0].id, { mode: 'collaborative', useAI: true }));
-  await waitFor(a, created.task.id, 'awaiting_approval'); await a.api('/api/auth/logout', 'POST', {});
-  await b.api('/api/settings', 'PUT', { baseUrl: 'https://second.example.test/v1', model: 'second-model', apiKey: 'second-session-snapshot' });
-  await b.api(`/api/tasks/${created.task.id}/approve`, 'POST', { stepId: 'plan' }); await waitFor(b, created.task.id, 'awaiting_approval');
-  await b.api(`/api/tasks/${created.task.id}/approve`, 'POST', { stepId: 'report' }); const done = await waitFor(b, created.task.id, 'completed');
-  assert.equal(done.task.report.source, 'ai');
-  assert.deepEqual(seen, [{ url: 'https://first.example.test/v1/chat/completions', model: 'first-model', authorization: 'Bearer first-session-snapshot' }]);
-  for (const file of await files(s.dir)) { const contents = await readFile(file); assert.equal(contents.includes(Buffer.from('first-session-snapshot')), false); assert.equal(contents.includes(Buffer.from('second-session-snapshot')), false); }
 });
 
 test('model discovery is authenticated, checks hosts, isolates session keys and never saves draft settings', async t => {
@@ -377,7 +250,7 @@ test('model discovery is authenticated, checks hosts, isolates session keys and 
   await b.api('/api/settings', 'PUT', { baseUrl: 'https://api.openai.com/v1', model: 'other-provider', apiKey: 'other-session-provider-key' });
   assert.equal((await a.api('/api/settings/models', 'POST', { baseUrl: 'https://api.openai.com/v1' })).status, 400, '同账号另一会话切换供应商后不能转发旧 Key');
   assert.equal(calls.length, 2);
-  for (const file of await files(s.dir)) assert.equal((await readFile(file)).includes(Buffer.from('temporary-catalog-secret')), false);
+  for (const file of await walkFiles(s.dir)) assert.equal((await readFile(file)).includes(Buffer.from('temporary-catalog-secret')), false);
 });
 
 test('provider authentication errors during discovery do not log the user out', async t => {
@@ -386,18 +259,6 @@ test('provider authentication errors during discovery do not log the user out', 
   const result = await a.api('/api/settings/models', 'POST', { baseUrl: 'https://api.deepseek.com', apiKey: 'do-not-echo-key' });
   assert.equal(result.status, 400); assert.match(result.error, /Key|凭据/); assert.equal(result.error.includes('do-not-echo-key'), false);
   assert.equal((await a.api('/api/auth/session')).user.id, a.user.id);
-});
-
-test('empty model whitelist denies all AI calls while deterministic analysis remains available', async t => {
-  let calls = 0; const s = await setup(t, { modelHosts: [], fetchImpl: async () => { calls++; throw new Error('不应请求'); } });
-  const a = await s.register('empty_whitelist');
-  const denied = await a.api('/api/settings', 'PUT', { baseUrl: 'https://api.openai.com/v1', apiKey: 'blocked-memory-key' });
-  assert.equal(denied.status, 400); assert.match(denied.error, /白名单/);
-  assert.match((await a.api('/api/settings/test', 'POST', {})).error, /白名单/);
-  const boot = await a.api('/api/bootstrap');
-  assert.match((await a.api('/api/tasks', 'POST', taskBody(boot.datasets[0].id, { useAI: true }))).error, /白名单/);
-  const created = await a.api('/api/tasks', 'POST', taskBody(boot.datasets[0].id)); assert.equal(created.status, 201); await waitFor(a, created.task.id, 'completed');
-  assert.equal(calls, 0);
 });
 
 test('cloud API and static responses provide the same restrictive browser security headers', async t => {

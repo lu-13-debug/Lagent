@@ -150,7 +150,7 @@ test('凭据主机重绑定与恶意快照修改不会把Key发往其他地址',
 test('E10 规划建议调用已配置模型、校验步骤并记录 planner 用量', async t => {
   const reply = {
     steps: [
-      { executorId: 'analysis', text: '先核对数据', datasetId: 'dataset-1', reason: '确认口径' },
+      { executorId: 'terminal', text: '先核对数据', reason: '确认口径' },
       { executorId: 'codex', text: '检查仓库状态', reason: '只读检查', dependsOn: [0] }
     ]
   };
@@ -161,9 +161,8 @@ test('E10 规划建议调用已配置模型、校验步骤并记录 planner 用�
   const { api, hub, store } = await setup(t, { fetchImpl });
   const { profile } = await configured(api);
   assert.equal((await api('/workflow-config', 'PUT', { defaultProfileId: profile.id })).status, 200);
-  const result = await hub.suggestWorkPlan({ goal: '检查并修复', executors: ['analysis', 'codex'], datasets: [{ id: 'dataset-1', name: '数据' }] });
-  assert.deepEqual(result.steps.map(step => step.executorId), ['analysis', 'codex']);
-  assert.equal(result.steps[0].datasetId, 'dataset-1');
+  const result = await hub.suggestWorkPlan({ goal: '检查并修复', executors: ['terminal', 'codex'] });
+  assert.deepEqual(result.steps.map(step => step.executorId), ['terminal', 'codex']);
   assert.deepEqual(result.steps[1].dependsOn, [0]);
   assert.equal(result.usage.totalTokens, 160);
   const ledger = store.list('model-call').filter(call => call.kind === 'planner');
@@ -171,15 +170,15 @@ test('E10 规划建议调用已配置模型、校验步骤并记录 planner 用�
   assert.equal(ledger[0].stageId, 'work-plan');
   assert.equal(JSON.stringify(result).includes('fake-hub-private-key'), false);
   assert.equal(JSON.stringify(ledger).includes('fake-hub-private-key'), false);
-  assert.throws(() => module.parseWorkPlanReply(JSON.stringify({ steps: [{ executorId: 'evil', text: 'x' }, { executorId: 'analysis', text: 'y' }] }), ['analysis']), { status: 502 });
-  assert.throws(() => module.parseWorkPlanReply(JSON.stringify({ steps: [{ executorId: 'analysis', text: 'x' }] }), ['analysis']), { status: 502 });
+  assert.throws(() => module.parseWorkPlanReply(JSON.stringify({ steps: [{ executorId: 'evil', text: 'x' }, { executorId: 'terminal', text: 'y' }] }), ['terminal']), { status: 502 });
+  assert.throws(() => module.parseWorkPlanReply(JSON.stringify({ steps: [{ executorId: 'terminal', text: 'x' }] }), ['terminal']), { status: 502 });
 });
 
 test('E10 规划器接受长目标，并在解析阶段复用引擎的 verify 白名单', async t => {
   const reply = {
     steps: [
       { executorId: 'claude-code', text: '修改前端页面', scope: ['frontend/src/**'], verify: { command: 'npm test', expect: 'exit=0' } },
-      { executorId: 'analysis', text: '核对结果', dependsOn: [0] }
+      { executorId: 'terminal', text: '核对结果', dependsOn: [0] }
     ]
   };
   const fetchImpl = async () => Response.json({
@@ -188,24 +187,24 @@ test('E10 规划器接受长目标，并在解析阶段复用引擎的 verify �
   const { api, hub } = await setup(t, { fetchImpl });
   const { profile } = await configured(api);
   assert.equal((await api('/workflow-config', 'PUT', { defaultProfileId: profile.id })).status, 200);
-  const result = await hub.suggestWorkPlan({ goal: '长目标'.repeat(400), executors: ['claude-code', 'analysis'] });
+  const result = await hub.suggestWorkPlan({ goal: '长目标'.repeat(400), executors: ['claude-code', 'terminal'] });
   assert.deepEqual(result.steps[0].scope, ['frontend/src/**']);
   assert.equal(result.steps[0].verify.command, 'npm test');
   assert.equal(result.steps[0].verify.expect, 'exit=0');
   assert.throws(() => module.parseWorkPlanReply(JSON.stringify({ steps: [
-    { executorId: 'analysis', text: '非法验收', verify: { command: 'npx eslint .' } },
-    { executorId: 'analysis', text: '第二步' }
-  ] }), ['analysis']), { status: 502 });
+    { executorId: 'terminal', text: '非法验收', verify: { command: 'npx eslint .' } },
+    { executorId: 'terminal', text: '第二步' }
+  ] }), ['terminal']), { status: 502 });
 });
 
 test('E10 规划器把窗口句柄限制在可见窗口列表', () => {
   const reply = JSON.stringify({ steps: [
     { executorId: 'window', text: '继续执行', executorInput: { handle: 42 } },
-    { executorId: 'analysis', text: '汇总', dependsOn: [0] }
+    { executorId: 'terminal', text: '汇总', dependsOn: [0] }
   ] });
-  const steps = module.parseWorkPlanReply(reply, ['window', 'analysis'], [], [{ handle: 42, process: 'Codex', title: 'Codex' }]);
+  const steps = module.parseWorkPlanReply(reply, ['window', 'terminal'], [{ handle: 42, process: 'Codex', title: 'Codex' }]);
   assert.deepEqual(steps[0].executorInput, { handle: 42, process: 'Codex', submit: true });
-  assert.throws(() => module.parseWorkPlanReply(reply, ['window', 'analysis'], [], [{ handle: 7, process: 'Other', title: 'Other' }]), { status: 502 });
+  assert.throws(() => module.parseWorkPlanReply(reply, ['window', 'terminal'], [{ handle: 7, process: 'Other', title: 'Other' }]), { status: 502 });
 });
 
 test('删除被引用的模型配置会清理子智能体与评审员引用', async t => {

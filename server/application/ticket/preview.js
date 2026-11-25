@@ -82,13 +82,13 @@ function cliPreview(executor, executorInput, project) {
 }
 
 export function buildPreview({ executor, executorInput, project, fallbackText } = {}) {
-  const id = executor?.id || 'analysis';
+  const id = executor?.id || '';
   let preview;
   if (id === 'terminal') preview = terminalPreview(executorInput);
   else if (id === 'browser') preview = browserPreview(executorInput);
   else if (id === 'github') preview = githubPreview(executorInput);
   else if (id === 'window') preview = windowPreview(executorInput);
-  else if (executor?.kind === 'cli' || id === 'model' || executor?.kind === 'analysis') {
+  else if (id === 'model' || ['cli', 'model'].includes(executor?.kind)) {
     preview = cliPreview(executor, executorInput, project);
   } else {
     preview = {

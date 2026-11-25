@@ -72,9 +72,9 @@ function approvalEvidence(ticket: WorkTicket | undefined, access?: { mode?: stri
 const proposalNames: Record<string, string> = { proposed: '待决策', needsApproval: '需确认', accepted: '已接受', rejected: '已拒绝' };
 const executorIds = ['terminal', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'browser', 'github', 'window'];
 // 可在对话/项目里直接派活的执行器（不含終端、浏览器、GitHub 这类内置工具）。
-const conversationExecutorIds = ['analysis', 'codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi', 'workbuddy', 'model'];
-// 项目工作文件夹里能建会话的执行器：数据分析是内置工具，需要在数据集上跑，不能进项目。
-const projectExecutorIds = ['window', ...conversationExecutorIds.filter(id => id !== 'analysis')];
+const conversationExecutorIds = ['codex', 'claude-code', 'claude-acp', 'codex-acp', 'dsh-acp', 'opencode', 'gemini', 'qwen', 'cursor-agent', 'dsh', 'codebuddy', 'qoder', 'iflow', 'kimi', 'workbuddy', 'model'];
+// 项目工作文件夹里能建会话的执行器：终端、浏览器这类受控工具不能进项目。
+const projectExecutorIds = ['window', ...conversationExecutorIds];
 const terminalStatuses = ['completed', 'failed', 'blocked', 'cancelled'];
 // 各家 Agent 的品牌标：能拿到官方图形就用图形（simple-icons / gilbarbara logos / 官网 favicon），
 // 拿不到的退回「品牌色 + 缩写」。同一个产品的 ACP / 桌面版复用同一枚。
@@ -450,7 +450,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     catch (cause) { notify((cause as Error).message, true); }
   };
   const createTeamTemplate = async () => {
-    const ids = (policy?.allowedExecutors || work?.policy?.allowedExecutors || []).filter(id => id !== 'analysis').slice(0, 3);
+    const ids = (policy?.allowedExecutors || work?.policy?.allowedExecutors || []).slice(0, 3);
     if (!ids.length) { notify('还没有启用的 Agent，先在下面打开开关。', true); return; }
     const labels = ['调研', '实现', '验证'];
     const roles = ids.map((id, index) => ({ role: labels[index] || `角色 ${index + 1}`, executorId: id, permissions: index === 2 ? 'read' as const : 'workspace' as const }));
@@ -577,7 +577,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectChatId, activeConversationId, materializeTick]);
-  const datasets = work?.datasets || [];
   const agents = work?.agents || [];
   // 用户还没手动改过权限时，跟随设置里的全局档位；改过就记住自己的选择。
   useEffect(() => {
@@ -872,8 +871,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     try { downloadBlob(await api.workUsageCsv({ includeHistory: usageHistory }), `lagent-usage-${new Date().toISOString().slice(0, 10)}.csv`); }
     catch (cause) { notify((cause as Error).message, true); }
   };
-  const [datasetId, setDatasetId] = useState('');
-  const [attentionDatasets, setAttentionDatasets] = useState<Record<string, string>>({});
   const [terminalProgram, setTerminalProgram] = useState('git');
   const [terminalArgs, setTerminalArgs] = useState('status --short');
   const [browserUrl, setBrowserUrl] = useState('');
@@ -882,7 +879,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [githubRepo, setGithubRepo] = useState('');
   const [githubNumber, setGithubNumber] = useState('');
   const [githubPath, setGithubPath] = useState('');
-  useEffect(() => { if (datasets.length === 1) setDatasetId(datasets[0].id); }, [datasets.length, datasets[0]?.id]);
   const current = useMemo(() => {
     if (view === 'projects' || view === 'project') return folderState.projects.find(item => item.id === folderState.projectId)?.name || '工作文件夹';
     return [...primaryNav, ...moreNav].find(item => item.id === view)?.label || '新对话';
@@ -1065,7 +1061,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     } catch (cause) { notify((cause as Error).message, true); }
   };
 
-  const usableAgents = useMemo(() => agents.filter(agent => agent.id !== 'analysis' && allowedExecutors.includes(agent.id) && agent.status === 'available'), [agents, allowedExecutors]);
+  const usableAgents = useMemo(() => agents.filter(agent => allowedExecutors.includes(agent.id) && agent.status === 'available'), [agents, allowedExecutors]);
   const crossCapable = useMemo(() => usableAgents.filter(agent => isConversationExecutor(agent.id)), [usableAgents]);
   // 旧服务端没有 lagent 字段时视为就绪，避免升级过程中误锁。
   const lagentState = work?.lagent;
@@ -1346,7 +1342,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     if (id === 'terminal') return { program: terminalProgram, args: terminalArgs.trim().split(/\s+/).filter(Boolean) };
     if (id === 'browser') return { url: browserUrl.trim() };
     if (id === 'github') return { action: githubAction, owner: githubOwner.trim(), repo: githubRepo.trim(), ...(githubNumber.trim() ? { number: Number(githubNumber) } : {}), ...(githubAction === 'file' ? { path: githubPath.trim() } : {}) };
-    if (['analysis'].includes(id)) return undefined;
     return { prompt: text.slice(0, 12000) };
   };
   const saveComposerModel = (next: ChatModelChoice) => {
@@ -1365,10 +1360,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     setCliEfforts(previous => ({ ...previous, [key]: next.effort }));
   };
   const validateSingleInput = (id: string): string | null => {
-    if (id === 'analysis') {
-      if (datasets.length === 0) return '请先在工作区上传或加载数据集。';
-      if (datasets.length > 1 && !datasetId) return '请先选择要分析的数据集。';
-    }
     if (id === 'browser' && !browserUrl.trim()) return '请填写要读取的 http/https 页面地址。';
     if (id === 'github' && (!githubOwner.trim() || !githubRepo.trim())) return '请填写 GitHub owner 和 repo。';
     return null;
@@ -1444,7 +1435,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       const window = windows.find(item => windowKey(item.handle) === id);
       return window ? { handle: window.handle, text: prompt, submit: true, process: window.process, title: window.title } : undefined;
     };
-    const problem = chosen.length === 1 ? validateSingleInput(execIdFor(chosen[0])) : chosen.some(id => execIdFor(id) === 'analysis') ? (datasets.length === 0 ? '交叉验证包含数据分析，请先上传数据集。' : datasets.length > 1 && !datasetId ? '交叉验证包含数据分析，请先选择数据集。' : null) : null;
+    const problem = chosen.length === 1 ? validateSingleInput(execIdFor(chosen[0])) : null;
     if (problem) { notify(problem, true); return; }
     // 已有会话：追问直接追加到同一条会话，不再新建对话。
     if (activeConversationId && activeConversation) {
@@ -1464,7 +1455,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           agentIds: execIds,
           ...(settingsFor(chosen) ? { settings: settingsFor(chosen) } : {}),
           ...(Object.keys(executorInputs).length ? { executorInputs } : {}),
-          ...(execIds.includes('analysis') && datasetId ? { datasetId } : {}),
           clientRequestId: `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           autoRun: true
         });
@@ -1513,7 +1503,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     setSending(true);
     const execIds = [...new Set(chosen.map(execIdFor))];
     try {
-      if (scope && execIds.includes('analysis')) { notify('这个工作文件夹不能使用数据分析执行器。', true); return; }
       const created = await api.workCreateConversation({
         goal: value,
         title: value.slice(0, 60),
@@ -1534,7 +1523,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         agentIds: execIds,
         ...(settingsFor(chosen) ? { settings: settingsFor(chosen) } : {}),
         ...(Object.keys(executorInputs).length ? { executorInputs } : {}),
-        ...(execIds.includes('analysis') && datasetId ? { datasetId } : {}),
         clientRequestId: `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         autoRun: true
       });
@@ -1639,7 +1627,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     return () => document.removeEventListener('pointerdown', close, true);
   }, [moreOpen]);
 
-  const handoffTargets = usableAgents.filter(agent => isConversationExecutor(agent.id) && agent.id !== 'analysis');
+  const handoffTargets = usableAgents.filter(agent => isConversationExecutor(agent.id));
   // 详情弹窗和线程内联交接共用同一份来源：优先当前弹窗，其次线程里打开的那条工单。
   const handoffSource = detail?.ticket || activeTicket;
   useEffect(() => {
@@ -1718,7 +1706,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     const prompt = sliceBytes(`你是交叉验证的汇总者。同一问题由多个 Agent 独立作答。请比较它们的结论：列出一致点、分歧点与各自依据，指出谁遗漏了什么，最后给出你的判断与建议。\n\n问题：\n${activeGroup.prompt}\n\n${sections.join('\n\n')}`, 14000);
     setSynthesizing(true);
     try {
-      const { ticket } = await api.workCommand(prompt, `xc-summary-${Date.now()}`, undefined, arbiter, executorInputFor(arbiter, prompt));
+      const { ticket } = await api.workCommand(prompt, `xc-summary-${Date.now()}`, arbiter, executorInputFor(arbiter, prompt));
       const next: CrossCheck = { ...activeGroup, synthesisTicketId: ticket.id, synthesisAgentId: arbiter };
       setCrossChecks(previous => previous.map(group => group.id === next.id ? next : group));
       await refresh();
@@ -1740,8 +1728,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   }, [attention, tickets, folderState.projects]);
   const renderAttention = (items: WorkInboxItem[]) => <div className="sa-attention-list">{items.map(item => {
     const ticket = tickets.find(candidate => candidate.id === item.ticketId);
-    const needsDataset = !ticket?.executor || ticket.executor === 'analysis';
-    const chosen = attentionDatasets[item.ticketId] || ticket?.datasetId || (datasets.length === 1 ? datasets[0].id : '');
     const canRetry = ticket && ['failed', 'blocked', 'cancelled'].includes(ticket.status);
     const canVerify = ticket && ticket.verify && ['completed', 'blocked', 'failed'].includes(ticket.status);
     const evidence = approvalEvidence(ticket, { path: item.accessPath, mode: item.accessMode });
@@ -1771,9 +1757,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         <span>验收{ticket.acceptance.status === 'passed' ? '通过' : '未通过'}：{ticket.acceptance.command}{ticket.acceptance.exitCode !== undefined ? ` · 退出码 ${ticket.acceptance.exitCode}` : ''}</span>
       </div>}
       <div className="sa-attention-actions">
-        {needsDataset && datasets.length > 1 && <label className="sa-dataset-inline"><span>数据集</span><select value={chosen} onChange={event => setAttentionDatasets(previous => ({ ...previous, [item.ticketId]: event.target.value }))}><option value="">请选择数据集</option>{datasets.map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.name}</option>)}</select></label>}
-        {needsDataset && datasets.length === 0 && <span className="sa-inline-note">请先在工作区上传数据集</span>}
-        {(item.options || []).map(option => <button key={option.id} type="button" className={option.action === 'approve' ? 'sa-button sa-primary' : 'sa-button'} disabled={option.action === 'approve' && needsDataset && (datasets.length === 0 || (datasets.length > 1 && !chosen))} onClick={() => void act(item.ticketId, option.action, option.action === 'approve' && needsDataset && chosen ? { datasetId: chosen } : undefined)}>{option.label}</button>)}
+        {(item.options || []).map(option => <button key={option.id} type="button" className={option.action === 'approve' ? 'sa-button sa-primary' : 'sa-button'} onClick={() => void act(item.ticketId, option.action)}>{option.label}</button>)}
         {canRetry && <button type="button" className="sa-button" onClick={() => void act(item.ticketId, 'retry')}><RefreshCw size={12} />重跑</button>}
         {canVerify && <button type="button" className="sa-button" disabled={verifyBusy} onClick={async () => { try { setVerifyBusy(true); const result = await api.workVerifyTicket(item.ticketId); await refresh(); notify(result.acceptance.status === 'passed' ? '验收通过。' : '验收未通过。', result.acceptance.status !== 'passed'); } catch (cause) { notify((cause as Error).message, true); } finally { setVerifyBusy(false); } }}><ListChecks size={12} />验收</button>}
         <button type="button" className="sa-link" onClick={() => void open(item.ticketId)}>查看详情</button>
@@ -1909,8 +1893,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   </article>;
   const boardAttentionCard = (row: (typeof attentionRows)[number]) => {
     const { item, ticket } = row;
-    // 数据分析工单要先选数据集，看板里不抢跑，交给详情页的完整审批卡。
-    const quick = Boolean(ticket) && ticket?.executor !== 'analysis';
+    // 看板只做快速入口，完整审批留在详情页。
+    const quick = Boolean(ticket);
     return <article className="sa-bcard sa-bcard-hot" key={item.ticketId}>
       <div className="sa-bcard-top"><span className="sa-bcard-flag">需要你</span>{ticket?.preview?.risk === 'high' ? <span className="sa-bcard-risk">高风险</span> : null}<time>{shortTime(item.createdAt)}</time></div>
       <button type="button" className="sa-bcard-title" onClick={() => void open(item.ticketId)}>{item.title}</button>
@@ -2244,8 +2228,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           text: command,
           collaborators,
           mode: composeMode === 'multi' ? 'multi' : 'auto',
-          hasProject: Boolean(newFolder || activeConversation?.projectId || folderState.projectId),
-          hasDataset: datasets.length > 0
+          hasProject: Boolean(newFolder || activeConversation?.projectId || folderState.projectId)
         });
         const key = `${command}|${collaborators.join(',')}|${composeMode}`;
         if (!suggestion.suggestLagentOnly || dismissedSuggestion === key) return null;
@@ -2323,7 +2306,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           <button type="button" className="sa-link" onClick={() => setPlanOpen(true)}>手动编排多步计划</button>
         </div>}
         <textarea id="sa-command" value={command} maxLength={3000} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; if (event.nativeEvent.isComposing) return; if (event.shiftKey || event.altKey) return; event.preventDefault(); void send(); }} rows={2} placeholder={projectChatId ? '回复这个项目对话，例如：先跑一遍测试，再修失败项' : activeConversationId ? '继续这个会话，或换一组 Agent 再问一轮…' : composeMode === 'multi' ? '描述目标，Lagent 会拆解、分派，并让协作 Agent 互相验收' : '描述目标，仅由 Lagent 完成，例如：检查仓库 CI 并修复失败项'} />
-        {!projectChatId && singleExecutor === 'analysis' && (datasets.length > 1 ? <div className="sa-executor-fields"><label className="sa-field"><span>数据集</span><select value={datasetId} onChange={event => setDatasetId(event.target.value)}><option value="">请选择数据集</option>{datasets.map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.name} · {dataset.rowCount.toLocaleString()} 行</option>)}</select></label></div> : datasets.length === 1 ? <div className="sa-executor-fields"><span className="sa-inline-note"><Check size={13} />数据集：{datasets[0].name}</span></div> : <div className="sa-executor-fields"><span className="sa-inline-note">还没有数据集，请先在工作区上传或加载示例数据。</span></div>)}
         {!projectChatId && singleExecutor === 'terminal' && <div className="sa-executor-fields"><label className="sa-field"><span>程序</span><select value={terminalProgram} onChange={event => setTerminalProgram(event.target.value)}><option value="git">git</option><option value="npm">npm</option><option value="ls">ls</option><option value="pwd">pwd</option></select></label><label className="sa-field"><span>参数</span><input value={terminalArgs} onChange={event => setTerminalArgs(event.target.value)} placeholder="status --short" /></label></div>}
         {!projectChatId && singleExecutor === 'browser' && <div className="sa-executor-fields"><label className="sa-field"><span>页面地址</span><input type="url" value={browserUrl} onChange={event => setBrowserUrl(event.target.value)} placeholder="https://example.com/page" /></label></div>}
         {!projectChatId && singleExecutor === 'github' && <div className="sa-executor-fields"><label className="sa-field"><span>GitHub 动作</span><select value={githubAction} onChange={event => setGithubAction(event.target.value)}><option value="repo">仓库</option><option value="issues">Issues</option><option value="pulls">Pull Requests</option><option value="checks">CI Checks</option><option value="file">文件</option></select></label><label className="sa-field"><span>owner</span><input value={githubOwner} onChange={event => setGithubOwner(event.target.value)} placeholder="acme" /></label><label className="sa-field"><span>repo</span><input value={githubRepo} onChange={event => setGithubRepo(event.target.value)} placeholder="lagent" /></label>{['issues', 'pulls', 'checks'].includes(githubAction) && <label className="sa-field"><span>编号</span><input inputMode="numeric" value={githubNumber} onChange={event => setGithubNumber(event.target.value)} placeholder="7" /></label>}{githubAction === 'file' && <label className="sa-field"><span>文件路径</span><input value={githubPath} onChange={event => setGithubPath(event.target.value)} placeholder="docs/readme.md" /></label>}</div>}
@@ -2405,10 +2387,9 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       </div>
     </li>;
   };
-  // 档案里 Agent 和工具分开列：终端、浏览器、GitHub、数据分析是被 Agent 调用的能力，
+  // 档案里 Agent 和工具分开列：终端、浏览器、GitHub 是被 Agent 调用的能力，
   // 既不能当协作方派出去，也不该按「成功率 / tokens」这套同事指标去衡量。
   const agentRoster = roster.filter(entry => entry.category !== 'tool');
-  const toolRoster = roster.filter(entry => entry.category === 'tool');
   const rosterCard = (entry: typeof roster[number]) => <article className="sa-roster-card" key={entry.id}>
     <header><strong>{entry.name}</strong><Status status={entry.health === 'available' ? 'available' : entry.health} /></header>
     <p>{entry.bestFor}{entry.permissions.allowed ? '' : ' · 未启用'}</p>
@@ -2432,10 +2413,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     {agentRoster.length > 0 && <section className="sa-roster">
       <div className="sa-agent-group"><h2>Agent 档案</h2><span>能被派进对话、自己完成目标的同事；成功率、用量与擅长任务来自历史工单</span></div>
       <div className="sa-roster-grid">{agentRoster.map(rosterCard)}</div>
-    </section>}
-    {toolRoster.length > 0 && <section className="sa-roster">
-      <div className="sa-agent-group"><h2>工具档案</h2><span>由 Agent 调用的受控能力，不能单独发起协作；开关在「设置 → 执行器策略」</span></div>
-      <div className="sa-roster-grid">{toolRoster.map(rosterCard)}</div>
     </section>}
     <section className="sa-roster">
       <div className="sa-agent-group"><h2>团队模板</h2><span>角色与权限预设，派活时一键套用</span></div>
@@ -2473,7 +2450,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         <ul className="sa-agent-list">{missingProviders.map(providerRow)}</ul>
       </>}
       {!providers.length && !providersLoading && <p className="sa-empty">尚未探测到本机 Agent。</p>}
-      <p className="sa-inline-note">可选 ACP 入口：<code>npm i -g @agentclientprotocol/claude-agent-acp</code>（Claude Code）、<code>npm i -g dsh-acp</code>（DeepSeek Harness）。内置工具（数据分析 / 受控终端 / 浏览器 / GitHub）在<button type="button" className="sa-link" onClick={() => setView('tools')}>工具页</button>管理。</p>
+      <p className="sa-inline-note">可选 ACP 入口：<code>npm i -g @agentclientprotocol/claude-agent-acp</code>（Claude Code）、<code>npm i -g dsh-acp</code>（DeepSeek Harness）。内置工具（受控终端 / 浏览器 / GitHub）在<button type="button" className="sa-link" onClick={() => setView('tools')}>工具页</button>管理。</p>
     </section>
     <section className="sa-windows"><div className="sa-section-head"><h2>已打开的 Agent 窗口</h2><button type="button" className="sa-link" disabled={windowsLoading} onClick={() => void loadWindows()}>{windowsLoading ? '刷新中…' : '刷新窗口'}</button></div>
       <p className="sa-inline-note"><ShieldCheck size={13} />只向白名单进程窗口发送；发送会直接键入该窗口并回车，请先确认标题。DeepSeek Harness 与 Codex 桌面版已加入默认白名单。</p>
@@ -2487,11 +2464,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
 
   const toolsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">本机能力</p><h1>工具</h1><p>工具由 Agent 调用，不能单独在对话里发起协作；状态一览，启用或停用统一在「设置 → 执行器策略」里调整。</p></div></header><div className="sa-card-grid">{tools.map(tool => {
     const enabled = (policy?.allowedExecutors || []).includes(tool.id);
-    const action = tool.id === 'window';
-    return <article className="sa-card" key={tool.id}><div className="sa-card-icon">{toolIcon(tool.id)}</div><div className="sa-card-title"><h2>{tool.name}</h2><Status status={tool.status} /></div><p className="sa-mono">{tool.kind === 'tool' ? '受控工具' : tool.kind}</p><div className="sa-tags">{tool.permissions.map(item => <span key={item}>{item}</span>)}</div>
+    return <article className="sa-card" key={tool.id}><div className="sa-card-icon">{toolIcon(tool.id)}</div><div className="sa-card-title"><h2>{tool.name}</h2><Status status={tool.status} /></div><p className="sa-mono">{tool.id === 'terminal' ? '命令执行' : tool.id === 'browser' ? '网页读取' : tool.id === 'github' ? '仓库检索' : '受控工具'}</p><div className="sa-tags">{tool.permissions.map(item => <span key={item}>{item}</span>)}</div>
       {tool.id === 'github' && tool.status === 'needs_setup' && <p className="sa-inline-note">需要配置 GITHUB_TOKEN 并允许外部执行器。</p>}
       {tool.id === 'browser' && tool.status === 'needs_setup' && <p className="sa-inline-note">正在安装或缺少 Chromium。</p>}
-      {action ? <div className="sa-plan-actions-inline"><span className={`sa-tag ${enabled ? 'sa-tag-ok' : ''}`}>{enabled ? '已启用' : '未启用'}</span><button className="sa-button" onClick={() => setView('agents')}>打开窗口 Agent</button><button className="sa-link" onClick={() => setView('settings')}>在策略中调整</button></div> : tool.id === 'terminal' ? <span className="sa-tag-ok"><Check size={13} />内置可用</span> : <div className="sa-plan-actions-inline"><span className={`sa-tag ${enabled ? 'sa-tag-ok' : ''}`}>{enabled ? '已启用' : tool.status === 'needs_setup' ? '待配置' : '未启用'}</span><button className="sa-link" onClick={() => setView('settings')}>在策略中调整</button></div>}
+      {tool.id === 'terminal' ? <span className="sa-tag-ok"><Check size={13} />内置可用</span> : <div className="sa-plan-actions-inline"><span className={`sa-tag ${enabled ? 'sa-tag-ok' : ''}`}>{enabled ? '已启用' : tool.status === 'needs_setup' ? '待配置' : '未启用'}</span><button className="sa-link" onClick={() => setView('settings')}>在策略中调整</button></div>}
     </article>;
   })}{!tools.length && <p className="sa-empty">工具状态载入中。</p>}</div></section>;
 
@@ -2831,7 +2807,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         </> : <p className="sa-empty">本任务未启用团队模式。</p>}
       </section></div>
     </Modal>}
-    {planOpen && <PlanBuilder agents={agents} allowedExecutors={allowedExecutors} datasets={datasets} windows={windows} initialGoal={command} close={() => setPlanOpen(false)} onCreated={plan => { setPlanOpen(false); setCommand(''); notify('多步计划已创建。'); void refresh().then(() => { const first = plan.steps[0]?.ticketId; if (first) viewTicket(first); }); }} />}
+    {planOpen && <PlanBuilder agents={agents} allowedExecutors={allowedExecutors} windows={windows} initialGoal={command} close={() => setPlanOpen(false)} onCreated={plan => { setPlanOpen(false); setCommand(''); notify('多步计划已创建。'); void refresh().then(() => { const first = plan.steps[0]?.ticketId; if (first) viewTicket(first); }); }} />}
     {appearanceOpen && <AppearanceSettings close={() => setAppearanceOpen(false)} />}
     {settingsOpen && <SettingsModal settings={localSettings} close={() => setSettingsOpen(false)} onSaved={next => { setLocalSettings(next); onSettingsSaved(next); }} notify={notify} />}
     {accountOpen && <AccountModal close={() => setAccountOpen(false)} />}
@@ -2879,12 +2855,11 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   </div>;
 }
 
-type PlanStepDraft = { executorId: string; text: string; datasetId: string; dependsOn: number[]; windowHandle: string };
+type PlanStepDraft = { executorId: string; text: string; dependsOn: number[]; windowHandle: string };
 
-function PlanBuilder({ agents, allowedExecutors, datasets, windows, initialGoal, close, onCreated }: {
+function PlanBuilder({ agents, allowedExecutors, windows, initialGoal, close, onCreated }: {
   agents: { id: string; name: string; status: string }[];
   allowedExecutors: string[];
-  datasets: { id: string; name: string; rowCount: number }[];
   windows: { id: string; handle: number; pid: number; process: string; title: string }[];
   initialGoal: string;
   close: () => void;
@@ -2894,8 +2869,8 @@ function PlanBuilder({ agents, allowedExecutors, datasets, windows, initialGoal,
   const defaultExecutor = targets.find(agent => agent.id === 'codex')?.id || targets[0]?.id || '';
   const [goal, setGoal] = useState(initialGoal);
   const [steps, setSteps] = useState<PlanStepDraft[]>([
-    { executorId: defaultExecutor, text: initialGoal, datasetId: datasets.length === 1 ? datasets[0].id : '', dependsOn: [], windowHandle: '' },
-    { executorId: defaultExecutor, text: '', datasetId: datasets.length === 1 ? datasets[0].id : '', dependsOn: [0], windowHandle: '' },
+    { executorId: defaultExecutor, text: initialGoal, dependsOn: [], windowHandle: '' },
+    { executorId: defaultExecutor, text: '', dependsOn: [0], windowHandle: '' },
   ]);
   const [busy, setBusy] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
@@ -2908,7 +2883,7 @@ function PlanBuilder({ agents, allowedExecutors, datasets, windows, initialGoal,
     setSuggesting(true); setError('');
     try {
       const result = await api.suggestWorkPlan(value, targets.map(target => target.id));
-      setSteps(result.steps.map(step => ({ executorId: step.executorId, text: step.text, datasetId: step.datasetId || (datasets.length === 1 ? datasets[0].id : ''), dependsOn: Array.isArray(step.dependsOn) ? step.dependsOn.filter(index => Number.isInteger(index) && index >= 0) : [], windowHandle: step.executorInput?.handle ? String(step.executorInput.handle) : (step.executorId === 'window' ? (windows[0]?.id || '') : '') })));
+      setSteps(result.steps.map(step => ({ executorId: step.executorId, text: step.text, dependsOn: Array.isArray(step.dependsOn) ? step.dependsOn.filter(index => Number.isInteger(index) && index >= 0) : [], windowHandle: step.executorInput?.handle ? String(step.executorInput.handle) : (step.executorId === 'window' ? (windows[0]?.id || '') : '') })));
     } catch (cause) { setError((cause as Error).message); }
     finally { setSuggesting(false); }
   };
@@ -2918,7 +2893,6 @@ function PlanBuilder({ agents, allowedExecutors, datasets, windows, initialGoal,
     if (!value) { setError('请填写计划目标。'); return; }
     if (steps.length < 2) { setError('至少需要两步。'); return; }
     // 空步骤会回落到计划总目标（见下方 payload），这里不再做恒假的「每一步都需要说明」校验。
-    if (steps.some(step => step.executorId === 'analysis' && datasets.length > 1 && !step.datasetId)) { setError('请为分析步骤选择数据集。'); return; }
     if (steps.some(step => step.executorId === 'window' && !step.windowHandle)) { setError('请为窗口 Agent 步骤选择目标窗口。'); return; }
     setBusy(true); setError('');
     try {
@@ -2928,7 +2902,6 @@ function PlanBuilder({ agents, allowedExecutors, datasets, windows, initialGoal,
           executorId: step.executorId,
           text,
           ...(step.executorId === 'codex' || step.executorId === 'claude-code' ? { executorInput: { prompt: text } } : {}),
-          ...(step.executorId === 'analysis' && step.datasetId ? { datasetId: step.datasetId } : {}),
           ...(step.executorId === 'window' ? { executorInput: { handle: Number(step.windowHandle), text, submit: true, ...(windows.find(item => item.id === step.windowHandle)?.process ? { process: windows.find(item => item.id === step.windowHandle)!.process } : {}), ...(windows.find(item => item.id === step.windowHandle)?.title ? { title: windows.find(item => item.id === step.windowHandle)!.title } : {}) } } : {}),
           ...(step.dependsOn.length ? { dependsOn: step.dependsOn } : {}),
         };
@@ -2947,13 +2920,12 @@ function PlanBuilder({ agents, allowedExecutors, datasets, windows, initialGoal,
         <span className="sa-plan-index">{index + 1}</span>
         <select value={step.executorId} onChange={event => update(index, { executorId: event.target.value })} aria-label={`第${index + 1} 步执行器`}>{targets.length ? targets.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>) : <option value="">没有可用执行器</option>}</select>
         <input value={step.text} onChange={event => update(index, { text: event.target.value })} placeholder={index === 0 ? '第一步做什么' : '下一步做什么'} aria-label={`第${index + 1} 步说明`} />
-        {step.executorId === 'analysis' && datasets.length > 1 && <select value={step.datasetId} onChange={event => update(index, { datasetId: event.target.value })} aria-label={`第${index + 1} 步数据集`}><option value="">选择数据集</option>{datasets.map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.name}</option>)}</select>}
         {step.executorId === 'window' && <select value={step.windowHandle} onChange={event => update(index, { windowHandle: event.target.value })} aria-label={`第${index + 1} 步窗口`}><option value="">选择窗口</option>{windows.map(item => <option key={item.id} value={item.id}>{item.process} · {item.title}</option>)}</select>}
         {index > 0 && <input className="sa-plan-deps" value={step.dependsOn.map(item => item + 1).join(',')} onChange={event => update(index, { dependsOn: parseDependencies(event.target.value, index) })} placeholder="依赖 1,2" aria-label={`第${index + 1} 步依赖`} />}
         {steps.length > 2 && <button type="button" className="sa-icon" aria-label={`删除第${index + 1} 步`} onClick={() => removeStep(index)}><X size={15} /></button>}
       </div>)}</div>
       <div className="sa-plan-form-foot">
-        <button type="button" className="sa-button" disabled={steps.length >= 5} onClick={() => setSteps(previous => [...previous, { executorId: defaultExecutor, text: '', datasetId: datasets.length === 1 ? datasets[0].id : '', dependsOn: previous.length ? [previous.length - 1] : [], windowHandle: '' }])}>添加一步</button>
+        <button type="button" className="sa-button" disabled={steps.length >= 5} onClick={() => setSteps(previous => [...previous, { executorId: defaultExecutor, text: '', dependsOn: previous.length ? [previous.length - 1] : [], windowHandle: '' }])}>添加一步</button>
         <span className="sa-inline-note">最多 5 步；无依赖步骤可并行，依赖满足后自动开始。</span>
       </div>
       {error && <p className="sa-error-text" role="alert">{error}</p>}

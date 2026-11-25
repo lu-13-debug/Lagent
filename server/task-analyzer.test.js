@@ -46,18 +46,17 @@ test('任务理解：同一目录的两次写入会被判为冲突', () => {
   assert.equal(analysis.conflicts.length, 0);
 });
 
-test('任务理解：数据任务会先算数，再结论', () => {
-  const analysis = analyzeTask({ goal: '分析最近 30 天的留存和付费情况', executors: ['analysis', 'claude-code'], hasDataset: true });
+test('任务理解：数据任务交给选中的 Agent，不再引用已下线的分析执行器', () => {
+  const analysis = analyzeTask({ goal: '分析最近 30 天的留存和付费情况', executors: ['claude-code'] });
   assert.equal(analysis.category, 'data');
-  assert.equal(analysis.steps[0].executorId, 'analysis');
-  assert.ok(analysis.needs.some(item => item.id === 'analysis'));
-  assert.ok(analysis.understanding.some(line => line.includes('数据分析引擎')));
+  assert.equal(analysis.steps[0].executorId, 'claude-code');
+  assert.equal(analysis.needs.some(item => item.id === 'analysis'), false);
 });
 
-test('任务理解：没有可用工具时也能给出一步兜底方案', () => {
+test('任务理解：没有可用执行器时兜底交给受控终端', () => {
   const analysis = analyzeTask({ goal: '整理一份说明', executors: [] });
   assert.equal(analysis.steps.length, 1);
-  assert.equal(analysis.steps[0].executorId, 'analysis');
+  assert.equal(analysis.steps[0].executorId, 'terminal');
   assert.deepEqual(analysis.steps[0].scope, []);
 });
 

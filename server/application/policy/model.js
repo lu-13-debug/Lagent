@@ -24,12 +24,16 @@ export const EXTERNAL_EXECUTORS = Object.freeze([
 
 export const WORK_POLICY_ID = 'default';
 
+// 已下线的执行器：只在读取旧策略时用于静默丢弃，不再出现在可选项里。
+const LEGACY_EXECUTORS = new Set(['analysis']);
+
 const defaults = Object.freeze({
   mode: 'personal',
   // 权限模式：read 仅查看、workspace 只在工作区内改、full 完全权限（越界不再问）。
   permission: 'workspace',
   acceptMode: 'explicit',
-  allowedExecutors: Object.freeze(['analysis', 'terminal']),
+  // DataAgent 时期默认带「数据分析」，Lagent 只负责拆解与调度其他 Agent，默认给受控终端。
+  allowedExecutors: Object.freeze(['terminal']),
   // 默认不再「先批准再执行」：需要额外权限时才会在对话里弹一次确认。
   requireApproval: false,
   budgets: Object.freeze({ maxConcurrent: 2, maxCallsPerTicket: 12, maxRuntimeMs: 3600000, maxTokensPerTicket: 200000 }),
@@ -100,9 +104,12 @@ export function normalizePolicy(input = {}, base = defaults) {
   if (input.acceptMode !== undefined && !['auto', 'explicit'].includes(input.acceptMode)) fail('acceptMode 仅支持 auto、explicit');
   if (input.requireApproval !== undefined && typeof input.requireApproval !== 'boolean') fail('requireApproval 必须是布尔值');
   const permission = input.permission === undefined ? (base.permission || 'workspace') : input.permission;
-  const allowedExecutors = input.allowedExecutors === undefined ? [...base.allowedExecutors] : stringList(input.allowedExecutors, 'allowedExecutors', 24);
+  const requestedExecutors = input.allowedExecutors === undefined ? [...base.allowedExecutors] : stringList(input.allowedExecutors, 'allowedExecutors', 24);
+  // DataAgent 时期的 analysis 已经下线；老账号存着的这一条直接在读取时丢弃，
+  // 否则一条历史配置会让整个工作区读不出策略。
+  const allowedExecutors = requestedExecutors.filter(id => !LEGACY_EXECUTORS.has(id));
   // node-<节点短 id>-<agent id>：本机执行节点连上来时动态注册的执行器，不在固定清单里。
-  const unknown = allowedExecutors.filter(id => !['analysis', 'terminal', 'window', 'model', ...EXTERNAL_EXECUTORS].includes(id) && !/^node-[a-z0-9]{1,8}-[a-z][a-z0-9_-]{0,31}$/.test(id));
+  const unknown = allowedExecutors.filter(id => !['terminal', 'window', 'model', ...EXTERNAL_EXECUTORS].includes(id) && !/^node-[a-z0-9]{1,8}-[a-z][a-z0-9_-]{0,31}$/.test(id));
   if (unknown.length) fail(`未知执行器：${unknown.join('、')}`);
   const budgets = input.budgets === undefined ? clone(base.budgets) : object(input.budgets, 'budgets');
   if (input.budgets !== undefined) onlyKeys(budgets, ['maxConcurrent', 'maxCallsPerTicket', 'maxRuntimeMs', 'maxTokensPerTicket'], 'budgets');

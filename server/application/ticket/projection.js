@@ -1,12 +1,11 @@
 // 工单的对外投影：把执行输入、审批快照等控制字段剥掉，只留界面需要的内容。
 // 纯函数，不读存储；调用方负责传入原始记录。
 export const publicTicket = ({
-  clientRequestId, command, lastAction, datasetId, useAI, approvalSnapshot,
+  clientRequestId, command, lastAction, useAI, datasetId, approvalSnapshot,
   executorInput, artifacts, prompt, parentTicketId, chainRootId, handoffDepth,
   handoffSummary, handoffChildId, planId, planStep, planTotal, origin, ...ticket
 }) => ({
   ...ticket,
-  datasetId: datasetId ?? null,
   parentTicketId: parentTicketId ?? null,
   chainRootId: chainRootId ?? null,
   handoffDepth: Number.isSafeInteger(handoffDepth) && handoffDepth > 0 ? handoffDepth : 0,

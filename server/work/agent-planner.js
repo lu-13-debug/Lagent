@@ -26,7 +26,7 @@ const PLANNERS = [
 
 const SYSTEM = [
   '你是任务规划器，只做拆解，不执行任务。',
-  '不要调用任何工具，不要读取或修改文件，只根据目标、执行器清单和数据集清单来拆解。',
+  '不要调用任何工具，不要读取或修改文件，只根据目标、执行器清单和项目现状来拆解。',
   '把目标拆成 2–5 步，每步交给一个最合适的执行器；有先后依赖时用 dependsOn 指定前面的步骤下标（从 0 开始）。',
   '每个执行器的说明要具体到「谁、在什么范围内、产出哪些文件」，一条不超过 200 字。禁止「执行任务第 1 部分」「完成剩余工作」这类没有文件名的空话。',
   '写文件的步骤必须带 scope（要改的目录或文件）和 contract：{"objective":"这一步交付什么","deliverables":["必须真实落盘的项目内相对路径"],"acceptance":["可检查的完成条件"]}。交付物多时拆成多个文件，不要用一份总结文档代替。',
@@ -88,7 +88,6 @@ export function createAgentPlanner({ env = process.env, timeoutMs = 180000 } = {
       '',
       `目标：${String(input?.goal || '').slice(0, 300)}`,
       `可用执行器：${agents.map(agent => `${agent.id}（${agent.name}${Array.isArray(agent.capabilities) && agent.capabilities.length ? `：${agent.capabilities.join('、')}` : ''}）`).join('；')}`,
-      Array.isArray(input?.datasets) && input.datasets.length ? `可用数据集：${input.datasets.map(dataset => `${dataset.id}（${dataset.name}）`).join('；')}` : '',
       input?.project ? `项目：${input.project.name}（${input.project.path}${input.project.gitBranch ? `，分支 ${input.project.gitBranch}` : ''}）` : '',
       input?.project?.memory ? `项目记忆（之前的会话留下的结论，别重复踩坑）：\n${String(input.project.memory).slice(0, 1600)}` : '',
       ...analysisLines

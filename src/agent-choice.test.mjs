@@ -30,5 +30,4 @@ test('多步骤、代码/文件信号或复核模式都不建议简化', () => {
 
 test('超过 120 字不提示，带数据集也不提示', () => {
   assert.equal(lagentOnlySuggestion({ text: '解释'.repeat(70), collaborators: ['codex'], mode: 'auto' }).suggestLagentOnly, false);
-  assert.equal(lagentOnlySuggestion({ text: '解释一下这组数据', collaborators: ['codex'], mode: 'auto', hasDataset: true }).suggestLagentOnly, false);
 });

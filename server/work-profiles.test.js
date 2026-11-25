@@ -10,8 +10,8 @@ import { createExecutorRegistry } from './work/executors/index.js';
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'lagent-work-profiles-'));
   const store = new Store(dir);
-  const analysis = {
-    id: 'analysis', name: '分析', kind: 'analysis', available: true, requiresDataset: true, capabilities: [],
+  const terminal = {
+    id: 'terminal', name: '受控终端', kind: 'terminal', available: true, capabilities: [],
     start() { throw new Error('unused'); }, get() { return null; }
   };
   const codex = {
@@ -21,9 +21,9 @@ function fixture(t) {
     start(ticket, assignment) { return { id: assignment.id, status: 'completed', report: { summary: 'done' } }; },
     get() { return null; }
   };
-  const engine = createWorkEngine(store, createExecutorRegistry([analysis, codex]), () => {}, {
+  const engine = createWorkEngine(store, createExecutorRegistry([terminal, codex]), () => {}, {
     workspace: dir,
-    policy: { allowedExecutors: ['analysis', 'codex'] },
+    policy: { allowedExecutors: ['terminal', 'codex'] },
     env: { ...process.env, LAGENT_ALLOW_EXTERNAL_EXECUTORS: '1', LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' }
   });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -36,7 +36,7 @@ test('配置档：保存、重名、应用全局策略、重置与删除', t => 
     name: '质量优先',
     description: '给重要项目用的高配',
     settings: { model: 'claude-opus-5-5', effort: 'high', permission: 'workspace' },
-    policy: { permission: 'full', allowedExecutors: ['analysis', 'codex'] },
+    policy: { permission: 'full', allowedExecutors: ['terminal', 'codex'] },
     library: { skills: ['review'], mcpServers: ['github'], instructions: ['先读代码'] }
   });
   assert.equal(profile.name, '质量优先');
@@ -53,11 +53,11 @@ test('配置档：保存、重名、应用全局策略、重置与删除', t => 
   const applied = engine.applyProfile(profile.id);
   assert.equal(applied.scope, 'global');
   assert.equal(engine.policy().permission, 'full');
-  assert.deepEqual(engine.policy().allowedExecutors, ['analysis', 'codex']);
+  assert.deepEqual(engine.policy().allowedExecutors, ['terminal', 'codex']);
   assert.equal(engine.profilesActive().effective.profileId, profile.id);
   assert.equal(engine.bootstrap().activeProfile.global.profileId, profile.id);
-  // 全局配置档带权限时，不支持权限设置的分析执行器仍能正常下任务。
-  assert.equal(engine.command({ text: '检查活跃' }).executor, 'analysis');
+  // 全局配置档带权限时，受控终端仍能正常下任务。
+  assert.equal(engine.command({ text: '检查活跃' }).executor, 'terminal');
   assert.equal(engine.listProfiles().length, 1);
 
   const renamed = engine.updateProfile(profile.id, { name: '质量优先 2', settings: { model: 'claude-sonnet-5-5', effort: 'medium' } });
@@ -112,7 +112,7 @@ test('配置档 Library 与项目简报按执行器注入', t => {
   const { project } = engine.importProject({ path: dir });
   const profile = engine.saveProfile({
     name: '按 Agent 注入',
-    policy: { allowedExecutors: ['analysis', 'codex'] },
+    policy: { allowedExecutors: ['terminal', 'codex'] },
     library: {
       instructions: ['先跑测试', '[claude-code] 用 TypeScript', '[codex] 只改 server/**'],
       skills: ['review'],

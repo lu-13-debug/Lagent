@@ -24,7 +24,7 @@ function freeze(value) {
   return value;
 }
 
-export function parseWorkPlanReply(reply, executors, datasets = [], windows = []) {
+export function parseWorkPlanReply(reply, executors, windows = []) {
   const raw = String(reply || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   const start = raw.indexOf('{');
   const end = raw.lastIndexOf('}');
@@ -34,15 +34,12 @@ export function parseWorkPlanReply(reply, executors, datasets = [], windows = []
   const steps = Array.isArray(parsed?.steps) ? parsed.steps : null;
   if (!steps || steps.length < 2 || steps.length > 5) throw vaultError('规划模型必须返回 2–5 个步骤', 502);
   const allowed = new Set(executors);
-  const datasetIds = new Set(datasets.map(item => item?.id).filter(id => typeof id === 'string'));
   return steps.map((step, index) => {
     const executorId = typeof step?.executorId === 'string' ? step.executorId.trim() : '';
     if (!allowed.has(executorId)) throw vaultError(`规划第 ${index + 1} 步使用了不可用执行器`, 502);
     const text = typeof step?.text === 'string' ? step.text.trim() : '';
     if (!text || text.length > 500) throw vaultError(`规划第 ${index + 1} 步说明无效`, 502);
     const reason = typeof step?.reason === 'string' ? step.reason.trim().slice(0, 300) : '';
-    const datasetId = typeof step?.datasetId === 'string' ? step.datasetId.trim() : '';
-    if (datasetId && !datasetIds.has(datasetId)) throw vaultError(`规划第 ${index + 1} 步引用了未知数据集`, 502);
     const windowHandle = Number(step?.executorInput?.handle);
     const windowTarget = executorId === 'window' ? windows.find(item => item.handle === windowHandle) : null;
     if (executorId === 'window' && !windowTarget) throw vaultError(`规划第 ${index + 1} 步引用了未知窗口`, 502);
@@ -63,11 +60,11 @@ export function parseWorkPlanReply(reply, executors, datasets = [], windows = []
         throw vaultError(`规划第 ${index + 1} 步的验收命令无效：${error.message}`, 502);
       }
     }
-    return { executorId, text, ...(reason ? { reason } : {}), ...(datasetId ? { datasetId } : {}), ...(windowTarget ? { executorInput: { handle: windowTarget.handle, process: windowTarget.process, submit: true } } : {}), ...(scope.length ? { scope } : {}), ...(dependsOn.length ? { dependsOn } : {}), ...(verify ? { verify } : {}) };
+    return { executorId, text, ...(reason ? { reason } : {}), ...(windowTarget ? { executorInput: { handle: windowTarget.handle, process: windowTarget.process, submit: true } } : {}), ...(scope.length ? { scope } : {}), ...(dependsOn.length ? { dependsOn } : {}), ...(verify ? { verify } : {}) };
   });
 }
 
-const PLAN_SYSTEM_PROMPT = '你是 Lagent 的任务规划器。把用户目标拆成 2–5 个步骤，只输出严格 JSON，不执行工具、不调用命令。步骤可以并行：没有 dependsOn 的步骤会同时进入待审批；dependsOn 只能引用更早步骤的编号（从 0 开始），最多 3 个，禁止环，后续步骤用依赖表达先后。executorId 只能从给定列表选择；每步 text 是给该执行器的一句可执行指令，最多 300 字；reason 可选，最多 100 字。analysis 步骤如指定 datasetId 必须来自 datasets。claude-code、codex、model 都可以读写项目文件；要只读分析必须在 text 里明确写「只读、不修改文件」，要改文件时用 scope 标出允许改动的目录。id 以 -acp 结尾的步骤通过 ACP 协议驱动另一个只读 Agent，适合独立分析或交叉审查。窗口步骤必须使用 executorId=window，并在 executorInput 中给出 windows 列表里的 handle。不得输出密钥、凭据、URL 参数或原始数据。实现/验证类步骤可选带 verify：{"command":"npm test","expect":"exit=0"}；命令只能用 npm test / npm run test|build|lint|typecheck|check|coverage / pytest / python -m pytest / go test / cargo test / dotnet test / node --test / git diff --check，不要写 shell 管道、重定向或变量。格式：{"steps":[{"executorId":"...","text":"...","reason":"...","scope":["src/**"],"dependsOn":[0],"verify":{"command":"npm test","expect":"exit=0"}}]}';
+const PLAN_SYSTEM_PROMPT = '你是 Lagent 的任务规划器。把用户目标拆成 2–5 个步骤，只输出严格 JSON，不执行工具、不调用命令。步骤可以并行：没有 dependsOn 的步骤会同时进入待审批；dependsOn 只能引用更早步骤的编号（从 0 开始），最多 3 个，禁止环，后续步骤用依赖表达先后。executorId 只能从给定列表选择；每步 text 是给该执行器的一句可执行指令，最多 300 字；reason 可选，最多 100 字。claude-code、codex、model 都可以读写项目文件；要只读分析必须在 text 里明确写「只读、不修改文件」，要改文件时用 scope 标出允许改动的目录。id 以 -acp 结尾的步骤通过 ACP 协议驱动另一个只读 Agent，适合独立分析或交叉审查。窗口步骤必须使用 executorId=window，并在 executorInput 中给出 windows 列表里的 handle。不得输出密钥、凭据、URL 参数或原始数据。实现/验证类步骤可选带 verify：{"command":"npm test","expect":"exit=0"}；命令只能用 npm test / npm run test|build|lint|typecheck|check|coverage / pytest / python -m pytest / go test / cargo test / dotnet test / node --test / git diff --check，不要写 shell 管道、重定向或变量。格式：{"steps":[{"executorId":"...","text":"...","reason":"...","scope":["src/**"],"dependsOn":[0],"verify":{"command":"npm test","expect":"exit=0"}}]}';
 
 export function registerModelHub(app, { store, ownerId = 'local', masterKey, assertModelSettings, fetchImpl = fetch }) {
   ownerId = String(ownerId);
@@ -152,7 +149,7 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
     }
     return freeze({ version: 1, ownerId, capturedAt: new Date().toISOString(), defaultProfileId: config.defaultProfileId, stages });
   };
-  const suggestWorkPlan = async ({ goal, executors, agents, datasets, windows, project } = {}) => {
+  const suggestWorkPlan = async ({ goal, executors, agents, windows, project } = {}) => {
     // 与引擎的 4000 字上限保持一致，避免长目标被模型规划器静默拒绝后才回退本机 Agent。
     const goalText = field(goal, '计划目标', 4000);
     const allowed = [...new Set((Array.isArray(executors) ? executors : []).filter(id => typeof id === 'string' && id.trim() && id.length <= 60).map(id => id.trim()))].slice(0, 12);
@@ -161,8 +158,6 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
       .map(item => ({ id: item.id, name: typeof item.name === 'string' ? item.name.slice(0, 80) : item.id, kind: typeof item.kind === 'string' ? item.kind.slice(0, 40) : 'unknown', ...(Array.isArray(item.capabilities) ? { capabilities: item.capabilities.filter(entry => typeof entry === 'string').slice(0, 12).map(entry => entry.slice(0, 80)) } : {}) }));
     const plannerExecutors = agentList.length ? agentList : allowed.map(id => ({ id }));
     const windowList = (Array.isArray(windows) ? windows : []).slice(0, 20).map(item => ({ handle: Number(item?.handle), process: typeof item?.process === 'string' ? item.process.slice(0, 80) : '', title: typeof item?.title === 'string' ? item.title.slice(0, 160) : '' })).filter(item => Number.isSafeInteger(item.handle) && item.handle > 0);
-    const datasetList = (Array.isArray(datasets) ? datasets : []).filter(item => object(item) && typeof item.id === 'string' && item.id.length <= 120).slice(0, 10)
-      .map(item => ({ id: item.id, name: typeof item.name === 'string' ? item.name.slice(0, 120) : item.id }));
     const captured = captureWorkflow();
     const stage = captured.stages.plan;
     const modelContext = context(stage);
@@ -174,11 +169,11 @@ export function registerModelHub(app, { store, ownerId = 'local', masterKey, ass
       poolId: modelContext.poolId,
       maxTokens: 1600,
       timeoutMs: Math.min(modelContext.timeoutMs, 60000),
-      messages: [{ role: 'system', content: PLAN_SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify({ goal: goalText, executors: plannerExecutors, datasets: datasetList, windows: windowList, project: project && typeof project === 'object' ? { name: typeof project.name === 'string' ? project.name.slice(0, 80) : '', path: typeof project.path === 'string' ? project.path.slice(0, 300) : '', gitBranch: typeof project.gitBranch === 'string' ? project.gitBranch.slice(0, 80) : '', memory: typeof project.memory === 'string' ? project.memory.slice(0, 1600) : '' } : null }) }],
+      messages: [{ role: 'system', content: PLAN_SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify({ goal: goalText, executors: plannerExecutors, windows: windowList, project: project && typeof project === 'object' ? { name: typeof project.name === 'string' ? project.name.slice(0, 80) : '', path: typeof project.path === 'string' ? project.path.slice(0, 300) : '', gitBranch: typeof project.gitBranch === 'string' ? project.gitBranch.slice(0, 80) : '', memory: typeof project.memory === 'string' ? project.memory.slice(0, 1600) : '' } : null }) }],
       fetchImpl: modelContext.fetchImpl,
       onUsage: value => { usage = value || null; }
     });
-    const steps = parseWorkPlanReply(reply, allowed, datasetList, windowList);
+    const steps = parseWorkPlanReply(reply, allowed, windowList);
     if (usage) {
       try {
         store.put('model-call', modelCallEntry({

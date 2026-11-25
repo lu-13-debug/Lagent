@@ -1393,7 +1393,7 @@ export function modelExecutor({ store, cwd, context, contextFor, fetchImpl = fet
   return {
     id: 'model',
     name: 'Lagent',
-    kind: 'cli',
+    kind: 'model',
     available: true,
     requiresDataset: false,
     capabilities: ['cli', 'model', 'text-output', 'project-write', 'tools'],

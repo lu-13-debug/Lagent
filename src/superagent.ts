@@ -68,7 +68,7 @@ export interface WorkHandoff {
 }
 export interface WorkTicket {
   id: string; title: string; status: WorkTicketStatus; stage: string; source: string;
-  executor: string; summary: string; datasetId?: string | null; attention?: WorkAttention; createdAt: string; updatedAt: string;
+  executor: string; summary: string; attention?: WorkAttention; createdAt: string; updatedAt: string;
   parentTicketId?: string | null; chainRootId?: string | null; handoffDepth?: number; handoffSummary?: string; handoffChildId?: string | null;
   planId?: string | null; planStep?: number | null; planTotal?: number | null; projectChatId?: string | null;
   /** 会话归属：一条工单是哪个会话、哪一轮里哪个 Agent 的一次 run。 */
@@ -78,8 +78,7 @@ export interface WorkTicket {
   /** 详情接口在长时间无心跳时返回；列表投影不带。 */
   stalled?: boolean;
 }
-export interface WorkDataset { id: string; name: string; rowCount: number; source: string }
-export interface WorkAgent { id: string; name: string; kind: 'analysis' | 'claude-code' | 'codex' | 'browser' | 'terminal' | string; status: string; capabilities: string[] }
+export interface WorkAgent { id: string; name: string; kind: 'model' | 'claude-code' | 'codex' | 'browser' | 'terminal' | 'window' | string; status: string; capabilities: string[] }
 /** Agent 档案：能力、权限、成本、可靠性与最近使用，用于路由解释。 */
 export interface WorkRosterEntry {
   id: string; name: string; kind: string;
@@ -295,7 +294,6 @@ export interface WorkBootstrap {
   queue?: { maxConcurrent: number; running: number; queued: number; full: boolean };
   tickets: WorkTicket[];
   attention: WorkInboxItem[];
-  datasets: WorkDataset[];
   agents: WorkAgent[];
   tools: WorkTool[];
   policy: WorkPolicy;

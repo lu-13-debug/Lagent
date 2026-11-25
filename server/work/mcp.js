@@ -61,7 +61,7 @@ export function createMcpHandler({ engine, windowBridge, actor = 'mcp' } = {}) {
     }),
     tool('work_send_command', '向指挥台发送一条指令', {
       type: 'object',
-      properties: { text: { type: 'string' }, executorId: { type: 'string' }, datasetId: { type: 'string' }, projectId: { type: 'string' }, executorInput: { type: 'object' }, clientRequestId: { type: 'string' }, verify: { type: 'object' } },
+      properties: { text: { type: 'string' }, executorId: { type: 'string' }, projectId: { type: 'string' }, executorInput: { type: 'object' }, clientRequestId: { type: 'string' }, verify: { type: 'object' } },
       required: ['text'], additionalProperties: false
     }, async input => textResult({ ticket: engine.command({ ...input, origin: actor }) })),
     tool('work_ticket_action', '对工单执行 approve/reject/stop/retry/resume', {
@@ -81,7 +81,6 @@ export function createMcpHandler({ engine, windowBridge, actor = 'mcp' } = {}) {
         executorId: { type: 'string' },
         text: { type: 'string' },
         executorInput: { type: 'object' },
-        datasetId: { type: 'string' },
         handoff: {
           type: 'object',
           properties: {
@@ -182,7 +181,6 @@ export function createMcpHandler({ engine, windowBridge, actor = 'mcp' } = {}) {
               executorId: { type: 'string' },
               text: { type: 'string' },
               executorInput: { type: 'object' },
-              datasetId: { type: 'string' },
               dependsOn: { type: 'array', items: { type: 'number' } },
               verify: { type: 'object' }
             },

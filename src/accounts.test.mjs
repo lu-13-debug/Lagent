@@ -68,21 +68,21 @@ test('切换会话后，旧请求的迟到 401 不影响新账号', async () => 
   } finally { unsubscribe(); globalThis.fetch = previous; }
 });
 
-test('报告下载读取 Markdown，且下载的 401 也触发会话失效', async () => {
+test('报告 Markdown 下载走统一 API 边界，401 也触发会话失效', async () => {
   const module = await import('./api.ts');
-  assert.equal(typeof api.report, 'function', '报告下载应通过统一 API 边界');
+  assert.equal(typeof api.workReportMarkdown, 'function', '报告下载应通过统一 API 边界');
   const previous = globalThis.fetch;
   let expired = 0;
   const unsubscribe = module.onSessionExpired(() => expired++);
   try {
-    globalThis.fetch = async (path, options) => { assert.equal(path, '/api/tasks/task-one/report.md'); assert.equal(options.credentials, 'same-origin'); return new Response('# 我的报告\n', { headers: { 'Content-Type': 'text/markdown' } }); };
-    assert.equal(await api.report('task-one'), '# 我的报告\n');
+    globalThis.fetch = async (path, options) => { assert.equal(path, '/api/work/reports/report-one/markdown'); assert.equal(options.credentials, 'same-origin'); return new Response('# 我的报告\n', { headers: { 'Content-Type': 'text/markdown' } }); };
+    assert.equal(await api.workReportMarkdown('report-one'), '# 我的报告\n');
     globalThis.fetch = async () => Response.json({ error: '请重新登录' }, { status: 401 });
-    await assert.rejects(api.report('task-one'), /请重新登录/);
+    await assert.rejects(api.workReportMarkdown('report-one'), /请重新登录/);
     assert.equal(expired, 1);
   } finally { unsubscribe(); globalThis.fetch = previous; }
 });
-test('task mutations have bounded requests and timeout never claims cancellation or retries a charge', async t => {
+test('工单动作有超时上限，超时后不声称取消也不自动重试', async t => {
   const previous = globalThis.fetch; let calls = 0;
   t.mock.method(AbortSignal, 'timeout', duration => {
     assert.ok(duration > 0 && duration <= 30000);
@@ -90,11 +90,11 @@ test('task mutations have bounded requests and timeout never claims cancellation
   });
   try {
     globalThis.fetch = async (_url, options) => {
-      calls++; assert.ok(options.signal instanceof AbortSignal, '收费操作也必须有超时信号');
+      calls++; assert.ok(options.signal instanceof AbortSignal, '工单动作也必须有超时信号');
       options.signal.throwIfAborted();
       return new Response('{}');
     };
-    await assert.rejects(api.retry('task-a', { strategy: 'resume', useAI: false, clientRequestId: 'stable-retry' }), /超时.*可能已处理/);
-    assert.equal(calls, 1, '不自动重试收费请求');
+    await assert.rejects(api.workAction('ticket-a', 'stop'), /超时.*可能已处理/);
+    assert.equal(calls, 1, '不自动重试工单动作');
   } finally { globalThis.fetch = previous; }
 });

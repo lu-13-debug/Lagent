@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import { createServer } from 'node:http';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createExecutorRegistry } from './work/executors/index.js';
 import { createNodeHub, loadNodeSecret, signNodeToken, verifyNodeToken } from './work/node-hub.js';
 import { registerNodeRoutes } from './work/node-routes.js';
@@ -175,9 +178,9 @@ test('服务器上未安装的同名执行器被本机顶替，断开后原样�
 });
 
 test('策略白名单接受本机节点执行器，仍然拒绝真正未知的 id', () => {
-  const policy = normalizePolicy({ allowedExecutors: ['analysis', 'node-1a2b3c4d-claude-code'] });
-  assert.deepEqual(policy.allowedExecutors, ['analysis', 'node-1a2b3c4d-claude-code']);
-  assert.throws(() => normalizePolicy({ allowedExecutors: ['analysis', 'evil-executor'] }), /未知执行器/);
+  const policy = normalizePolicy({ allowedExecutors: ['terminal', 'node-1a2b3c4d-claude-code'] });
+  assert.deepEqual(policy.allowedExecutors, ['terminal', 'node-1a2b3c4d-claude-code']);
+  assert.throws(() => normalizePolicy({ allowedExecutors: ['terminal', 'evil-executor'] }), /未知执行器/);
 });
 
 test('没有上报任何 Agent 的节点会被拒绝', () => {
@@ -227,4 +230,95 @@ test('节点接口：注册发令牌，令牌可用，未注册的节点被要�
     const stale = await fetch(`${base}/api/node/next?wait=0`, { headers: { authorization: `Bearer ${body.token}` } });
     assert.equal(stale.status, 409, '节点被清理后要求重新注册');
   } finally { await close(); }
+});
+
+test('节点文件回传：工作区映射、describe/preview、原始文件上传与离线清理', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'node-files-'));
+  await writeFile(join(root, 'report.md'), '# 本机报告（来自桌面节点）');
+  const { hub, registry } = harness();
+  const { nodeId, agents } = hub.registerNode({
+    nodeId: 'node-files-1',
+    userId: 'u1',
+    agents: [{ id: 'claude-code', name: 'Claude Code', kind: 'cli' }],
+    features: ['files']
+  });
+  const secret = 'f'.repeat(32);
+  const { base, close } = await withServer(nodeRouter => {
+    registerNodeRoutes(nodeRouter, { resolveHub: () => hub, authenticate: () => 'u1', secret });
+  });
+  t.after(async () => { await close(); hub.close(); await rm(root, { recursive: true, force: true }); });
+
+  const executor = registry.resolve(agents[0].executorId);
+  executor.start({ id: 't-1' }, { id: 'a-1' }, { executorInput: { workspace: root } });
+  const agentJob = await hub.nextJob(nodeId, 0, 'agent');
+  assert.equal(agentJob.job.kind, 'agent');
+  assert.deepEqual(hub.nodeForWorkspace(root), { nodeId });
+  assert.equal(hub.nodeForWorkspace('D:/another/project'), null);
+
+  const token = signNodeToken(secret, { nodeId, userId: 'u1' });
+  const preview = hub.requestFile(nodeId, { op: 'preview', workspace: root, path: 'report.md' });
+  // 文件任务不能被 Agent 长轮询拿走，否则手机预览会排在 Agent 后面。
+  const agentFiltered = await fetch(`${base}/api/node/next?wait=0&kind=agent`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(agentFiltered.status, 204);
+  const claimed = await fetch(`${base}/api/node/next?wait=0&kind=file`, { headers: { authorization: `Bearer ${token}` } });
+  const previewJob = (await claimed.json()).job;
+  assert.equal(previewJob.kind, 'file');
+  assert.equal(previewJob.file.op, 'preview');
+  assert.equal(previewJob.file.path, 'report.md');
+  const completed = await fetch(`${base}/api/node/jobs/${previewJob.id}`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'completed', result: { kind: 'markdown', text: '来自桌面节点' } })
+  });
+  assert.equal(completed.status, 200);
+  assert.deepEqual(await preview, { kind: 'markdown', text: '来自桌面节点' });
+
+  const read = hub.requestFile(nodeId, { op: 'read', workspace: root, path: 'report.md' });
+  const readJob = await hub.nextJob(nodeId, 0, 'file');
+  const uploaded = await fetch(`${base}/api/node/files/${readJob.job.id}`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/octet-stream',
+      'x-lagent-name': encodeURIComponent('报告.md'),
+      'x-lagent-mime': 'text/markdown; charset=utf-8'
+    },
+    body: await readFile(join(root, 'report.md'))
+  });
+  assert.equal(uploaded.status, 200);
+  const delivered = await read;
+  assert.equal(delivered.name, '报告.md');
+  assert.equal(delivered.mime, 'text/markdown; charset=utf-8');
+  assert.match(await readFile(delivered.path, 'utf8'), /来自桌面节点/);
+  await delivered.cleanup();
+
+  const denied = await fetch(`${base}/api/node/files/${readJob.job.id}`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' }, body: Buffer.from('x')
+  });
+  assert.equal(denied.status, 404, '已完成的文件请求不能重复上传');
+});
+
+test('未声明 files 能力的旧节点不会被派发文件请求', () => {
+  const { hub } = harness();
+  const { nodeId, agents } = hub.registerNode({ nodeId: 'node-old-1', userId: 'u1', agents: [{ id: 'claude-code', name: 'Claude Code', kind: 'cli' }] });
+  assert.ok(agents.length);
+  assert.equal(hub.nodeForWorkspace('/tmp/project'), null);
+  assert.throws(() => hub.requestFile(nodeId, { op: 'preview', workspace: '/tmp/project', path: 'a.md' }), /版本过旧/);
+});
+
+test('节点中枢重启后仍能按持久任务的工作区找到文件回传节点', () => {
+  const store = memoryStore();
+  const makeRegistry = () => createExecutorRegistry([{
+    id: 'model', name: 'Lagent', kind: 'model', available: true,
+    validateInput: value => value, start: () => ({ id: 'x' }), get: () => null
+  }]);
+  const firstRegistry = makeRegistry();
+  const first = createNodeHub({ store, registry: firstRegistry, now: () => 1_700_000_000_000 });
+  const { agents } = first.registerNode({ nodeId: 'node-persist-1', userId: 'u1', agents: [{ id: 'claude-code', name: 'Claude Code', kind: 'cli' }], features: ['files'] });
+  firstRegistry.resolve(agents[0].executorId).start({ id: 't-p' }, { id: 'a-p' }, { executorInput: { workspace: 'D:/work/persisted' } });
+  first.close();
+
+  const second = createNodeHub({ store, registry: makeRegistry(), now: () => 1_700_000_000_000 });
+  second.registerNode({ nodeId: 'node-persist-1', userId: 'u1', agents: [{ id: 'claude-code', name: 'Claude Code', kind: 'cli' }], features: ['files'] });
+  assert.deepEqual(second.nodeForWorkspace(String.raw`D:\work\persisted`), { nodeId: 'node-persist-1' });
+  second.close();
 });

@@ -12,33 +12,24 @@ import { createApp } from './app.js';
 import { createExecutorRegistry } from './work/executors/index.js';
 import { terminalExecutor, validateTerminalInput } from './work/executors/terminal.js';
 
-const makeDataset = (id, overrides = {}) => ({
-  id,
-  name: `数据集 ${id}`,
-  rowCount: 12,
-  source: 'upload',
-  records: { users: [{ id: 'private-record' }] },
-  privateToken: 'must-not-leak',
-  createdAt: '2026-11-05T00:00:00.000Z',
-  ...overrides
-});
-
 function fixture(t, options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'lagent-work-'));
   const store = new Store(dir);
-  const datasets = options.datasets ?? [makeDataset('dataset-one')];
-  for (const dataset of datasets) store.put('dataset', dataset);
   const events = [];
   const starts = [];
   const startInputs = [];
   let engine;
   const executor = {
+    // 测试里的通用执行器：Lagent 时代不再有数据分析，统一用受控终端代表任何可派活的执行器。
+    id: 'terminal',
+    name: '受控终端',
+    kind: 'terminal',
+    available: true,
     concurrency: [],
     setConcurrency(value) { this.concurrency.push(value); },
     start(ticket, assignment, input) {
       starts.push(assignment.id);
       startInputs.push(input);
-      if (!input?.datasetId) throw Object.assign(new Error('当前工作区没有可用数据集'), { status: 400 });
       const task = { id: assignment.id, status: 'running', goal: ticket.command };
       store.put('task', task);
       return task;
@@ -52,7 +43,7 @@ function fixture(t, options = {}) {
   const open = () => { engine = createWorkEngine(store, options.executorFactory ? options.executorFactory(executor) : executor, event => events.push(event), { env: { ...process.env, LAGENT_ALLOW_UNMANAGED_EXTERNAL: '1' }, ...(options.planner ? { planner: options.planner } : {}), ...(options.windowBridge ? { windowBridge: options.windowBridge } : {}) }); };
   open();
   // 这些用例验证的是「先批准再执行」的审批链路，需要显式打开该策略；产品默认已改成直接执行。
-  engine.updatePolicy({ requireApproval: true });
+  engine.updatePolicy({ requireApproval: true, allowedExecutors: ['terminal'] });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   return {
     engine,
@@ -84,97 +75,28 @@ function sseResponse() {
 
 test('Work契约字段、命令幂等、输入校验及严格投影', t => {
   const f = fixture(t);
-  f.store.put('dataset', makeDataset('dataset-two'));
   assert.throws(() => f.engine.command({ text: '   ' }), { status: 400 });
   assert.throws(() => f.engine.command({ text: 'x'.repeat(3001) }), { status: 400 });
   assert.throws(() => f.engine.command({ text: '有效指令', clientRequestId: 'x'.repeat(121) }), { status: 400 });
-  assert.throws(() => f.engine.command({ text: '无效选择', datasetId: 'missing' }), { status: 400 });
-  assert.throws(() => f.engine.command({ text: '无效类型', datasetId: 42 }), { status: 400 });
-  const ticket = f.engine.command({ text: '检查留存', clientRequestId: 'once', datasetId: 'dataset-one' });
-  assert.equal(ticket.datasetId, 'dataset-one');
-  assert.equal(f.engine.command({ text: ' 检查留存 ', clientRequestId: 'once', datasetId: 'dataset-one' }).id, ticket.id);
-  assert.throws(() => f.engine.command({ text: '检查留存', clientRequestId: 'once', datasetId: 'dataset-two' }), { status: 409 });
-  assert.throws(() => f.engine.command({ text: '不同指令', clientRequestId: 'once', datasetId: 'dataset-one' }), { status: 409 });
-  assert.deepEqual(Object.keys(ticket).sort(), ['acceptance', 'attention', 'chainRootId', 'contract', 'createdAt', 'datasetId', 'executor', 'handoff', 'handoffChildId', 'handoffDepth', 'handoffSummary', 'id', 'parentTicketId', 'planId', 'planStep', 'planTotal', 'preview', 'source', 'stage', 'status', 'summary', 'title', 'updatedAt', 'verify']);
+  const ticket = f.engine.command({ text: '检查留存', clientRequestId: 'once' });
+  assert.equal(f.engine.command({ text: ' 检查留存 ', clientRequestId: 'once' }).id, ticket.id);
+  assert.throws(() => f.engine.command({ text: '不同指令', clientRequestId: 'once' }), { status: 409 });
+  assert.deepEqual(Object.keys(ticket).sort(), ['acceptance', 'attention', 'chainRootId', 'contract', 'createdAt', 'executor', 'handoff', 'handoffChildId', 'handoffDepth', 'handoffSummary', 'id', 'parentTicketId', 'planId', 'planStep', 'planTotal', 'preview', 'source', 'stage', 'status', 'summary', 'title', 'updatedAt', 'verify']);
   const bootstrap = f.engine.bootstrap();
-  assert.deepEqual(Object.keys(bootstrap).sort(), ['activeProfile', 'agents', 'attention', 'capabilities', 'conversations', 'datasets', 'externalExecutors', 'lagent', 'plans', 'policy', 'profiles', 'projects', 'queue', 'tickets', 'tools', 'workspace']);
+  assert.deepEqual(Object.keys(bootstrap).sort(), ['activeProfile', 'agents', 'attention', 'capabilities', 'conversations', 'externalExecutors', 'lagent', 'plans', 'policy', 'profiles', 'projects', 'queue', 'tickets', 'tools', 'workspace']);
   assert.deepEqual(bootstrap.projects, []);
   assert.deepEqual(bootstrap.conversations, []);
   assert.equal(bootstrap.capabilities.work, true);
   assert.equal(bootstrap.policy.acceptMode, 'explicit');
-  assert.deepEqual(Object.keys(bootstrap.datasets[0]).sort(), ['id', 'name', 'rowCount', 'source']);
   assert.deepEqual(Object.keys(bootstrap.attention[0]).sort(), ['createdAt', 'options', 'question', 'ticketId', 'title']);
   assert.deepEqual(Object.keys(bootstrap.attention[0].options[0]).sort(), ['action', 'id', 'label']);
   const detail = f.engine.detail(ticket.id);
   assert.deepEqual(Object.keys(detail).sort(), ['assignments', 'reports', 'team', 'ticket']);
   assert.equal(detail.team, null);
-  assert.equal(detail.ticket.datasetId, 'dataset-one');
-  assert.doesNotMatch(JSON.stringify({ ticket, bootstrap, detail }), /clientRequestId|lastAction|approvalSnapshot|private-record|privateToken|"command"/);
+  assert.doesNotMatch(JSON.stringify({ ticket, bootstrap, detail }), /clientRequestId|lastAction|approvalSnapshot|private-record|privateToken|"command":/);
   assert.throws(() => f.engine.detail('missing'), { status: 404 });
   assert.throws(() => f.engine.action(ticket.id, 'explode'), { status: 400 });
   assert.throws(() => f.engine.action(ticket.id, 'resume'), { status: 409 });
-});
-
-test('Work bootstrap 数据集元数据最多50条且不含原始记录或私有字段', t => {
-  const datasets = Array.from({ length: 55 }, (_, index) => makeDataset(`dataset-${index}`, {
-    name: `数据 ${index}`,
-    rowCount: index + 1,
-    source: index % 2 ? 'upload' : 'demo'
-  }));
-  const f = fixture(t, { datasets });
-  const listed = f.engine.bootstrap().datasets;
-  assert.equal(listed.length, 50);
-  assert.equal(listed[0].id, 'dataset-54');
-  for (const dataset of listed) {
-    assert.deepEqual(Object.keys(dataset).sort(), ['id', 'name', 'rowCount', 'source']);
-    assert.equal(typeof dataset.id, 'string');
-    assert.equal(typeof dataset.name, 'string');
-    assert.equal(typeof dataset.rowCount, 'number');
-    assert.equal(typeof dataset.source, 'string');
-  }
-});
-
-test('Work 数据集选择支持单数据集自动、显式选择、多数据集拒绝缺失及无数据集阻塞', t => {
-  const single = fixture(t);
-  const automaticTicket = single.engine.command({ text: '单数据集自动选择' });
-  assert.equal(automaticTicket.datasetId, null);
-  const automatic = single.engine.action(automaticTicket.id, 'approve');
-  assert.equal(automatic.status, 'working');
-  assert.equal(automatic.datasetId, 'dataset-one');
-  assert.equal(single.startInputs[0].datasetId, 'dataset-one');
-
-  const multiple = fixture(t, { datasets: [makeDataset('dataset-one'), makeDataset('dataset-two')] });
-  const missing = multiple.engine.command({ text: '多数据集必须选择' });
-  assert.throws(() => multiple.engine.action(missing.id, 'approve'), { status: 400 });
-  assert.equal(multiple.engine.detail(missing.id).ticket.status, 'awaiting_review');
-  const explicit = multiple.engine.action(missing.id, 'approve', { datasetId: 'dataset-two' });
-  assert.equal(explicit.status, 'working');
-  assert.equal(explicit.datasetId, 'dataset-two');
-  assert.equal(multiple.startInputs[0].datasetId, 'dataset-two');
-  const preselected = multiple.engine.command({ text: '命令时预选', datasetId: 'dataset-one' });
-  assert.equal(preselected.datasetId, 'dataset-one');
-  assert.equal(multiple.engine.action(preselected.id, 'approve').datasetId, 'dataset-one');
-
-  const empty = fixture(t, { datasets: [] });
-  const noDataset = empty.engine.command({ text: '没有数据集' });
-  const blocked = empty.engine.action(noDataset.id, 'approve');
-  assert.equal(blocked.status, 'blocked');
-  assert.match(blocked.summary, /没有可用数据集|请先上传/);
-  assert.equal(empty.starts.length, 0);
-  const emptyDetail = empty.engine.detail(noDataset.id);
-  assert.equal(emptyDetail.assignments[0].status, 'blocked');
-  assert.equal(emptyDetail.reports[0].kind, 'blocked');
-});
-
-test('Work command 与 approve 拒绝不存在及跨工作区 datasetId', t => {
-  const a = fixture(t, { datasets: [makeDataset('only-a')] });
-  const b = fixture(t, { datasets: [makeDataset('only-b')] });
-  assert.throws(() => b.engine.command({ text: '跨工作区命令', datasetId: 'only-a' }), { status: 400 });
-  const ticket = b.engine.command({ text: '当前工作区批准' });
-  assert.throws(() => b.engine.action(ticket.id, 'approve', { datasetId: 'only-a' }), { status: 400 });
-  assert.equal(b.engine.detail(ticket.id).ticket.status, 'awaiting_review');
-  assert.equal(b.engine.action(ticket.id, 'approve', { datasetId: 'only-b' }).datasetId, 'only-b');
-  assert.equal(a.engine.bootstrap().datasets[0].id, 'only-a');
 });
 
 test('Work审批、退回、恢复、停止及重派幂等，工作区隔离', t => {
@@ -191,7 +113,6 @@ test('Work审批、退回、恢复、停止及重派幂等，工作区隔离', t
   assert.equal(a.engine.action(ticket.id, 'retry').status, 'working');
   assert.equal(a.engine.action(ticket.id, 'retry').status, 'working');
   assert.equal(a.starts.length, 2);
-  assert.equal(a.engine.detail(ticket.id).ticket.datasetId, 'dataset-one');
 });
 
 test('Work任务状态同步、报告 artifacts 与工作重启恢复', async t => {
@@ -201,8 +122,6 @@ test('Work任务状态同步、报告 artifacts 与工作重启恢复', async t 
   f.store.put('task', { id: assignment.sessionId, status: 'awaiting_approval' });
   await Promise.resolve();
   assert.equal(f.engine.detail(ticket.id).ticket.status, 'awaiting_review');
-  f.store.put('dataset', makeDataset('dataset-two'));
-  assert.throws(() => f.engine.action(ticket.id, 'approve', { datasetId: 'dataset-two' }), { status: 400 });
   const engine = f.restart();
   assert.equal(engine.detail(ticket.id).ticket.status, 'awaiting_review');
   engine.action(ticket.id, 'approve');
@@ -210,7 +129,6 @@ test('Work任务状态同步、报告 artifacts 与工作重启恢复', async t 
   await Promise.resolve();
   const detail = engine.detail(ticket.id);
   assert.equal(detail.ticket.status, 'completed');
-  assert.equal(detail.ticket.datasetId, 'dataset-one');
   assert.equal(detail.assignments[0].status, 'completed');
   assert.equal(detail.reports[0].kind, 'ready');
   assert.equal(detail.reports[0].artifacts.taskId, assignment.sessionId);
@@ -318,7 +236,7 @@ test('Work SSE 支持 Last-Event-ID 断线重放', () => {
   store.close();
 });
 
-test('Work默认关闭，开启后契约路由、SSE 与单数据集自动选择可用', async t => {
+test('Work默认关闭，开启后契约路由与 SSE 可用', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'lagent-work-app-'));
   const app = createApp({ dataDir: join(dir, 'enabled'), workEnabled: true });
   const old = createApp({ dataDir: join(dir, 'old'), workEnabled: false });
@@ -326,34 +244,29 @@ test('Work默认关闭，开启后契约路由、SSE 与单数据集自动选择
   assert.equal(route(old, '/api/work/bootstrap'), undefined);
   assert.equal(call(old, '/api/runtime').capabilities.superagent, undefined);
   assert.equal(call(app, '/api/runtime').capabilities.superagent, true);
-  assert.equal(typeof route(app, '/api/tasks'), 'function');
   assert.equal(typeof route(app, '/api/work/tickets/:id/team/:nodeId/review'), 'function');
   assert.equal(typeof route(app, '/api/work/tickets/:id/team/:nodeId/proposals/:proposalId'), 'function');
   const boot = call(app, '/api/work/bootstrap');
-  assert.equal(boot.datasets.length, 1);
-  assert.deepEqual(Object.keys(boot.datasets[0]).sort(), ['id', 'name', 'rowCount', 'source']);
-  const selectedDatasetId = boot.datasets[0].id;
+  assert.equal(boot.datasets, undefined);
   const { response, chunks } = sseResponse();
   route(app, '/api/work/events')({}, response);
-  const ticket = call(app, '/api/work/command', { body: { text: '核对演示数据' } }).ticket;
-  assert.equal(ticket.datasetId, null);
+  const ticket = call(app, '/api/work/command', { body: { text: '核对当前目录', executorInput: { program: 'pwd', args: [] } } }).ticket;
+  assert.equal(ticket.datasetId, undefined);
   const read = () => call(app, '/api/work/tickets/:id', { params: { id: ticket.id } });
   const approve = input => call(app, '/api/work/tickets/:id/actions', { params: { id: ticket.id }, body: { action: 'approve', input } });
-  assert.equal(approve().ticket.datasetId, selectedDatasetId);
   for (let attempt = 0; attempt < 500; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 10));
     const state = read();
     if (state.ticket.status === 'completed') {
       const report = state.reports.find(item => item.kind === 'ready');
-      assert.ok(report?.artifacts.report);
-      assert.equal(app.locals.store.get('task', report.artifacts.taskId).goal, '核对演示数据');
+      assert.ok(report?.artifacts.terminal);
+      assert.equal(app.locals.store.get('task', report.artifacts.taskId).goal, '核对当前目录');
       break;
     }
     assert.ok(!['failed', 'blocked', 'cancelled'].includes(state.ticket.status), state.ticket.summary);
     if (state.ticket.status === 'awaiting_review') approve();
   }
   assert.equal(read().ticket.status, 'completed');
-  assert.equal(read().ticket.datasetId, selectedDatasetId);
   const messages = chunks.filter(chunk => chunk.startsWith('data: ')).map(chunk => JSON.parse(chunk.slice(6)));
   assert.deepEqual(new Set(messages.map(message => message.type)), new Set(['ticket', 'assignment', 'report']));
 });
@@ -383,7 +296,7 @@ function teamArtifact() {
 
 function approvedTeamFixture(t) {
   const f = fixture(t);
-  const ticket = f.engine.command({ text: '团队验收', datasetId: 'dataset-one' });
+  const ticket = f.engine.command({ text: '团队验收' });
   f.engine.action(ticket.id, 'approve');
   const assignment = f.engine.detail(ticket.id).assignments[0];
   const task = f.store.get('task', assignment.sessionId);
@@ -482,35 +395,35 @@ function fakeTerminalChild({ stdout = '', stderr = '', code = 0, hang = false } 
 
 test('E1 执行器注册表校验 ID、可用性与真实 bootstrap 投影', t => {
   const records = [];
-  const analysis = {
-    id: 'analysis', name: '数据分析', kind: 'analysis', available: true, capabilities: ['analysis', 'report'],
+  const terminal = {
+    id: 'terminal', name: '受控终端', kind: 'terminal', available: true, capabilities: ['command', 'report'],
     start() { return null; }, get() { return null; }, resume() {}
   };
   const offline = {
     id: 'offline', name: '离线执行器', kind: 'tool', available: false, capabilities: ['tool'],
     start() { records.push('offline'); }, get() { return null; }
   };
-  const registry = createExecutorRegistry([analysis, offline]);
+  const registry = createExecutorRegistry([terminal, offline]);
   assert.deepEqual(registry.list(), [
-    { id: 'analysis', name: '数据分析', kind: 'analysis', available: true, nodeBacked: false, capabilities: ['analysis', 'report'] },
+    { id: 'terminal', name: '受控终端', kind: 'terminal', available: true, nodeBacked: false, capabilities: ['command', 'report'] },
     { id: 'offline', name: '离线执行器', kind: 'tool', available: false, nodeBacked: false, capabilities: ['tool'] }
   ]);
   assert.throws(() => registry.requireAvailable('missing'), { status: 400 });
   assert.throws(() => registry.requireAvailable('offline'), /不可用/);
-  assert.throws(() => createExecutorRegistry([analysis, { ...analysis }]), /重复/);
+  assert.throws(() => createExecutorRegistry([terminal, { ...terminal }]), /重复/);
 
   const dir = mkdtempSync(join(tmpdir(), 'lagent-executor-registry-'));
   const store = new Store(dir);
   const engine = createWorkEngine(store, registry);
-  engine.updatePolicy({ requireApproval: true });
+  engine.updatePolicy({ requireApproval: true, allowedExecutors: ['terminal'] });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   assert.throws(() => engine.command({ text: '未知执行器', executorId: 'missing' }), { status: 400 });
   assert.throws(() => engine.command({ text: '不可用执行器', executorId: 'offline' }), { status: 400 });
   const ticket = engine.command({ text: '默认执行器' });
-  assert.equal(ticket.executor, 'analysis');
+  assert.equal(ticket.executor, 'terminal');
   const agents = engine.bootstrap().agents;
   assert.deepEqual(agents.map(agent => ({ id: agent.id, status: agent.status })), [
-    { id: 'analysis', status: 'available' },
+    { id: 'terminal', status: 'available' },
     { id: 'offline', status: 'unavailable' }
   ]);
   assert.deepEqual(Object.keys(agents[0]).sort(), ['capabilities', 'id', 'kind', 'name', 'status']);
@@ -531,7 +444,7 @@ test('E1 terminal command 批准前冻结输入，批准后才启动并生成 te
     }
   });
   const engine = createWorkEngine(store, createExecutorRegistry([terminal]));
-  engine.updatePolicy({ requireApproval: true });
+  engine.updatePolicy({ requireApproval: true, allowedExecutors: ['terminal'] });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
 
   const ticket = engine.command({
@@ -541,7 +454,6 @@ test('E1 terminal command 批准前冻结输入，批准后才启动并生成 te
     executorInput: { program: 'git', args: ['status', '--short'] }
   });
   assert.equal(ticket.executor, 'terminal');
-  assert.equal(ticket.datasetId, null);
   assert.equal(ticket.stage, 'approval');
   assert.doesNotMatch(JSON.stringify(ticket), /executorInput/);
   assert.equal(spawned.length, 0);
@@ -668,7 +580,7 @@ test('E1 terminal 非零退出通过 Work failed report 暴露退出码', async 
     spawnImpl: () => fakeTerminalChild({ stderr: 'denied', code: 9 })
   });
   const engine = createWorkEngine(store, createExecutorRegistry([terminal]));
-  engine.updatePolicy({ requireApproval: true });
+  engine.updatePolicy({ requireApproval: true, allowedExecutors: ['terminal'] });
   t.after(() => { engine.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   const ticket = engine.command({
     text: '失败命令',
@@ -713,21 +625,17 @@ test('E1 Work app 注册 terminal，cloud 账号使用各自 dataDir 作为 cwd'
   assert.notEqual(accountA, accountB);
 });
 
-test('E8 已完成工单交接继承数据集、冻结输入、幂等并发且深度不超过 3', async t => {
-  const f = fixture(t, { datasets: [makeDataset('dataset-one'), makeDataset('dataset-two')] });
-  const root = f.engine.command({ text: '根任务', datasetId: 'dataset-one' });
+test('E8 已完成工单交接冻结输入、幂等并发且深度不超过 3', async t => {
+  const f = fixture(t);
+  const root = f.engine.command({ text: '根任务' });
   const source = await completeWork(f, root.id);
-  assert.throws(
-    () => f.engine.handoff(root.id, { executorId: 'analysis', datasetId: 'dataset-two' }),
-    { status: 409 }
-  );
 
   f.events.length = 0;
   const other = createWorkEngine(f.store, f.executor);
   t.after(() => other.close());
   const results = [
-    f.engine.handoff(root.id, { executorId: 'analysis', text: '交接子任务' }),
-    other.handoff(root.id, { executorId: 'analysis', text: '交接子任务' })
+    f.engine.handoff(root.id, { executorId: 'terminal', text: '交接子任务' }),
+    other.handoff(root.id, { executorId: 'terminal', text: '交接子任务' })
   ];
   assert.deepEqual(results.map(result => result.created), [true, false]);
   assert.equal(results[0].ticket.id, results[1].ticket.id);
@@ -740,10 +648,10 @@ test('E8 已完成工单交接继承数据集、冻结输入、幂等并发且�
   assert.equal(childDetail.ticket.chainRootId, root.id);
   assert.equal(childDetail.ticket.handoffDepth, 1);
   assert.equal(childDetail.ticket.handoffSummary, source.summary);
-  assert.equal(childDetail.ticket.datasetId, 'dataset-one');
+  assert.equal(childDetail.ticket.datasetId, undefined);
   assert.equal(childDetail.ticket.source, 'handoff');
   assert.equal(childDetail.ticket.status, 'awaiting_review');
-  assert.doesNotMatch(JSON.stringify(childDetail), /executorInput|"command"/);
+  assert.doesNotMatch(JSON.stringify(childDetail), /executorInput|"command":/);
 
   const ticketEvents = f.events.filter(event => event.type === 'ticket');
   assert.equal(ticketEvents.length, 1);
@@ -758,47 +666,42 @@ test('E8 已完成工单交接继承数据集、冻结输入、幂等并发且�
   const audit = f.store.list('work-audit').find(row => row.ticketId === child.id && row.action === 'handoff');
   assert.ok(audit);
   assert.deepEqual(Object.keys(audit).sort(), ['action', 'at', 'executor', 'id', 'reason', 'result', 'ticketId']);
-  assert.equal(audit.executor, 'analysis');
+  assert.equal(audit.executor, 'terminal');
   assert.equal(audit.result, 'created');
   assert.doesNotMatch(JSON.stringify(audit), /executorInput|prompt|command/);
 
   let current = child;
   for (let depth = 1; depth < 3; depth++) {
     await completeWork(f, current.id);
-    const next = f.engine.handoff(current.id, { executorId: 'analysis' });
+    const next = f.engine.handoff(current.id, { executorId: 'terminal' });
     assert.equal(next.created, true);
     assert.equal(next.ticket.handoffDepth, depth + 1);
     assert.equal(next.ticket.chainRootId, root.id);
     current = next.ticket;
   }
   await completeWork(f, current.id);
-  assert.throws(() => f.engine.handoff(current.id, { executorId: 'analysis' }), { status: 409 });
+  assert.throws(() => f.engine.handoff(current.id, { executorId: 'terminal' }), { status: 409 });
 });
 
 test('E8 交接校验 completed、executor、policy、可用性与只读输入并保持审计脱敏', async t => {
   const secret = 'E8_SECRET_PROMPT_AND_EXECUTOR_INPUT';
   const f = fixture(t, {
     executorFactory: analysis => createExecutorRegistry([
-      { ...analysis, id: 'analysis', name: '数据分析', kind: 'analysis', available: true, requiresDataset: true },
+      { ...analysis, id: 'terminal', name: '受控终端', kind: 'terminal', available: true, validateInput: validateTerminalInput },
       {
-        id: 'terminal', name: '受控终端', kind: 'terminal', available: true, requiresDataset: false,
-        validateInput: validateTerminalInput,
-        start() { return null; }, get() { return null; }
-      },
-      {
-        id: 'codex', name: '只读 Codex', kind: 'cli', available: true, requiresDataset: false,
+        id: 'codex', name: '只读 Codex', kind: 'cli', available: true,
         validateInput: input => input,
         start() { return null; }, get() { return null; }
       },
       {
-        id: 'browser', name: '受控浏览器', kind: 'tool', available: false, requiresDataset: false,
+        id: 'browser', name: '受控浏览器', kind: 'tool', available: false,
         validateInput: input => input,
         start() { return null; }, get() { return null; }
       }
     ])
   });
-  const source = f.engine.command({ text: '待交接源', datasetId: 'dataset-one' });
-  assert.throws(() => f.engine.handoff(source.id, { executorId: 'analysis' }), { status: 409 });
+  const source = f.engine.command({ text: '待交接源', executorInput: { program: 'pwd', args: [] } });
+  assert.throws(() => f.engine.handoff(source.id, { executorId: 'terminal' }), { status: 409 });
   await completeWork(f, source.id);
 
   assert.throws(() => f.engine.handoff(source.id, { executorId: 'missing' }), { status: 400 });
@@ -836,13 +739,13 @@ test('E8 交接校验 completed、executor、policy、可用性与只读输入�
 test('E8 父子工单按工作区隔离，其他工作区不可查看或交接', async t => {
   const owner = fixture(t);
   const other = fixture(t);
-  const source = owner.engine.command({ text: '隔离源工单', datasetId: 'dataset-one' });
+  const source = owner.engine.command({ text: '隔离源工单' });
   await completeWork(owner, source.id);
-  const child = owner.engine.handoff(source.id, { executorId: 'analysis' }).ticket;
+  const child = owner.engine.handoff(source.id, { executorId: 'terminal' }).ticket;
 
   assert.throws(() => other.engine.detail(source.id), { status: 404 });
   assert.throws(() => other.engine.detail(child.id), { status: 404 });
-  assert.throws(() => other.engine.handoff(source.id, { executorId: 'analysis' }), { status: 404 });
+  assert.throws(() => other.engine.handoff(source.id, { executorId: 'terminal' }), { status: 404 });
   assert.deepEqual(other.engine.bootstrap().tickets, []);
 });
 
@@ -867,8 +770,8 @@ test('E8 handoff action 首次返回 201，重复交接返回 200 和同一子�
     route(app, '/api/work/tickets/:id/actions')({ params: { id: source.id }, body: { action: 'handoff', input } }, response);
     return { status, body };
   };
-  const first = invoke({ executorId: 'analysis', text: 'HTTP 子工单' });
-  const duplicate = invoke({ executorId: 'analysis', text: '不同标题也不重复创建' });
+  const first = invoke({ executorId: 'terminal', text: 'HTTP 子工单', executorInput: { program: 'pwd', args: [] } });
+  const duplicate = invoke({ executorId: 'terminal', text: '不同标题也不重复创建', executorInput: { program: 'pwd', args: [] } });
   assert.equal(first.status, 201);
   assert.equal(first.body.ticket.parentTicketId, source.id);
   assert.equal(first.body.ticket.handoffDepth, 1);
@@ -882,14 +785,14 @@ test('E9 多步计划一次创建、自动推进且不自动执行', async t => 
     goal: '检查并修复',
     clientRequestId: 'plan-once',
     steps: [
-      { executorId: 'analysis', text: '第一步检查', datasetId: 'dataset-one' },
-      { executorId: 'analysis', text: '第二步修复', datasetId: 'dataset-one', dependsOn: [0] }
+      { executorId: 'terminal', text: '第一步检查' },
+      { executorId: 'terminal', text: '第二步修复', dependsOn: [0] }
     ]
   });
   assert.equal(plan.totalSteps, 2);
   assert.equal(plan.currentStep, 0);
   assert.deepEqual(plan.steps.map(step => step.status), ['awaiting_review', 'waiting']);
-  assert.equal(f.engine.plan({ goal: '检查并修复', clientRequestId: 'plan-once', steps: [{ executorId: 'analysis', text: 'A', datasetId: 'dataset-one' }, { executorId: 'analysis', text: 'B', datasetId: 'dataset-one' }] }).id, plan.id);
+  assert.equal(f.engine.plan({ goal: '检查并修复', clientRequestId: 'plan-once', steps: [{ executorId: 'terminal', text: 'A' }, { executorId: 'terminal', text: 'B' }] }).id, plan.id);
   assert.equal(f.engine.bootstrap().plans[0].id, plan.id);
   const [first, second] = plan.steps;
   assert.equal(f.engine.detail(first.ticketId).ticket.planStep, 0);
@@ -912,11 +815,11 @@ test('E9 多步计划一次创建、自动推进且不自动执行', async t => 
 
 test('E9 计划校验、取消与跨工作区隔离', async t => {
   const f = fixture(t);
-  assert.throws(() => f.engine.plan({ goal: '一步', steps: [{ executorId: 'analysis', text: 'A', datasetId: 'dataset-one' }] }), { status: 400 });
-  assert.throws(() => f.engine.plan({ goal: '六步', steps: Array.from({ length: 6 }, (_, index) => ({ executorId: 'analysis', text: `步骤${index}`, datasetId: 'dataset-one' })) }), { status: 400 });
-  assert.throws(() => f.engine.plan({ goal: '未知执行器', steps: [{ executorId: 'codex', text: 'A' }, { executorId: 'analysis', text: 'B', datasetId: 'dataset-one' }] }), { status: 400 });
-  assert.throws(() => f.engine.plan({ goal: '非法输入', steps: [{ executorId: 'analysis', text: 'A', executorInput: { prompt: '不允许' } }, { executorId: 'analysis', text: 'B', datasetId: 'dataset-one' }] }), { status: 400 });
-  const plan = f.engine.plan({ goal: '取消计划', steps: [{ executorId: 'analysis', text: '第一步', datasetId: 'dataset-one' }, { executorId: 'analysis', text: '第二步', datasetId: 'dataset-one' }] });
+  assert.throws(() => f.engine.plan({ goal: '一步', steps: [{ executorId: 'terminal', text: 'A' }] }), { status: 400 });
+  assert.throws(() => f.engine.plan({ goal: '六步', steps: Array.from({ length: 6 }, (_, index) => ({ executorId: 'terminal', text: `步骤${index}` })) }), { status: 400 });
+  assert.throws(() => f.engine.plan({ goal: '未知执行器', steps: [{ executorId: 'codex', text: 'A' }, { executorId: 'terminal', text: 'B' }] }), { status: 400 });
+  assert.throws(() => f.engine.plan({ goal: '非法输入', steps: [{ executorId: 'terminal', text: 'A', executorInput: { prompt: '不允许' } }, { executorId: 'terminal', text: 'B' }] }), { status: 400 });
+  const plan = f.engine.plan({ goal: '取消计划', steps: [{ executorId: 'terminal', text: '第一步' }, { executorId: 'terminal', text: '第二步' }] });
   const cancelled = f.engine.cancelPlan(plan.id);
   assert.equal(cancelled.status, 'cancelled');
   assert.deepEqual(cancelled.steps.map(step => step.status), ['cancelled', 'cancelled']);
@@ -928,7 +831,7 @@ test('E9 计划校验、取消与跨工作区隔离', async t => {
 
 test('E9 计划推进在重启后保持幂等', async t => {
   const f = fixture(t);
-  const plan = f.engine.plan({ goal: '重启计划', steps: [{ executorId: 'analysis', text: '第一步', datasetId: 'dataset-one' }, { executorId: 'analysis', text: '第二步', datasetId: 'dataset-one', dependsOn: [0] }, { executorId: 'analysis', text: '第三步', datasetId: 'dataset-one', dependsOn: [1] }] });
+  const plan = f.engine.plan({ goal: '重启计划', steps: [{ executorId: 'terminal', text: '第一步' }, { executorId: 'terminal', text: '第二步', dependsOn: [0] }, { executorId: 'terminal', text: '第三步', dependsOn: [1] }] });
   await completeWork(f, plan.steps[0].ticketId);
   assert.equal(f.engine.getPlan(plan.id).currentStep, 1);
   const eventsBefore = f.events.length;
@@ -960,7 +863,7 @@ test('E9 计划路由创建、查询与取消', async t => {
 
 test('E9 计划步骤失败后停止推进', async t => {
   const f = fixture(t);
-  const plan = f.engine.plan({ goal: '失败计划', steps: [{ executorId: 'analysis', text: '第一步', datasetId: 'dataset-one' }, { executorId: 'analysis', text: '第二步', datasetId: 'dataset-one', dependsOn: [0] }] });
+  const plan = f.engine.plan({ goal: '失败计划', steps: [{ executorId: 'terminal', text: '第一步' }, { executorId: 'terminal', text: '第二步', dependsOn: [0] }] });
   const first = f.engine.detail(plan.steps[0].ticketId).ticket;
   f.engine.action(first.id, 'approve');
   await waitFor(() => f.engine.detail(first.id).ticket.status === 'working', '计划第一步未开始');
@@ -977,8 +880,8 @@ test('E9 计划步骤失败后停止推进', async t => {
 test('E9 计划步骤因回合上限失败后自动续跑，整条计划不跟着作废', async t => {
   const f = fixture(t);
   const plan = f.engine.plan({ goal: '续跑计划', steps: [
-    { executorId: 'analysis', text: '第一步', datasetId: 'dataset-one' },
-    { executorId: 'analysis', text: '第二步', datasetId: 'dataset-one', dependsOn: [0] }
+    { executorId: 'terminal', text: '第一步' },
+    { executorId: 'terminal', text: '第二步', dependsOn: [0] }
   ] });
   const first = plan.steps[0].ticketId;
   f.engine.action(first, 'approve');
@@ -1002,28 +905,28 @@ test('E9 计划步骤因回合上限失败后自动续跑，整条计划不跟�
 test('E10 规划建议经引擎校验且不创建工单', async t => {
   const calls = [];
   const f = fixture(t, { planner: async input => { calls.push(input); return { steps: [
-    { executorId: 'analysis', text: '第一步检查', datasetId: 'dataset-one', reason: '先核验' },
-    { executorId: 'analysis', text: '第二步处理', datasetId: 'dataset-one' }
+    { executorId: 'terminal', text: '第一步检查', reason: '先核验' },
+    { executorId: 'terminal', text: '第二步处理' }
   ] }; } });
-  const suggestion = await f.engine.suggestPlan({ goal: '检查并处理', executors: ['analysis'] });
+  const suggestion = await f.engine.suggestPlan({ goal: '检查并处理', executors: ['terminal'] });
   assert.deepEqual(suggestion.steps.map(step => step.text), ['第一步检查', '第二步处理']);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].goal, '检查并处理');
-  assert.deepEqual(calls[0].executors, ['analysis']);
+  assert.deepEqual(calls[0].executors, ['terminal']);
   assert.equal(f.engine.bootstrap().tickets.length, 0);
   assert.deepEqual(f.engine.bootstrap().plans, []);
-  await assert.rejects(() => f.engine.suggestPlan({ goal: '', executors: ['analysis'] }), { status: 400 });
+  await assert.rejects(() => f.engine.suggestPlan({ goal: '', executors: ['terminal'] }), { status: 400 });
   await assert.rejects(() => f.engine.suggestPlan({ goal: '目标', executors: ['codex'] }), { status: 400 });
 });
 
 test('E10 前序步骤把完整报告传给后续步骤，而不是只传 300 字摘要', async t => {
   const f = fixture(t, { planner: async () => ({ steps: [
-    { executorId: 'analysis', text: '先审查', datasetId: 'dataset-one' },
-    { executorId: 'analysis', text: '再实现', datasetId: 'dataset-one', dependsOn: [0] }
+    { executorId: 'terminal', text: '先审查' },
+    { executorId: 'terminal', text: '再实现', dependsOn: [0] }
   ] }) });
   const plan = f.engine.plan({ goal: '审查后实现', steps: [
-    { executorId: 'analysis', text: '先审查', datasetId: 'dataset-one' },
-    { executorId: 'analysis', text: '再实现', datasetId: 'dataset-one', dependsOn: [0] }
+    { executorId: 'terminal', text: '先审查' },
+    { executorId: 'terminal', text: '再实现', dependsOn: [0] }
   ] });
   const first = plan.steps[0].ticketId;
   f.engine.action(first, 'approve');
@@ -1032,7 +935,7 @@ test('E10 前序步骤把完整报告传给后续步骤，而不是只传 300 �
   const longTail = '审查结论尾部：必须修复公告长尾筛选';
   f.store.put('task', { ...task, status: 'completed', report: { id: `report-${first}`, summary: `${'审查细节'.repeat(900)}\n${longTail}` } });
   await waitFor(() => f.engine.detail(first).ticket.status === 'completed', '第一步未完成');
-  const artifact = readFileSync(join(tmpdir(), 'lagent-runs', plan.id, '01-analysis.md'), 'utf8');
+  const artifact = readFileSync(join(tmpdir(), 'lagent-runs', plan.id, '01-terminal.md'), 'utf8');
   assert.match(artifact, /审查结论尾部/);
   assert.ok(artifact.length > 3000, '步骤产物不能只剩摘要开头');
   t.after(() => rmSync(join(tmpdir(), 'lagent-runs', plan.id), { recursive: true, force: true }));
@@ -1043,20 +946,20 @@ test('E10 窗口桥不可用时仍能生成规划建议', async t => {
   const f = fixture(t, {
     windowBridge: { listWindows: async () => { throw Object.assign(new Error('窗口操作失败'), { status: 502, code: 'bridge_failed' }); } },
     planner: async () => { calls++; return { steps: [
-      { executorId: 'analysis', text: '第一步检查', datasetId: 'dataset-one' },
-      { executorId: 'analysis', text: '第二步处理', datasetId: 'dataset-one', dependsOn: [0] }
+      { executorId: 'terminal', text: '第一步检查' },
+      { executorId: 'terminal', text: '第二步处理', dependsOn: [0] }
     ] }; }
   });
-  const suggestion = await f.engine.suggestPlan({ goal: '检查并处理', executors: ['analysis'] });
+  const suggestion = await f.engine.suggestPlan({ goal: '检查并处理', executors: ['terminal'] });
   assert.equal(suggestion.steps.length, 2);
   assert.equal(calls, 1);
 });
 
 test('E10 规划输出非法或规划器缺失时拒绝', async t => {
-  const bad = fixture(t, { planner: async () => ({ steps: [{ executorId: 'codex', text: '不允许' }, { executorId: 'analysis', text: '第二步' }] }) });
-  await assert.rejects(() => bad.engine.suggestPlan({ goal: '目标', executors: ['analysis'] }), { status: 502 });
+  const bad = fixture(t, { planner: async () => ({ steps: [{ executorId: 'codex', text: '不允许' }, { executorId: 'terminal', text: '第二步' }] }) });
+  await assert.rejects(() => bad.engine.suggestPlan({ goal: '目标', executors: ['terminal'] }), { status: 502 });
   const missing = fixture(t);
-  await assert.rejects(() => missing.engine.suggestPlan({ goal: '目标', executors: ['analysis'] }), { status: 503 });
+  await assert.rejects(() => missing.engine.suggestPlan({ goal: '目标', executors: ['terminal'] }), { status: 503 });
 });
 
 test('E10 规划建议路由只返回步骤且不创建工单', async t => {
@@ -1074,8 +977,8 @@ test('E10 规划建议路由只返回步骤且不创建工单', async t => {
 test('P1 多 Agent DAG 支持并行分支与独立分支继续', async t => {
   const f = fixture(t);
   const parallel = f.engine.plan({ goal: '并行检查', steps: [
-    { executorId: 'analysis', text: '检查 A', datasetId: 'dataset-one' },
-    { executorId: 'analysis', text: '检查 B', datasetId: 'dataset-one' }
+    { executorId: 'terminal', text: '检查 A' },
+    { executorId: 'terminal', text: '检查 B' }
   ] });
   assert.deepEqual(parallel.steps.map(step => step.status), ['awaiting_review', 'awaiting_review']);
   await completeWork(f, parallel.steps[0].ticketId);
@@ -1085,9 +988,9 @@ test('P1 多 Agent DAG 支持并行分支与独立分支继续', async t => {
   assert.equal(f.engine.getPlan(parallel.id).status, 'completed');
 
   const branch = f.engine.plan({ goal: '分支失败', steps: [
-    { executorId: 'analysis', text: '依赖根', datasetId: 'dataset-one' },
-    { executorId: 'analysis', text: '依赖子项', datasetId: 'dataset-one', dependsOn: [0] },
-    { executorId: 'analysis', text: '独立分支', datasetId: 'dataset-one' }
+    { executorId: 'terminal', text: '依赖根' },
+    { executorId: 'terminal', text: '依赖子项', dependsOn: [0] },
+    { executorId: 'terminal', text: '独立分支' }
   ] });
   const first = branch.steps[0].ticketId;
   f.engine.action(first, 'approve');
@@ -1108,7 +1011,7 @@ test('P1 多 Agent DAG 支持并行分支与独立分支继续', async t => {
 
 test('P1 DAG 依赖校验拒绝前向、自依赖、重复与超过 3 项', async t => {
   const f = fixture(t);
-  const step = (extra = {}) => ({ executorId: 'analysis', text: '步骤', datasetId: 'dataset-one', ...extra });
+  const step = (extra = {}) => ({ executorId: 'terminal', text: '步骤', ...extra });
   assert.throws(() => f.engine.plan({ goal: '前向依赖', steps: [step({ dependsOn: [1] }), step()] }), { status: 400 });
   assert.throws(() => f.engine.plan({ goal: '自依赖', steps: [step({ dependsOn: [0] }), step()] }), { status: 400 });
   assert.throws(() => f.engine.plan({ goal: '重复依赖', steps: [step(), step({ dependsOn: [0, 0] })] }), { status: 400 });
@@ -1118,8 +1021,8 @@ test('P1 DAG 依赖校验拒绝前向、自依赖、重复与超过 3 项', asyn
 test('P1 计划步骤 reject 后可 resume，失败计划可 retry 复活', async t => {
   const f = fixture(t);
   const rejected = f.engine.plan({ goal: '退回恢复', steps: [
-    { executorId: 'analysis', text: '第一步', datasetId: 'dataset-one' },
-    { executorId: 'analysis', text: '第二步', datasetId: 'dataset-one', dependsOn: [0] }
+    { executorId: 'terminal', text: '第一步' },
+    { executorId: 'terminal', text: '第二步', dependsOn: [0] }
   ] });
   const first = rejected.steps[0].ticketId;
   f.engine.action(first, 'reject');
@@ -1128,8 +1031,8 @@ test('P1 计划步骤 reject 后可 resume，失败计划可 retry 复活', asyn
   assert.equal(f.engine.detail(first).ticket.status, 'awaiting_review');
 
   const failed = f.engine.plan({ goal: '失败重试', steps: [
-    { executorId: 'analysis', text: '根步骤', datasetId: 'dataset-one' },
-    { executorId: 'analysis', text: '下游步骤', datasetId: 'dataset-one', dependsOn: [0] }
+    { executorId: 'terminal', text: '根步骤' },
+    { executorId: 'terminal', text: '下游步骤', dependsOn: [0] }
   ] });
   const root = failed.steps[0].ticketId;
   f.engine.action(root, 'approve');
@@ -1189,7 +1092,7 @@ test('策略并发变化会下发给执行器，恢复默认时也跟着回退',
 test('并发满退回 waiting 的计划步骤会在名额释放后自动继续', async t => {
   const f = fixture(t);
   f.engine.updatePolicy({ requireApproval: false, budgets: { maxConcurrent: 1 } });
-  const step = () => ({ executorId: 'analysis', text: '步骤', datasetId: 'dataset-one' });
+  const step = () => ({ executorId: 'terminal', text: '步骤' });
   const first = f.engine.plan({ goal: '先占住名额', steps: [step(), { ...step(), dependsOn: [0] }] });
   await waitFor(() => f.engine.detail(first.steps[0].ticketId).ticket.status === 'working', '第一个计划未开始');
   const second = f.engine.plan({ goal: '被并发挡住', steps: [step(), { ...step(), dependsOn: [0] }] });
@@ -1222,8 +1125,8 @@ test('P1 重试时可以补回合预算，避免大任务再次被 error_max_tur
 test('P1 重启恢复活跃计划，补齐崩溃前未推进的下一步', async t => {
   const f = fixture(t);
   const plan = f.engine.plan({ goal: '崩溃恢复', steps: [
-    { executorId: 'analysis', text: '已完成步骤', datasetId: 'dataset-one' },
-    { executorId: 'analysis', text: '待推进步骤', datasetId: 'dataset-one', dependsOn: [0] }
+    { executorId: 'terminal', text: '已完成步骤' },
+    { executorId: 'terminal', text: '待推进步骤', dependsOn: [0] }
   ] });
   const doneId = plan.steps[0].ticketId;
   const raw = f.store.get('work-ticket', doneId);
@@ -1237,9 +1140,9 @@ test('P1 重启恢复活跃计划，补齐崩溃前未推进的下一步', async
 
 test('P1 重启后读取已持久化策略不因实体 id 字段崩溃', async t => {
   const f = fixture(t);
-  f.engine.updatePolicy({ allowedExecutors: ['analysis'], budgets: { maxConcurrent: 1, maxCallsPerTicket: 3, maxRuntimeMs: 1000, maxTokensPerTicket: 1000 }, limits: { browserHosts: [], githubRepos: [] } });
+  f.engine.updatePolicy({ allowedExecutors: ['terminal'], budgets: { maxConcurrent: 1, maxCallsPerTicket: 3, maxRuntimeMs: 1000, maxTokensPerTicket: 1000 }, limits: { browserHosts: [], githubRepos: [] } });
   const restarted = f.restart();
-  assert.deepEqual(restarted.policy().allowedExecutors, ['analysis']);
+  assert.deepEqual(restarted.policy().allowedExecutors, ['terminal']);
   assert.equal(restarted.policy().budgets.maxConcurrent, 1);
 });
 
@@ -1271,8 +1174,8 @@ test('P2 窗口桥 API 列出、读取、发送并写脱敏审计', async t => {
 test('P4 自动计划创建后直接启动，并在完成后自动启动下一步', async t => {
   const f = fixture(t);
   const plan = f.engine.plan({ goal: '自动计划', autoRun: true, steps: [
-    { executorId: 'analysis', text: '自动第一步', datasetId: 'dataset-one' },
-    { executorId: 'analysis', text: '自动第二步', datasetId: 'dataset-one', dependsOn: [0] }
+    { executorId: 'terminal', text: '自动第一步' },
+    { executorId: 'terminal', text: '自动第二步', dependsOn: [0] }
   ] });
   assert.equal(plan.autoRun, true);
   assert.equal(f.engine.detail(plan.steps[0].ticketId).ticket.status, 'working');
@@ -1292,8 +1195,8 @@ test('P4 自动计划创建后直接启动，并在完成后自动启动下一�
 test('计划里某一步失败后可以跳过，后面的步骤接着跑', async t => {
   const f = fixture(t);
   const plan = f.engine.plan({ goal: '跳过失败步骤', autoRun: true, steps: [
-    { executorId: 'analysis', text: '会失败的第一步', datasetId: 'dataset-one' },
-    { executorId: 'analysis', text: '后面的第二步', datasetId: 'dataset-one', dependsOn: [0] }
+    { executorId: 'terminal', text: '会失败的第一步' },
+    { executorId: 'terminal', text: '后面的第二步', dependsOn: [0] }
   ] });
   const first = f.engine.detail(plan.steps[0].ticketId);
   const task = f.store.get('task', first.assignments[0].sessionId);
@@ -1312,8 +1215,8 @@ test('默认策略下计划一路执行，不需要逐步点批准', t => {
   f.engine.updatePolicy({ requireApproval: false });
   assert.equal(f.engine.policy().requireApproval, false);
   const plan = f.engine.plan({ goal: '直接执行', steps: [
-    { executorId: 'analysis', text: '第一步', datasetId: 'dataset-one' },
-    { executorId: 'analysis', text: '第二步', datasetId: 'dataset-one', dependsOn: [0] }
+    { executorId: 'terminal', text: '第一步' },
+    { executorId: 'terminal', text: '第二步', dependsOn: [0] }
   ] });
   assert.equal(plan.autoRun, true);
   assert.equal(f.engine.detail(plan.steps[0].ticketId).ticket.status, 'working');

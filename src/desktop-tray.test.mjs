@@ -6,15 +6,6 @@ import ts from 'typescript';
 const source = readFileSync(new URL('./desktop-tray.ts', import.meta.url), 'utf8');
 const context = { exports: {} };
 vm.runInNewContext(ts.transpile(source, { module: ts.ModuleKind.CommonJS }), context);
-const { taskSummaries } = context.exports;
-test('托盘仅发送运行和待确认任务的最小摘要并限制数量', () => {
-  const tasks = Array.from({ length: 25 }, (_, i) => ({ id: `${i}`, title: '分析', status: 'running', apiKey: 'secret' }));
-  tasks.unshift({ id: 'done', title: '完成', status: 'completed' });
-  const result = taskSummaries(tasks);
-  assert.equal(result.length, 20);
-  assert.equal(JSON.stringify(result[0]), JSON.stringify({ id: '0', title: '分析', status: 'running' }));
-});
-
 test('旧版和损坏桥的同步、异步错误及非 Promise 返回不会阻断界面', async () => {
   const { setDesktopState, setDesktopSummaries, subscribeDesktopNew, showDesktopWindow } = context.exports;
   const cases = [undefined, {}, { setTrayState() { throw Error('sync'); }, setTaskSummaries() { throw Error('sync'); }, onNewAnalysis() { throw Error('sync'); }, showWindow() { throw Error('sync'); } }, { setTrayState: () => Promise.reject(Error('async')), setTaskSummaries: () => Promise.reject(Error('async')), onNewAnalysis: () => 123, showWindow: () => Promise.reject(Error('async')) }, { setTrayState: () => 123, setTaskSummaries: () => undefined, onNewAnalysis: () => () => { throw Error('cleanup'); }, showWindow: () => null }, { onNewAnalysis: () => Promise.reject(Error('subscribe')) }, { onNewAnalysis: () => () => Promise.reject(Error('cleanup')) }];

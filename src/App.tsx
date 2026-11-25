@@ -6,7 +6,7 @@ import { setDesktopState } from './desktop-tray';
 import type { Settings } from './types';
 import { Logo, Spinner } from './components/ui';
 
-// 主界面只有指挥台：数据分析能力仍在服务端与接口层，网页入口已不再提供。
+// 主界面只有指挥台：Agent 调度、会话与项目都在这里完成。
 const SuperAgentShell = lazy(() => import('./components/SuperAgentShell').then(module => ({ default: module.SuperAgentShell })));
 
 const noop = () => {};

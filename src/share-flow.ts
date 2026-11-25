@@ -19,24 +19,3 @@ export function createShareReader<T>(options: { makeVisitor: () => string; read:
     dispose() { generation++; current = undefined; }
   };
 }
-export async function createManagedShare<T>(create: () => Promise<T>, refresh: () => Promise<void>, onCreated?: (value:T) => void): Promise<{kind:'created'; value:T; refreshFailed:boolean; refreshError?:unknown} | {kind:'unknown'; error:unknown}> {
-  let value: T;
-  try { value = await create(); } catch (error) { await refresh().catch(() => {}); return {kind:'unknown', error}; }
-  onCreated?.(value);
-  try { await refresh(); return {kind:'created', value, refreshFailed:false}; } catch (refreshError) { return {kind:'created', value, refreshFailed:true, refreshError}; }
-}
-export async function revokeManagedShare(remove: () => Promise<unknown>, apply: () => void, refresh: () => Promise<void>): Promise<{kind:'failed'; error:unknown} | {kind:'revoked' | 'revoked-refresh-failed'; error?:unknown}> {
-  try { await remove(); } catch (error) { return {kind:'failed', error}; }
-  apply();
-  try { await refresh(); return {kind:'revoked'}; } catch (error) { return {kind:'revoked-refresh-failed', error}; }
-}
-
-export function createShareListController<T>(load: () => Promise<T>, publish: (value:T) => void) {
-  let revision = 0; let active = true;
-  return {
-    async refresh() { const current = ++revision; const value = await load(); if (active && current === revision) publish(value); },
-    invalidate() { revision++; },
-    dispose() { active = false; revision++; },
-    isActive() { return active; }
-  };
-}

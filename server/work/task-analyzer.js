@@ -128,9 +128,6 @@ export function analyzeTask(input) {
   if (browsing.length && has('browser')) {
     needs.push({ id: 'browser', label: '受控浏览器', reason: `需要读取网页内容（${browsing.slice(0, 2).join('、')}）` });
   }
-  if (category.id === 'data' || (input?.hasDataset && hit(text, ['数据', '指标', '报表', '留存', '付费', '漏斗', 'excel', 'csv']).length)) {
-    needs.push({ id: 'analysis', label: '数据分析引擎', reason: '结论要落到具体数据上，先算再写' });
-  }
   if (writing.length || ['game', 'web', 'automation'].includes(category.id)) {
     needs.push({ id: 'claude-code', label: bound ? '写代码的 Agent' : '只读的 Agent', reason: bound ? '真正改文件的只有它，其他步骤保持只读' : '没有绑定工作文件夹，只能读代码、给结论' });
   }
@@ -156,16 +153,6 @@ export function analyzeTask(input) {
       executorId: 'browser',
       scope: [],
       output: '页面要点与限制条件',
-      kind: 'research',
-      readOnly: true
-    });
-  }
-  if (category.id === 'data') {
-    steps.push({
-      title: '先把数据算清楚',
-      executorId: 'analysis',
-      scope: [],
-      output: '指标口径与结论',
       kind: 'research',
       readOnly: true
     });
@@ -226,7 +213,7 @@ export function analyzeTask(input) {
   if (!steps.length) {
     steps.push({
       title: `完成：${goal.slice(0, 40)}${goal.length > 40 ? '…' : ''}`,
-      executorId: has('claude-code') ? 'claude-code' : executors[0] || 'analysis',
+      executorId: has('claude-code') ? 'claude-code' : executors[0] || 'terminal',
       scope: has('claude-code') ? writeScope : [],
       output: '任务结果',
       kind: has('claude-code') ? 'write' : 'research',

@@ -68,13 +68,12 @@ export function createExecutorRegistry(executors) {
 
 export function executorRegistry(executor) {
   if (executor && typeof executor.list === 'function' && typeof executor.resolve === 'function' && typeof executor.requireAvailable === 'function') return executor;
+  // 兼容直接传单个执行器的调用方：注册成什么由它自己的 id 决定，不再默认当成数据分析。
   return createExecutorRegistry([{
     ...executor,
-    id: 'analysis',
-    name: '数据分析',
-    kind: 'analysis',
-    available: true,
-    capabilities: ['analysis', 'report'],
-    requiresDataset: true
+    id: executor?.id || 'executor',
+    name: executor?.name || '执行器',
+    kind: executor?.kind || 'cli',
+    available: executor?.available !== false
   }]);
 }

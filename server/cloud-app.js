@@ -5,12 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { createApp } from './app.js';
 import { APP_VERSION } from './version.js';
-import { shareSnapshot } from './report-sharing.js';
 import { DEFAULT_MODEL_HOSTS } from './gateway.js';
-import { taskCapabilities } from './task-monitor.js';
 import { Accounts, PasswordHasher, AuthRateLimiter, authError, usernameValue, passwordValue, publicUser, tokenHash } from './accounts.js';
 import { createPhoneAuth, createSmsSender } from './phone-auth.js';
-import { MobileGateway, hasDeviceToken, registerMobilePairingRoutes } from './mobile-gateway.js';
+import { MobileGateway, hasDeviceToken, mobileFileOwner, registerMobilePairingRoutes } from './mobile-gateway.js';
 import { loadNodeSecret } from './work/node-hub.js';
 import { registerNodeRoutes } from './work/node-routes.js';
 import { randomBytes } from 'node:crypto';
@@ -146,7 +144,7 @@ export function createCloudApp(options = {}) {
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/runtime', (_req, res) => {
     // 注册关闭时客户端要能提前知道，否则登录页还会摆一个点了必然报错的「创建账号」。
-    const runtime = { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: APP_VERSION, registrationOpen: process.env.LAGENT_REGISTRATION !== 'closed', modelHosts: policy.allowed, capabilities: { ...taskCapabilities(workEnabled(options)), reportSharing: true } };
+    const runtime = { mode: 'cloud', authRequired: true, serviceName: 'Lagent', version: APP_VERSION, registrationOpen: process.env.LAGENT_REGISTRATION !== 'closed', modelHosts: policy.allowed, capabilities: { memory: true, modelUsage: true, modelHub: true, ...(workEnabled(options) ? { superagent: true } : {}) } };
     // 只在启用手机号验证时增加字段，保持旧部署的运行时契约不变。
     if (phoneAuth.required) Object.assign(runtime, { phoneRequired: true, smsConfigured: phoneAuth.configured });
     res.json(runtime);
@@ -321,38 +319,27 @@ export function createCloudApp(options = {}) {
   };
   app.post('/api/public/shares/read', (req, res) => { const share = publicShare(req); res.json({ report: JSON.parse(share.snapshot) }); });
   app.post('/api/public/shares/visit', (req, res) => { const share = publicShare(req); accounts.visitShare(share, req.body?.visitorToken); res.json({ ok:true }); });
-  app.post('/api/tasks/:id/shares', (req, res) => {
-    const session = requireSession(req); const workspace = workspaceFor(session.user.id);
-    let task; try { task = workspace.app.locals.store.get('task', req.params.id); } catch { throw authError('任务不存在', 404); }
-    if (!task) throw authError('任务不存在', 404);
-    if (task.status !== 'completed' || !task.report) throw authError('仅已完成的报告可以分享', 409);
-    const { expiresInDays, hideRevenue } = req.body || {};
-    if (![1,7,30].includes(expiresInDays) || typeof hideRevenue !== 'boolean') throw authError('分享期限或隐藏收入设置无效');
-    let dataset = null; try { dataset = workspace.app.locals.store.get('dataset', task.datasetId); } catch { /* Legacy or missing dataset has unknown provenance. */ }
-    res.status(201).json(accounts.createShare(session.user.id, task.id, shareSnapshot(task.report, hideRevenue, dataset?.source), expiresInDays, hideRevenue));
-  });
-  app.get('/api/tasks/:id/shares', (req, res) => {
-    const session = requireSession(req); const workspace = workspaceFor(session.user.id);
-    let task; try { task = workspace.app.locals.store.get('task', req.params.id); } catch { throw authError('任务不存在', 404); }
-    if (!task) throw authError('任务不存在', 404);
-    res.json({ shares: accounts.shares(session.user.id, task.id) });
-  });
-  app.delete('/api/shares/:id', (req, res) => {
-    const session = requireSession(req); if (!accounts.revokeShare(session.user.id, req.params.id)) throw authError('分享不存在', 404);
-    res.json({ ok:true });
-  });
+  // 只保留早起分享链接的只读查看；新建、列出与撤销入口随 DataAgent 一并下线。
   const mobileWorkRoute = req => {
     if (req.method === 'GET' && ['/api/mobile/bootstrap', '/api/mobile/policy', '/api/mobile/events', '/api/mobile/notifications'].includes(req.path)) return true;
     if (req.method === 'GET' && /^\/api\/mobile\/tickets\/[^/]+$/.test(req.path)) return true;
-    return req.method === 'POST' && (req.path === '/api/mobile/command' || req.path === '/api/mcp' || req.path === '/api/mobile/notifications/read-all' || /^\/api\/mobile\/tickets\/[^/]+\/actions$/.test(req.path) || /^\/api\/mobile\/notifications\/[^/]+\/read$/.test(req.path));
+    // 工单产物列表、预览与签名下载；下载地址自带令牌，仍由路由自身校验。
+    if (req.method === 'GET' && (/^\/api\/mobile\/tickets\/[^/]+\/files$/.test(req.path) || /^\/api\/mobile\/tickets\/[^/]+\/file\/preview$/.test(req.path) || /^\/api\/mobile\/files\/[^/]+$/.test(req.path))) return true;
+    return req.method === 'POST' && (req.path === '/api/mobile/command' || req.path === '/api/mcp' || req.path === '/api/mobile/notifications/read-all' || /^\/api\/mobile\/tickets\/[^/]+\/file\/link$/.test(req.path) || /^\/api\/mobile\/tickets\/[^/]+\/actions$/.test(req.path) || /^\/api\/mobile\/notifications\/[^/]+\/read$/.test(req.path));
   };
   app.use((req, res, next) => {
     if (!req.path.toLowerCase().startsWith('/api/')) return next();
     if (req.path.startsWith('/api/mobile/') && !mobileWorkRoute(req)) return res.status(404).json({ error: '移动接口不存在' });
     let userId;
+    // 签名下载 URL 由系统下载器直接请求，不携带设备 token；先按令牌找到归属账号。
+    const downloadToken = req.method === 'GET' ? /^\/api\/mobile\/files\/([^/]+)$/.exec(req.path)?.[1] || '' : '';
     // 作用域 MCP 令牌：外部 Agent 通常没有浏览器会话，用令牌哈希在账号库里反查归属账号。
     const scoped = /^Bearer\s+(lagent_mcp_[A-Za-z0-9_-]{43})$/i.exec(String(req.get('authorization') || '').trim())?.[1] || '';
-    if (scoped) {
+    if (downloadToken) {
+      const ownerId = mobileFileOwner(downloadToken);
+      if (!ownerId) return res.status(401).json({ error: '下载链接已过期或无效，请重新打开文件' });
+      userId = ownerId;
+    } else if (scoped) {
       // 作用域令牌只开放 JSON-RPC 入口，不能当移动设备 token 使用。
       if (!(req.method === 'POST' && req.path === '/api/mcp')) return res.status(401).json({ error: 'MCP 令牌仅可用于 MCP 接口' });
       const ownerId = accounts.mcpTokenUser(tokenHash(scoped));

@@ -30,7 +30,7 @@ export function windowExecutor({ store, bridge, waitMs = 1200, pollMs = 900, max
   return {
     id: 'window',
     name: '窗口 Agent',
-    kind: 'tool',
+    kind: 'window',
     available: Boolean(bridge),
     requiresDataset: false,
     capabilities: ['window', 'desktop-agent', 'send', 'read'],

@@ -1,7 +1,6 @@
 import { projectStateOf, registerWork } from './work/routes.js';
 import { createWindowBridge } from './window-bridge.js';
 import { workEnabled } from './work/policy.js';
-import { analysisExecutor } from './work/executors/analysis.js';
 import { createExecutorRegistry } from './work/executors/index.js';
 import { terminalExecutor } from './work/executors/terminal.js';
 import { windowExecutor } from './work/executors/window.js';
@@ -21,71 +20,25 @@ import { createNodeHub, loadNodeSecret } from './work/node-hub.js';
 import { registerNodeRoutes } from './work/node-routes.js';
 import { registerMemory } from './memory-api.js';
 import express from 'express';
-import multer from 'multer';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { Store } from './store.js';
 import { APP_VERSION } from './version.js';
-import { normalizeCompleteness } from './completeness.js';
-import { normalizeTimezone, timezoneMinutes, timezoneCaption } from './timezone.js';
-import { DATASET_LIMITS, generateDemo, parseFiles, publicDataset } from './datasets.js';
-import { buildCapability } from './capability.js';
-import { assertAnalyzable, inspectDataset } from './inspection.js';
-import { Workflow, publicTask, createTask, demoTask, makeMessage, makeEvent, SKILLS, DOMAINS, PROJECT } from './workflow.js';
 import { DEFAULT_MODEL_TIMEOUT_MS, DEFAULT_SETTINGS, validateSettings, validateKey, normalizeBaseUrl, chat, redact } from './gateway.js';
 import { listModels } from './model-catalog.js';
-import { TaskMonitor, TASK_CAPABILITIES, taskCapabilities } from './task-monitor.js';
 import { summarizeModelUsage } from './model-usage.js';
-import { requestIdentity, repeatedTask, recoveryInput, recoverTask } from './task-recovery.js';
 import { isModelErrorCode } from './task-errors.js';
-import { ReportExplorer, assertExplorationSource, REPORT_EXPLORE_TIMEOUT_MESSAGE } from './report-explore.js';
-import { reportMetadata, updateReportMetadata, continuationInput, continueFromReport } from './report-assets.js';
-import { getProfile } from './domain-profiles.js';
 import { registerModelHub } from './model-hub.js';
 import { localCredentialKey } from './local-key.js';
-import { configureMultiTask } from './multi-workflow.js';
-import { restoreReusableArtifacts } from './artifact-lifecycle.js';
-import { reportContentHash } from './report-version.js';
-import { getMetricCatalog } from './metric-catalog.js';
-import { buildProvenance } from './provenance.js';
-import { buildQualityReceipts } from './quality-receipts.js';
-import { runAnalysisTool } from './analysis-tools.js';
-import { buildReportPdf } from './report-pdf.js';
 import { MobileGateway, hasDeviceToken, registerMobilePairingRoutes } from './mobile-gateway.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const statusError = (message, status = 400) => Object.assign(new Error(message), { status });
-const textField = (value, label, max, required = true) => {
-  if (typeof value !== 'string' || value.trim().length > max || (required && !value.trim())) throw statusError(`${label}必须为${required ? '非空' : ''}文本，最多 ${max} 字`);
-  return value.trim();
-};
-const markdownText = value => String(value ?? '').replace(/[<>]/g, c => c === '<' ? '&lt;' : '&gt;').replace(/\r/g, '');
-const selectedDomain = (value, fallback = 'game') => {
-  const id = value === undefined || value === null || value === '' ? fallback : String(value);
-  const profile = getProfile(id);
-  if (profile.id !== id) throw statusError('未知的分析领域');
-  if (!profile.enabled) throw statusError(`暂未开放「${profile.name}」分析`);
-  return profile.id;
-};
-function reportMarkdown(task) {
-  const r = task.report;
-  return [
-    `# ${markdownText(r.title)}`, '', `分析期间：${r.period}  |  币种：${r.currency}`, `生成时间：${r.generatedAt}`, `统计时区：${r.timezone ? `${markdownText(timezoneCaption(r.timezone))}${r.timezone.assumed ? '未确认' : '已确认'}` : '未记录'}`, `分析来源：${r.source === 'ai' ? '自带 Key 模型 + 本地计算' : '本地确定性分析'}`, '',
-    markdownText(r.summary), '', '## 关键指标', '',
-    '| 指标 | 数值 | 口径 |', '| --- | --- | --- |',
-    ...r.metrics.map(m => `| ${markdownText(m.label)} | ${m.value === null ? '无数据' : `${m.value} ${m.unit}`} | ${markdownText(m.note).replaceAll('|', '\\|')} |`), '',
-    '## 观察与证据', '', ...r.findings.flatMap(f => [`### ${markdownText(f.title)}`, markdownText(f.detail), `证据：${markdownText(f.evidence)}`, '']),
-    '## 建议', '', ...r.recommendations.map(x => `- ${markdownText(x)}`), '',
-    '## 数据质量', '', `记录行数：${r.quality.rows}；质量评分：${r.quality.score}/100`, ...r.quality.issues.map(x => `- ${markdownText(x)}`), '',
-    '## 方法与限制', '', ...r.methodology.map(x => `- ${markdownText(x)}`), '',
-    '## 分析目标与业务背景', '', markdownText(task.goal), ...task.messages.filter(m => m.role === 'user').map(m => `- ${markdownText(m.content)}`), '',
-  ].join('\n');
-}
 
 export function createApp(options = {}) {
   const app = express();
-  const enableWork=workEnabled(options);let closeWork;let mobileGateway;let ownsMobileGateway=false;
+  const enableWork = workEnabled(options); let closeWork; let mobileGateway; let ownsMobileGateway = false;
   app.disable('x-powered-by');
   const storeDir = options.dataDir || process.env.LAGENT_DATA_DIR || path.join(root, 'data');
   const store = new Store(storeDir);
@@ -106,60 +59,15 @@ export function createApp(options = {}) {
     const sessionHasKey = Boolean(getKey(req));
     return { ...settings, ...(enabled ? { model: profile.model } : {}), hasKey: enabled || sessionHasKey, sessionHasKey, workflowEnabled: enabled };
   };
-  async function ensurePdf(task, signal) {
-    if (!task.report || (task.workflowSnapshot ? !task.artifacts?.verify?.verified : task.status !== 'completed')) throw statusError('报告尚未核验完成，无法导出 PDF', 409);
-    const contentHash = reportContentHash(task.report);
-    if (task.verifiedReportHash && task.verifiedReportHash !== contentHash) throw statusError('报告内容已变化，请重新核验后导出 PDF', 409);
-    const cached = store.get('report-pdf', task.id);
-    if (cached?.contentHash === contentHash) return { ready: true, bytes: cached.bytes, generatedAt: cached.generatedAt };
-    const buffer = await (options.pdfBuilder || buildReportPdf)({ ...task, report: { ...task.report, qualityReceipts: buildQualityReceipts(task, task.report) } }, { signal });
-    if (!Buffer.isBuffer(buffer) || buffer.length > 20 * 1024 * 1024 || buffer.subarray(0, 4).toString() !== '%PDF') throw statusError('PDF 生成结果无效或超过 20MB', 503);
-    signal?.throwIfAborted();
-    const artifact = { id: task.id, contentHash, content: buffer.toString('base64'), bytes: buffer.length, generatedAt: new Date().toISOString() };
-    store.put('report-pdf', artifact); return { ready: true, bytes: artifact.bytes, generatedAt: artifact.generatedAt };
-  }
-  const workflow = new Workflow(store, { fetchImpl: options.fetchImpl, runTool: options.analysisTool || runAnalysisTool, createPdf: ensurePdf });
-  const monitor = new TaskMonitor(store, options);
-  const explorer = new ReportExplorer({ maxConcurrent: options.maxReportExplorations, workerFactory: options.reportExploreWorkerFactory, timeoutMs: options.reportExploreTimeoutMs });
   let activeAsync = 0;
   const trackAsync = handler => async (req, res) => {
     if (activeAsync >= (options.maxAsyncRequests ?? Infinity)) throw statusError('当前账号请求过多，请稍后再试', 429);
     activeAsync++; try { return await handler(req, res); } finally { activeAsync--; }
   };
   app.locals.store = store;
-  app.locals.explorer = explorer;
-  app.locals.isBusy = () => explorer.size > 0 || monitor.size > 0 || activeAsync > 0 || workflow.running.size > 0 || store.busyTaskCount() > 0 || Boolean(app.locals.workBusy?.()) || Boolean(app.locals.nodeHub?.hasNodes?.());
+  app.locals.isBusy = () => activeAsync > 0 || store.busyTaskCount() > 0 || Boolean(app.locals.workBusy?.()) || Boolean(app.locals.nodeHub?.hasNodes?.());
   let closed = false;
-  app.locals.close = () => { if (closed) return; closed = true; try { app.locals.nodeHub?.close(); } catch { /* 节点清理失败不阻塞关闭。 */ } closeWork?.(); if (ownsMobileGateway) mobileGateway?.close(); explorer.close(); monitor.close(); workflow.close(); key = ''; store.close(); };
-  function ensureDemo() {
-    let dataset = store.list('dataset').find(x => x.source === 'demo');
-    if (!dataset) { dataset = generateDemo(); store.put('dataset', dataset); }
-    if (!store.config('bootstrapped')) {
-      store.put('task', demoTask(dataset)); store.config('bootstrapped', true);
-    }
-    return dataset;
-  }
-  ensureDemo();
-  const datasetById = id => { const dataset = store.get('dataset', id); if (!dataset) throw statusError('数据集不存在', 404); return dataset; };
-  const taskById = id => { const task = store.get('task', id); if (!task) throw statusError('任务不存在', 404); return task; };
-  const taskView = task => {
-    const view = publicTask(task);
-    if (view.report) view.qualityReceipts = buildQualityReceipts(task, view.report);
-    // Reports written before the capability field existed still need an honest scope block.
-    if (view.report && !view.report.capability && task.datasetId) {
-      const dataset = store.get('dataset', task.datasetId);
-      if (dataset) {
-        const capability = dataset.inspection?.capability || buildCapability((dataset.tables || []).map(table => table.type));
-        const title = capability.missingTables.length
-          ? view.report.title.replace('完整运营报告', '部分数据分析报告').replace('运营分析报告', '部分数据分析报告')
-          : view.report.title;
-        view.report = { ...view.report, capability, title };
-      }
-    }
-    const metadata = reportMetadata(store, task.id);
-    return { ...view, ...(metadata ? { metadata } : {}) };
-  };
-  const taskWallet = task => ({ task: taskView(task), ...store.walletSnapshot() });
+  app.locals.close = () => { if (closed) return; closed = true; try { app.locals.nodeHub?.close(); } catch { /* 节点清理失败不阻塞关闭。 */ } closeWork?.(); if (ownsMobileGateway) mobileGateway?.close(); key = ''; store.close(); };
 
   app.use('/api', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -192,62 +100,52 @@ export function createApp(options = {}) {
   modelHub = registerModelHub(app, { store, ownerId: options.userId || 'local', masterKey: configuredMasterKey, assertModelSettings: options.assertModelSettings, fetchImpl: options.fetchImpl });
   const agentPlanner = createAgentPlanner({ env: process.env });
   const workBrain = createWorkBrain({ modelHub, fetchImpl: options.fetchImpl || fetch });
-  workflow.modelHub = modelHub;
   app.locals.modelHub = modelHub;
-  if(enableWork) {
-    const analysis=analysisExecutor({store,workflow,create:({ticket,assignment,dataset,useAI})=>{
-      const domain=dataset.domain||'game';assertAnalyzable(dataset,{domain});
-      const snapshot=useAI?modelHub.captureWorkflow():null;
-      if(store.busyTaskCount()>=(options.maxConcurrentTasks??Infinity))throw statusError('工作区并发分析已达上限',429);
-      const task=createTask({title:ticket.title,goal:ticket.command,mode:'collaborative',domain,datasetId:dataset.id,useAI},dataset,settings.model);
-      task.workAssignmentId=assignment.id;task.sourceProvenance=buildProvenance(dataset);
-      if(snapshot)configureMultiTask(task,snapshot);
-      return store.createTask(task);
-    }});
-    const workCwd=options.cloud?storeDir:root;
+  if (enableWork) {
+    const workCwd = options.cloud ? storeDir : root;
     const acp = acpExecutors({ store, cwd: workCwd });
-    const terminal=terminalExecutor({store,cwd:workCwd});
-    const cliTimeoutMs=Number(process.env.LAGENT_CLI_TIMEOUT_MS);
-    const cliTimeout=Number.isFinite(cliTimeoutMs)&&cliTimeoutMs>0?{timeoutMs:cliTimeoutMs}:{};
-    const codex=codexExecutor({store,cwd:workCwd,binary:process.env.LAGENT_CODEX_CLI,...cliTimeout});
-    const claudeCode=claudeCodeExecutor({store,cwd:workCwd,binary:process.env.LAGENT_CLAUDE_CLI,...cliTimeout});
-    const localAgents=options.cloud?[]:localAgentExecutors({store,cwd:workCwd,...cliTimeout});
-    const browser=browserExecutor({store});
-    const github=githubExecutor({store,fetchImpl:options.fetchImpl||fetch});
+    const terminal = terminalExecutor({ store, cwd: workCwd });
+    const cliTimeoutMs = Number(process.env.LAGENT_CLI_TIMEOUT_MS);
+    const cliTimeout = Number.isFinite(cliTimeoutMs) && cliTimeoutMs > 0 ? { timeoutMs: cliTimeoutMs } : {};
+    const codex = codexExecutor({ store, cwd: workCwd, binary: process.env.LAGENT_CODEX_CLI, ...cliTimeout });
+    const claudeCode = claudeCodeExecutor({ store, cwd: workCwd, binary: process.env.LAGENT_CLAUDE_CLI, ...cliTimeout });
+    const localAgents = options.cloud ? [] : localAgentExecutors({ store, cwd: workCwd, ...cliTimeout });
+    const browser = browserExecutor({ store });
+    const github = githubExecutor({ store, fetchImpl: options.fetchImpl || fetch });
     // 模型 Agent：直接使用「规划设置」里选中的默认模型，不依赖本机 CLI。
-    const modelAgent=modelExecutor({
+    const modelAgent = modelExecutor({
       store,
-      cwd:workCwd,
-      context:()=>{
-        const captured=modelHub.captureWorkflow();
-        const stage=captured?.stages?.plan;
-        return stage?modelHub.context(stage):null;
+      cwd: workCwd,
+      context: () => {
+        const captured = modelHub.captureWorkflow();
+        const stage = captured?.stages?.plan;
+        return stage ? modelHub.context(stage) : null;
       },
       // 会话级模型：允许这一步用指定的模型配置，而不是全局默认模型。
-      contextFor:(profileId,effort)=>modelHub.contextForProfile(profileId,effort),
+      contextFor: (profileId, effort) => modelHub.contextForProfile(profileId, effort),
       // 项目现状（最近改动 + 记忆摘要）：让内置 Agent 先看「别人改了什么」，
       // 而不是每次都把整个文件重读一遍。
-      projectState:workspace=>{
-        try{return projectStateOf(workspace);}catch{return '';}
+      projectState: workspace => {
+        try { return projectStateOf(workspace); } catch { return ''; }
       },
       // 内置模型可以直接调用项目配置的 MCP 工具；未配置或显式关闭时返回空列表。
-      mcpServers:workspace=>process.env.LAGENT_MCP_CLIENT==='0'?[]:loadMcpServers({store,ownerId:options.userId||'local',workspace,env:process.env}),
+      mcpServers: workspace => process.env.LAGENT_MCP_CLIENT === '0' ? [] : loadMcpServers({ store, ownerId: options.userId || 'local', workspace, env: process.env }),
       // 汇总/收口这类长任务要读清单、核对目录再补文件，15 分钟常在半途被掐断；默认给到 25 分钟。
-      totalTimeoutMs:Number(process.env.LAGENT_MODEL_TOTAL_TIMEOUT_MS)>0?Number(process.env.LAGENT_MODEL_TOTAL_TIMEOUT_MS):1500000,
-      fetchImpl:options.fetchImpl||fetch,
+      totalTimeoutMs: Number(process.env.LAGENT_MODEL_TOTAL_TIMEOUT_MS) > 0 ? Number(process.env.LAGENT_MODEL_TOTAL_TIMEOUT_MS) : 1500000,
+      fetchImpl: options.fetchImpl || fetch,
     });
-    const mobileOwnerId=options.userId||'local';
-    const windowBridge=options.cloud?null:(options.windowBridge??createWindowBridge());
-    const providerRegistry=options.providerRegistry??createProviderRegistry(windowBridge?{desktopProbe:()=>windowBridge.listWindows()}:{});
-    const window=windowBridge?windowExecutor({store,bridge:windowBridge,...(process.env.LAGENT_WINDOW_WAIT_MS?{maxWaitMs:Number(process.env.LAGENT_WINDOW_WAIT_MS)}:{})}):null;
+    const mobileOwnerId = options.userId || 'local';
+    const windowBridge = options.cloud ? null : (options.windowBridge ?? createWindowBridge());
+    const providerRegistry = options.providerRegistry ?? createProviderRegistry(windowBridge ? { desktopProbe: () => windowBridge.listWindows() } : {});
+    const window = windowBridge ? windowExecutor({ store, bridge: windowBridge, ...(process.env.LAGENT_WINDOW_WAIT_MS ? { maxWaitMs: Number(process.env.LAGENT_WINDOW_WAIT_MS) } : {}) }) : null;
     // WorkBuddy 桌面端：通过 Chromium 调试端口派发任务并读取回复，没有可用的 CLI。
-    const workbuddy=options.cloud?null:workbuddyExecutor({store});
-    const executors=createExecutorRegistry([analysis,terminal,codex,claudeCode,...localAgents,browser,github,modelAgent,...(window?[window]:[]),...(workbuddy?[workbuddy]:[]),...acp]);
-    mobileGateway=options.mobileGateway||new MobileGateway({dataDir:path.join(storeDir,'mobile'),now:options.now});
-    ownsMobileGateway=!options.mobileGateway;
+    const workbuddy = options.cloud ? null : workbuddyExecutor({ store });
+    const executors = createExecutorRegistry([terminal, codex, claudeCode, ...localAgents, browser, github, modelAgent, ...(window ? [window] : []), ...(workbuddy ? [workbuddy] : []), ...acp]);
+    mobileGateway = options.mobileGateway || new MobileGateway({ dataDir: path.join(storeDir, 'mobile'), now: options.now });
+    ownsMobileGateway = !options.mobileGateway;
     // 云端由外层应用统一注册配对接口，子工作区应用不重复注册同一组路由。
-    if(!options.cloud)registerMobilePairingRoutes(app,mobileGateway,{desktopOwner:options.mobileDesktopOwner||(()=>mobileOwnerId)});
-    closeWork=registerWork(app,store,executors,{isSessionValid:options.isSessionValid,onConnect:options.onTaskEventConnect,mobileGateway,mobileOwnerId,onMobileEventConnect:options.onMobileEventConnect,workspace:workCwd,brain:workBrain,planner:options.workPlanner??(async input=>{try{return await modelHub.suggestWorkPlan(input);}catch(error){try{return await agentPlanner(input);}catch(fallbackError){throw fallbackError?.message?Object.assign(error,{message:`${error.message}；本机 Agent 也无法拆解：${fallbackError.message}`}):error;}}}),windowBridge,providerRegistry,ownerId:options.userId||'local',allowFilesystemBrowser:!options.cloud,mcpTokenIndex:options.mcpTokenIndex});
+    if (!options.cloud) registerMobilePairingRoutes(app, mobileGateway, { desktopOwner: options.mobileDesktopOwner || (() => mobileOwnerId) });
+    closeWork = registerWork(app, store, executors, { isSessionValid: options.isSessionValid, onConnect: options.onTaskEventConnect, mobileGateway, mobileOwnerId, onMobileEventConnect: options.onMobileEventConnect, workspace: workCwd, brain: workBrain, planner: options.workPlanner ?? (async input => { try { return await modelHub.suggestWorkPlan(input); } catch (error) { try { return await agentPlanner(input); } catch (fallbackError) { throw fallbackError?.message ? Object.assign(error, { message: `${error.message}；本机 Agent 也无法拆解：${fallbackError.message}` }) : error; } } }), windowBridge, providerRegistry, ownerId: options.userId || 'local', allowFilesystemBrowser: !options.cloud, mcpTokenIndex: options.mcpTokenIndex });
     // 本机执行节点：桌面端连上来后，它电脑上的 CLI 会作为执行器出现在这个工作区里。
     const nodeSecret = options.nodeSecret || loadNodeSecret(storeDir, process.env);
     const nodeHub = createNodeHub({ store, registry: executors, engine: app.locals.workEngine });
@@ -258,198 +156,18 @@ export function createApp(options = {}) {
       registerNodeRoutes(nodeRouter, { resolveHub: () => nodeHub, authenticate: () => options.userId || 'local', secret: nodeSecret });
     }
   }
-  app.get('/api/runtime', (_req, res) => res.json({ mode: 'local', authRequired: false, serviceName: 'Lagent', version: APP_VERSION, capabilities: taskCapabilities(enableWork) }));
+  // 前端只需要读取当前会话的模型设置；数据分析时代的任务/数据集契约已随 DataAgent 一并下线。
+  app.get('/api/runtime', (_req, res) => res.json({
+    mode: 'local', authRequired: false, serviceName: 'Lagent', version: APP_VERSION,
+    capabilities: { memory: true, modelUsage: true, modelHub: true, ...(enableWork ? { superagent: true } : {}) }
+  }));
   app.get('/api/model-usage', (req, res) => {
     const days = req.query.days ?? '30';
     if (typeof days !== 'string' || !['7', '30', '90', 'all'].includes(days)) return res.status(400).json({ error: '用量范围仅支持7、30、90或all' });
     res.json(summarizeModelUsage({ calls: store.list('model-call'), tasks: store.list('task'), days: days === 'all' ? days : Number(days), now: new Date() }));
   });
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
-  app.get('/api/metric-catalog', (req, res) => res.json({ metrics: getMetricCatalog(selectedDomain(req.query.domain)) }));
-  app.get('/api/bootstrap', (req, res) => res.json({ project: { ...PROJECT, ...(options.cloud ? { description: '多 Agent 指挥台 · 云端个人工作空间' } : {}) }, tasks: store.list('task').map(taskView), datasets: store.list('dataset').map(publicDataset), ...store.walletSnapshot(), skills: SKILLS, domains: DOMAINS, settings: publicSettings(req) }));
-  const checkDatasetLimit = () => { if (store.list('dataset').length >= (options.maxDatasets ?? Infinity)) throw statusError(`每个账号最多保存 ${options.maxDatasets ?? 20} 份数据，请先删除不再使用的数据`, 429); };
-  app.post('/api/datasets/demo', (_req, res) => {
-    checkDatasetLimit();
-    const dataset = generateDemo(); store.put('dataset', dataset); res.status(201).json({ dataset: publicDataset(dataset) });
-  });
-  const upload = multer({ storage: multer.memoryStorage(), limits: { files: DATASET_LIMITS.maxFiles, fileSize: DATASET_LIMITS.maxBytes, fields: 3, parts: DATASET_LIMITS.maxFiles + 3 } });
-  app.post('/api/datasets/upload', upload.array('files', DATASET_LIMITS.maxFiles), trackAsync(async (req, res) => {
-    try {
-      checkDatasetLimit();
-      const files = req.files?.map(file => {
-        // Multipart's default filename charset is Latin-1; browsers commonly send UTF-8 bytes.
-        let originalname = file.originalname;
-        if ([...originalname].every(char => char.charCodeAt(0) <= 255)) {
-          try { originalname = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(originalname, 'latin1')); } catch { /* Genuine Latin-1 filename: keep it. */ }
-        }
-        return { ...file, originalname };
-      });
-      const domain = selectedDomain(req.body?.domain);
-      const dataset = await parseFiles(files, { completeness: req.body?.completeness, timezone: req.body?.timezone, domain }); checkDatasetLimit(); store.put('dataset', dataset); res.status(201).json({ dataset: publicDataset(dataset) });
-    }
-    catch (error) { throw Object.assign(statusError(error.message, error.status || 400), error.issues ? { issues: error.issues } : {}); }
-  }));
-  app.get('/api/datasets/:id', (req, res) => res.json({ dataset: publicDataset(datasetById(req.params.id)) }));
-  app.put('/api/datasets/:id/completeness', (req, res) => {
-    const dataset = datasetById(req.params.id);
-    if (store.list('task').some(t => t.datasetId === dataset.id && ['running', 'awaiting_approval'].includes(t.status))) throw statusError('该数据集正在分析，请结束任务后修改声明', 409);
-    try { dataset.completeness = normalizeCompleteness(req.body, { strict: true }); }
-    catch (error) { throw statusError(error.message, 400); }
-    store.put('dataset', dataset);
-    res.json({ dataset: publicDataset(dataset) });
-  });
-  app.put('/api/datasets/:id/timezone', (req, res) => {
-    const dataset = datasetById(req.params.id);
-    if (store.list('task').some(t => t.datasetId === dataset.id && ['running', 'awaiting_approval'].includes(t.status))) throw statusError('该数据集正在分析，请结束任务后修改时区', 409);
-    let timezone;
-    try { timezone = normalizeTimezone(req.body?.timezone, { strict: true }); }
-    catch (error) { throw statusError(error.message, 400); }
-    const current = normalizeTimezone(dataset.timezone, { legacyAt: dataset.createdAt });
-    if (timezone.offsetMinutes !== current.offsetMinutes && dataset.timezoneZoneless > 0) throw statusError('原始时间未带时区，已按当前时区解析；修改时区需重新上传数据', 409);
-    dataset.timezone = { ...timezone, declaredAt: new Date().toISOString() };
-    dataset.warnings = (dataset.warnings || []).filter(text => !/^(未声明时区|另有 .* 条时间未带时区)/.test(text));
-    if (timezone.offsetMinutes !== current.offsetMinutes) {
-      const mappings = dataset.inspection?.mappings;
-      dataset.inspection = inspectDataset(dataset, { mappings });
-    } else if (dataset.inspection) {
-      dataset.inspection.timezone = { name: timezone.name, offsetMinutes: timezone.offsetMinutes, assumed: false, source: 'user' };
-      dataset.inspection.issues = dataset.inspection.issues.filter(issue => issue.code !== 'timezone_unconfirmed');
-    }
-    store.put('dataset', dataset);
-    res.json({ dataset: publicDataset(dataset), note: `${timezoneCaption(current)} → ${timezoneCaption(timezone)}` });
-  });
-  app.delete('/api/datasets/:id', (req, res) => {
-    const dataset = datasetById(req.params.id);
-    if (store.list('task').some(t => t.datasetId === dataset.id && ['running', 'awaiting_approval'].includes(t.status))) throw statusError('该数据集正在被未完成任务使用，请先完成或取消任务', 409);
-    store.delete('dataset', dataset.id); res.json({ ok: true });
-  });
-  app.post('/api/tasks', (req, res) => {
-    const input = req.body || {};
-    const title = textField(input.title, '任务名称', 100);
-    const goal = textField(input.goal, '分析目标', 3000);
-    if (!['collaborative', 'automatic'].includes(input.mode)) throw statusError('请选择协作模式或自动模式');
-    if (typeof input.useAI !== 'boolean') throw statusError('useAI 必须为布尔值');
-    const continuation = continuationInput(input);
-    const dataset = datasetById(input.datasetId);
-    const datasetDomain = dataset.domain || 'game';
-    const domain = selectedDomain(input.domain, datasetDomain);
-    if (domain !== datasetDomain) throw statusError('数据集所属领域与任务领域不一致，请重新上传对应领域的数据');
-    const normalized = { title, goal, mode: input.mode, domain, datasetId: input.datasetId, useAI: input.useAI, ...continuation };
-    const identity = requestIdentity(input.clientRequestId, { action: 'create', ...normalized });
-    const previous = repeatedTask(store, identity);
-    if (previous) return res.json(taskWallet(previous));
-    const source = continuation.sourceTaskId ? taskById(continuation.sourceTaskId) : null;
-    try { assertAnalyzable(dataset, { domain }); }
-    catch (error) { throw Object.assign(statusError(error.message), { issues: error.issues }); }
-    const multiSnapshot = input.useAI && modelHub.publicState().workflow.defaultProfileId ? modelHub.captureWorkflow() : null;
-    const candidate = Object.assign(createTask(normalized, dataset, settings.model), identity);
-    candidate.sourceProvenance = buildProvenance(dataset);
-    if (multiSnapshot) configureMultiTask(candidate, multiSnapshot);
-    if (source) continueFromReport(candidate, source, continuation.inheritContext);
-    const requestKey = getKey(req);
-    if (input.useAI && !multiSnapshot) {
-      options.assertModelSettings?.(settings);
-      if (!requestKey) throw statusError('尚未设置 API Key；请先配置模型或切换为本地分析');
-    }
-    if (store.busyTaskCount() >= (options.maxConcurrentTasks ?? Infinity)) throw statusError(`每个账号最多同时运行 ${options.maxConcurrentTasks ?? 2} 个任务，请先完成或取消现有任务`, 429);
-    const task = store.createTask(candidate);
-    if (task.id !== candidate.id) return res.json(taskWallet(task));
-    if (task.useAI && !multiSnapshot) workflow.captureModel(task.id, { settings, key: requestKey, fetchImpl: options.fetchImpl || fetch, timeoutMs: options.modelTimeoutMs || DEFAULT_MODEL_TIMEOUT_MS });
-    res.status(201).json(taskWallet(task)); workflow.schedule(task.id);
-  });
-  app.get('/api/tasks/summary', (_req, res) => res.json(monitor.snapshot()));
-  app.get('/api/tasks/events', (req, res) => monitor.connect(req, res));
-  app.get('/api/tasks/:id', (req, res) => res.json(taskWallet(taskById(req.params.id))));
-  app.put('/api/tasks/:id/metadata', (req, res) => {
-    const task = taskById(req.params.id);
-    updateReportMetadata(store, task, req.body);
-    res.json({ task: taskView(task) });
-  });
-  app.post('/api/tasks/:id/explore', trackAsync(async (req, res) => {
-    const task = taskById(req.params.id);
-    if (task.status !== 'completed' || !task.report) throw statusError('仅已完成且有报告的任务可以探索', 409);
-    const dataset = store.get('dataset', task.datasetId);
-    if (!dataset) throw statusError('报告源数据集已删除，无法重新计算探索结果；请重新上传后分析', 404);
-    assertExplorationSource(dataset);
-    const controller = new AbortController();
-    const abort = () => { if (!res.writableEnded) controller.abort(); };
-    res.once('close', abort);
-    try {
-      const result = await explorer.run(dataset, task, req.body, { signal: controller.signal });
-      if (options.isSessionValid && !options.isSessionValid(req)) throw statusError('登录已失效，请重新登录', 401);
-      if (!res.destroyed) res.json(result);
-    } catch (error) {
-      if (!controller.signal.aborted && !res.destroyed) {
-        if (error.code === 'REPORT_EXPLORE_TIMEOUT') return res.status(503).json({ error: REPORT_EXPLORE_TIMEOUT_MESSAGE });
-        throw error;
-      }
-    }
-    finally { res.off('close', abort); }
-  }));
-  app.post('/api/tasks/:id/retry', (req, res) => {
-    const source = taskById(req.params.id);
-    const input = recoveryInput(req.body || {}, source);
-    const identity = requestIdentity(req.body?.clientRequestId, { action: 'retry', sourceTaskId: source.id, ...input });
-    const previous = repeatedTask(store, identity);
-    if (previous) return res.json(taskWallet(previous));
-    if (!['failed', 'cancelled'].includes(source.status)) throw statusError('仅失败或取消的任务可以创建恢复尝试', 409);
-    const dataset = datasetById(source.datasetId);
-    try { assertAnalyzable(dataset, { domain: source.domain || dataset.domain }); }
-    catch (error) { throw Object.assign(statusError(error.message), { issues: error.issues }); }
-    const requestKey = getKey(req);
-    const multiSnapshot = input.useAI && modelHub.publicState().workflow.defaultProfileId ? modelHub.captureWorkflow() : null;
-    if (input.useAI && !multiSnapshot) {
-      options.assertModelSettings?.(settings);
-      if (!requestKey) throw statusError('尚未设置当前会话的 API Key；请先配置模型或切换为本地分析');
-    }
-    if (store.busyTaskCount() >= (options.maxConcurrentTasks ?? Infinity)) throw statusError(`每个账号最多同时运行 ${options.maxConcurrentTasks ?? 2} 个任务，请先完成或取消现有任务`, 429);
-    const candidate = Object.assign(recoverTask(source, dataset, input, settings.model), identity);
-    candidate.sourceProvenance = buildProvenance(dataset);
-    if (multiSnapshot) configureMultiTask(candidate, multiSnapshot);
-    if (multiSnapshot && input.strategy === 'resume') restoreReusableArtifacts(source, candidate, dataset);
-    const task = store.createTask(candidate);
-    if (task.id !== candidate.id) return res.json(taskWallet(task));
-    if (task.useAI && !multiSnapshot) workflow.captureModel(task.id, { settings, key: requestKey, fetchImpl: options.fetchImpl || fetch, timeoutMs: options.modelTimeoutMs || DEFAULT_MODEL_TIMEOUT_MS });
-    res.status(201).json(taskWallet(task)); workflow.schedule(task.id);
-  });
-  app.post('/api/tasks/:id/skip', (req, res) => res.json(taskWallet(workflow.skip(taskById(req.params.id), req.body?.stepId))));
-  app.post('/api/tasks/:id/approve', (req, res) => {
-    const message = req.body?.message === undefined ? '' : textField(req.body.message, '消息', 3000, false);
-    const stepId = req.body?.stepId;
-    if (stepId !== undefined && !['plan', 'report'].includes(stepId)) throw statusError('批准节点必须为 plan 或 report');
-    res.json(taskWallet(workflow.approve(taskById(req.params.id), message, stepId, req.body?.approvalSnapshot)));
-  });
-  app.post('/api/tasks/:id/message', (req, res) => {
-    const message = textField(req.body?.message, '消息', 3000);
-    const task = taskById(req.params.id);
-    if (!['running', 'awaiting_approval'].includes(task.status)) throw statusError('任务已结束，不能追加业务背景', 409);
-    if (task.useAI && workflow.isModelContextLocked(task.id)) throw statusError('模型请求已发出，无法再纳入本次报告；请在下次分析补充业务背景。', 409);
-    if (task.messages.length >= 100) throw statusError('单个任务最多 100 条消息');
-    task.messages.push(makeMessage('user', message)); task.updatedAt = new Date().toISOString();
-    task.events.push(makeEvent('info', '收到业务背景', '业务背景已保存，将在报告阶段读取。'));
-    store.put('task', task); res.json({ task: taskView(task) });
-  });
-  app.post('/api/tasks/:id/cancel', (req, res) => res.json(taskWallet(workflow.cancel(taskById(req.params.id)))));
-  app.get('/api/tasks/:id/report.pdf', trackAsync(async (req, res) => {
-    const task = taskById(req.params.id);
-    const controller = new AbortController();
-    const abort = () => { if (!res.writableEnded) controller.abort(); }; res.once('close', abort);
-    try {
-      await ensurePdf(task, controller.signal);
-      if (options.isSessionValid && !options.isSessionValid(req)) throw statusError('登录已失效，请重新登录', 401);
-      if (res.destroyed) return;
-      const artifact = store.get('report-pdf', task.id);
-      res.setHeader('Content-Disposition', `attachment; filename="lagent-report-${task.id}.pdf"`);
-      res.type('application/pdf').send(Buffer.from(artifact.content, 'base64'));
-    } finally { res.off('close', abort); }
-  }));
-  app.get('/api/tasks/:id/report.md', (req, res) => {
-    const task = taskById(req.params.id);
-    if (task.status !== 'completed' || !task.report) throw statusError('报告尚未完成', 409);
-    res.setHeader('Content-Disposition', `attachment; filename="lagent-report-${task.id}.md"`);
-    res.type('text/markdown; charset=utf-8').send(reportMarkdown(task));
-  });
-  app.get('/api/wallet', (_req, res) => res.json({ ...store.walletSnapshot(), transactions: store.transactions() }));
+  app.get('/api/bootstrap', (req, res) => res.json({ settings: publicSettings(req) }));
   app.get('/api/settings', (req, res) => res.json({ settings: publicSettings(req) }));
   app.put('/api/settings', (req, res) => {
     let next;
@@ -470,7 +188,7 @@ export function createApp(options = {}) {
     try {
       options.assertModelSettings?.(settings);
       const text = await chat({ settings, key: requestKey, fetchImpl: options.fetchImpl || fetch, timeoutMs: options.modelTimeoutMs || DEFAULT_MODEL_TIMEOUT_MS, maxTokens: 1024, connectionTest: true, messages: [{ role: 'user', content: '只回复 OK，用于检查连接。' }] });
-      res.json({ ok: true, message: text ? '模型连接成功。本次进行了真实的小型模型调用，供应商可能计入用量。' : '模型已连接并返回推理内容；本次测试达到输出上限，未生成最终答案。正式分析使用更高上限，供应商可能计入用量。' });
+      res.json({ ok: true, message: text ? '模型连接成功。本次进行了真实的小型模型调用，供应商可能计入用量。' : '模型已连接并返回推理内容；本次测试达到输出上限，未生成最终答案。正式任务使用更高上限，供应商可能计入用量。' });
     } catch (error) { throw Object.assign(statusError(redact(error.message, requestKey), 400), isModelErrorCode(error.code) ? { code: error.code } : {}); }
   }));
   app.post('/api/settings/models', trackAsync(async (req, res) => {
@@ -496,16 +214,14 @@ export function createApp(options = {}) {
     app.use((req, res, next) => { if (req.method === 'GET' && req.accepts('html')) res.sendFile(path.join(dist, 'index.html')); else next(); });
   }
   app.use((error, req, res, _next) => {
-    let status = error.status || (error instanceof multer.MulterError ? 400 : 500);
+    let status = error.status || 500;
     let message = error.message || '服务内部错误';
-    if (error instanceof multer.MulterError) message = error.code === 'LIMIT_FILE_SIZE' ? '单个文件不能超过 20MB；请按时间范围拆分文件、只导出必要列，或压缩日期范围后重试' : `上传受限：最多 ${DATASET_LIMITS.maxFiles} 个文件、单文件 20MB；请按时间范围拆分、只导出必要列或压缩日期范围后重试`;
     if (error.type === 'entity.parse.failed') { status = 400; message = 'JSON 请求格式无效'; }
-    if (status >= 500 && error.expose !== true) message = '服务处理失败，请检查数据或重试；敏感错误细节已隐藏';
-    const issues = status < 500 && Array.isArray(error.issues) ? JSON.parse(JSON.stringify(error.issues, (_field, value) => typeof value === 'string' ? redact(value, getKey(req)) : value)) : undefined;
+    if (status >= 500 && error.expose !== true) message = '服务处理失败，请稍后重试；敏感错误细节已隐藏';
     // LAGENT_* 是工作台自己的前置条件错误（如模型未配置），前端要据此给出设置入口；
     // 只透出白名单前缀，避免把任何内部错误码当公开契约。
     const publicCode = isModelErrorCode(error.code) || (typeof error.code === 'string' && /^LAGENT_[A-Z_]+$/.test(error.code)) ? error.code : '';
-    res.status(status).json({ error: redact(message, getKey(req)), ...(issues ? { issues } : {}), ...(publicCode ? { code: publicCode } : {}) });
+    res.status(status).json({ error: redact(message, getKey(req)), ...(publicCode ? { code: publicCode } : {}) });
   });
   return app;
 }
