@@ -8,7 +8,7 @@ import { chromium } from '@playwright/test';
 const root = path.resolve(import.meta.dirname, '..');
 const svgPath = path.join(root, 'build', 'icon.svg');
 const svg = fs.readFileSync(svgPath, 'utf8');
-const sizes = [16, 24, 32, 48, 64, 128, 192, 256, 512];
+const sizes = [16, 24, 32, 48, 64, 72, 96, 128, 144, 192, 256, 512];
 const outDir = path.join(root, 'build');
 
 let browser;
@@ -58,6 +58,21 @@ const favicon = svg
   .replace('role="img" aria-label="Lagent"', '');
 fs.writeFileSync(path.join(root, 'public', 'favicon.svg'), favicon, 'utf8');
 
+// Android 旧版桌面图标用同一张 512 主图按密度缩放；Android 8+ 由
+// mipmap-anydpi-v26 的自适应图标接管，前景矢量与 build/icon.svg 同源。
+const androidRes = path.join(root, 'mobile', 'android', 'app', 'src', 'main', 'res');
+for (const [folder, size] of [
+  ['mipmap-mdpi', 48],
+  ['mipmap-hdpi', 72],
+  ['mipmap-xhdpi', 96],
+  ['mipmap-xxhdpi', 144],
+  ['mipmap-xxxhdpi', 192],
+]) {
+  const dir = path.join(androidRes, folder);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(outDir, `icon-${size}.png`), path.join(dir, 'ic_launcher.png'));
+}
+
 // 组装 ICO：PNG 压缩条目，Windows Vista 以上原生支持。
 const icoSizes = [16, 24, 32, 48, 64, 128, 256];
 const pngs = icoSizes.map(size => ({ size, data: fs.readFileSync(path.join(outDir, `icon-${size}.png`)) }));
@@ -82,4 +97,4 @@ for (const { size, data } of pngs) {
 }
 fs.writeFileSync(path.join(outDir, 'icon.ico'), Buffer.concat([header, ...entries, ...pngs.map(item => item.data)]));
 
-console.log('图标已生成：icon.ico / icon.png / icon-16..512.png / tray.png / public/favicon.svg / public/icon-192|512|512-maskable.png');
+console.log('图标已生成：icon.ico / icon.png / icon-16..512.png / tray.png / public/favicon.svg / public/icon-192|512|512-maskable.png / Android mipmap');

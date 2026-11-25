@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 与电脑端 build/icon.svg 同源：墨色底 + 纸白分叉轨迹。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="14.576"
+        android:translateY="14.576"
+        android:scaleX="0.154"
+        android:scaleY="0.154">
+        <path
+            android:pathData="M168,260h76M244,260L352,142M244,260h108M244,260L352,378"
+            android:fillColor="#00000000"
+            android:strokeColor="#FBFAF8"
+            android:strokeWidth="22"
+            android:strokeLineCap="square" />
+        <path
+            android:pathData="M96,224h72v72h-72z"
+            android:fillColor="#FBFAF8" />
+        <path
+            android:pathData="M352,114h56v56h-56z"
+            android:fillColor="#A8A49B" />
+        <path
+            android:pathData="M352,232h56v56h-56z"
+            android:fillColor="#FBFAF8" />
+        <path
+            android:pathData="M352,350h56v56h-56z"
+            android:fillColor="#A8A49B" />
+    </group>
+</vector>
