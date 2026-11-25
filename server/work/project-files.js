@@ -98,6 +98,8 @@ const kindOf = ext => EXTENSIONLESS.has(ext) && !CODE_EXT.has(ext) ? 'text'
                         : TEXT_EXT.has(ext) ? 'text'
                           : 'unsupported';
 const previewableKind = kind => !['unsupported', 'legacy'].includes(kind);
+// 移动端签名链接只拿得到文件名，需要和项目文件服务用同一套 MIME 映射。
+export const projectFileMime = name => mimeOf(extOf(name));
 const isSensitive = name => {
   const lower = basename(name).toLowerCase();
   if (SENSITIVE_TEMPLATE.test(lower)) return false;
@@ -225,6 +227,7 @@ export function createProjectFiles({ getProject, now = () => new Date().toISOStr
       ...(info ? { size: info.size, modifiedAt: info.mtime.toISOString() } : {}),
       ext,
       kind,
+      mime: type === 'file' ? mimeOf(ext) : 'inode/directory',
       previewable: type === 'file' && previewableKind(kind) && !sensitive,
       ...(sensitive ? { locked: true } : {})
     };

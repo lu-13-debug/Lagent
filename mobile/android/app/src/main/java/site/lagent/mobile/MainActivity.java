@@ -2,16 +2,20 @@ package site.lagent.mobile;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.DownloadManager;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
+import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -41,6 +45,7 @@ public class MainActivity extends Activity {
     private ProgressBar progress;
     private LinearLayout errorView;
     private ValueCallback<Uri[]> fileCallback;
+    private volatile String pendingDownloadName = null;
     private long lastBackAt = 0L;
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -126,6 +131,52 @@ public class MainActivity extends Activity {
             }
         });
 
+        // 手机端预览弹层里的「下载到手机」会先把真实文件名交给这里，
+        // 因为签名下载 URL 的最后一段是令牌，系统下载器猜不出文件名。
+        webView.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void setFileName(String name) {
+                pendingDownloadName = name;
+            }
+        }, "LagentDownload");
+
+        webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
+            Uri uri = Uri.parse(url);
+            String scheme = uri.getScheme();
+            if (!"http".equals(scheme) && !"https".equals(scheme)) {
+                openExternal(uri);
+                return;
+            }
+            // Android 10 起公共下载目录不再需要存储权限；更低版本交给系统浏览器处理。
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                openExternal(uri);
+                return;
+            }
+            String name = safeDownloadName(pendingDownloadName != null ? pendingDownloadName : URLUtil.guessFileName(url, contentDisposition, mimeType));
+            pendingDownloadName = null;
+            try {
+                DownloadManager.Request request = new DownloadManager.Request(uri)
+                    .setTitle(name)
+                    .setDescription("来自 Lagent 的文件")
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
+                if (mimeType != null && !mimeType.isEmpty()) request.setMimeType(mimeType);
+                request.addRequestHeader("User-Agent", userAgent);
+                String cookie = CookieManager.getInstance().getCookie(url);
+                if (cookie != null) request.addRequestHeader("Cookie", cookie);
+                DownloadManager manager = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                if (manager == null) {
+                    openExternal(uri);
+                    return;
+                }
+                manager.enqueue(request);
+                Toast.makeText(this, "已开始下载：" + name, Toast.LENGTH_SHORT).show();
+            } catch (Exception error) {
+                // 下载器不可用时至少让系统浏览器接管，用户可以继续保存。
+                openExternal(uri);
+            }
+        });
+
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onProgressChanged(WebView view, int newProgress) {
@@ -156,6 +207,12 @@ public class MainActivity extends Activity {
         } else {
             webView.loadUrl(HOME_URL);
         }
+    }
+
+    private static String safeDownloadName(String value) {
+        String name = value == null ? "" : value.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
+        if (name.isEmpty() || ".".equals(name) || "..".equals(name)) name = "lagent-download";
+        return name.length() > 120 ? name.substring(name.length() - 120) : name;
     }
 
     private LinearLayout buildErrorView() {

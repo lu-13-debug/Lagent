@@ -19,8 +19,8 @@ android {
         applicationId 'site.lagent.mobile'
         minSdk 24
         targetSdk 34
-        versionCode 10200
-        versionName '1.2.0'
+        versionCode 10203
+        versionName '1.2.3'
     }
 
     signingConfigs {

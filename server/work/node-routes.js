@@ -1,5 +1,8 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { signNodeToken, verifyNodeToken } from './node-hub.js';
 
 /**
@@ -45,7 +48,7 @@ export function registerNodeRoutes(mount, { resolveHub, authenticate, secret, no
       const hub = resolveHub(userId);
       if (!hub) return res.status(503).json({ error: '工作区暂不可用' });
       const nodeId = randomUUID();
-      const result = hub.registerNode({ nodeId, userId, agents: req.body?.agents, detected: req.body?.detected });
+      const result = hub.registerNode({ nodeId, userId, agents: req.body?.agents, detected: req.body?.detected, features: req.body?.features });
       const token = signNodeToken(secret, { nodeId, userId, now: now() });
       res.status(201).json({ nodeId, token, agents: result.agents });
     } catch (error) { next(error); }
@@ -56,7 +59,8 @@ export function registerNodeRoutes(mount, { resolveHub, authenticate, secret, no
       const context = nodeContext(req, res);
       if (!context) return;
       const wait = Number(req.query.wait);
-      const job = await context.hub.nextJob(context.nodeId, Number.isFinite(wait) ? wait * 1000 : 25_000);
+      const kind = req.query.kind === 'file' || req.query.kind === 'agent' ? req.query.kind : undefined;
+      const job = await context.hub.nextJob(context.nodeId, Number.isFinite(wait) ? wait * 1000 : 25_000, kind);
       if (!job) return res.status(204).end();
       res.json(job);
     } catch (error) { next(error); }
@@ -69,6 +73,35 @@ export function registerNodeRoutes(mount, { resolveHub, authenticate, secret, no
       const result = context.hub.updateJob(context.nodeId, req.params.id, req.body || {});
       if (!result) return res.status(404).json({ error: '任务不存在' });
       res.json(result);
+    } catch (error) { next(error); }
+  });
+
+  // 文件回传：节点把原始字节 POST 上来，落盘成临时文件，再交给等待中的手机预览/下载请求。
+  router.post('/files/:id', express.raw({ type: 'application/octet-stream', limit: '80mb' }), async (req, res, next) => {
+    let dir = '';
+    try {
+      const context = nodeContext(req, res);
+      if (!context) return;
+      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      if (!body.length) return res.status(400).json({ error: '文件内容为空' });
+      dir = await mkdtemp(path.join(tmpdir(), 'lagent-node-file-'));
+      const file = path.join(dir, 'payload');
+      await writeFile(file, body, { mode: 0o600 });
+      let name = '';
+      try { name = decodeURIComponent(String(req.headers['x-lagent-name'] || '')); } catch { name = ''; }
+      const mime = String(req.headers['x-lagent-mime'] || 'application/octet-stream');
+      const cleanup = () => rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => {});
+      const delivered = context.hub.deliverFile(context.nodeId, req.params.id, {
+        path: file,
+        name: name.slice(0, 200) || 'file',
+        mime: mime.slice(0, 200),
+        size: body.length
+      }, cleanup);
+      if (!delivered) {
+        await cleanup();
+        return res.status(404).json({ error: '文件请求不存在或已过期' });
+      }
+      res.json({ ok: true, size: body.length });
     } catch (error) { next(error); }
   });
 

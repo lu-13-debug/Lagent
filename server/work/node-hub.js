@@ -18,8 +18,20 @@ const MAX_NODES = 8;
 const MAX_AGENTS = 12;
 const MAX_PRODUCTS = 32;
 const MAX_QUEUE = 32;
+const MAX_FILE_PATHS = 100;
+const NODE_FILE_TIMEOUT_MS = 30_000;
 export const NODE_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 export const NODE_IDLE_MS = 90_000;
+
+// 项目路径可能来自 Windows，服务器跑在 Linux；只按字面归一化，不做 path.resolve。
+const normalizeWorkspace = value => typeof value === 'string'
+  ? value.trim().replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase()
+  : '';
+
+function cleanFeatures(input) {
+  if (!Array.isArray(input)) return [];
+  return [...new Set(input.filter(item => item === 'files'))];
+}
 
 export function loadNodeSecret(dataDir, environment = process.env) {
   const explicit = typeof environment?.LAGENT_NODE_SECRET === 'string' ? environment.LAGENT_NODE_SECRET.trim() : '';
@@ -109,6 +121,8 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
   if (!registry || typeof registry.register !== 'function') throw new TypeError('节点中枢需要支持动态注册的执行器表');
   const nodes = new Map();
   const jobs = new Map();
+  // 文件请求不走执行器：服务器把 op 放进节点队列，节点读取后回传 JSON 或原始字节。
+  const fileWaiters = new Map();
   const shortId = value => value.replace(/[^a-z0-9]/gi, '').slice(0, 8).toLowerCase() || 'node';
 
   const persist = job => {
@@ -145,12 +159,38 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
     try { store.put('task', taskOf(job)); } catch { /* 通知写不进去不该打断本机任务。 */ }
   };
 
-  const settleWaiters = node => {
-    const waiter = node.waiters.shift();
-    if (!waiter) return false;
-    clearTimeout(waiter.timer);
-    waiter.resolve(true);
-    return true;
+  // 从队列里取出第一份匹配的任务；执行与文件读取各有一个长轮询循环，不能互相抢任务。
+  const takeQueued = (node, kind) => {
+    for (let index = 0; index < node.queue.length; index += 1) {
+      const job = readJob(node.queue[index]);
+      if (!job || job.status !== 'queued') {
+        node.queue.splice(index, 1);
+        index -= 1;
+        continue;
+      }
+      if (kind && (job.kind === 'file' ? 'file' : 'agent') !== kind) continue;
+      node.queue.splice(index, 1);
+      job.status = 'running';
+      job.startedAt = now();
+      job.updatedAt = job.startedAt;
+      persist(job);
+      return job;
+    }
+    return null;
+  };
+
+  const settleWaiters = (node, kind) => {
+    for (let index = 0; index < node.waiters.length; index += 1) {
+      const waiter = node.waiters[index];
+      if (waiter.kind && kind && waiter.kind !== kind) continue;
+      const job = takeQueued(node, waiter.kind || kind);
+      if (!job) continue;
+      node.waiters.splice(index, 1);
+      clearTimeout(waiter.timer);
+      waiter.resolve(job);
+      return true;
+    }
+    return false;
   };
 
   function createRemoteExecutor(node, agent, executorId) {
@@ -168,8 +208,11 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
       start(ticket, assignment, input) {
         if (node.closed) throw Object.assign(new Error('本机节点已断开'), { status: 503, code: 'NODE_OFFLINE' });
         if (node.queue.length >= MAX_QUEUE) throw Object.assign(new Error('本机节点任务队列已满'), { status: 429, code: 'NODE_BUSY' });
+        const workspace = normalizeWorkspace(input?.executorInput?.workspace || input?.workspace);
+        if (workspace) node.workspaces.add(workspace);
         const job = {
           id: `node-job-${randomUUID()}`,
+          kind: 'agent',
           nodeId: node.nodeId,
           userId: node.userId,
           executorId,
@@ -184,7 +227,7 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
         persist(job);
         publishTask(job);
         node.queue.push(job.id);
-        settleWaiters(node);
+        settleWaiters(node, 'agent');
         return taskOf(job);
       },
       get(taskId) {
@@ -199,7 +242,6 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
         job.updatedAt = job.cancelledAt;
         persist(job);
         publishTask(job);
-        settleWaiters(node);
       },
       close() { /* 节点断开时统一在 unregisterNode 里清理。 */ }
     };
@@ -225,7 +267,13 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
     while (node.waiters.length) {
       const waiter = node.waiters.shift();
       clearTimeout(waiter.timer);
-      waiter.resolve(false);
+      waiter.resolve(null);
+    }
+    for (const [jobId, waiter] of [...fileWaiters]) {
+      if (waiter.nodeId !== nodeId) continue;
+      fileWaiters.delete(jobId);
+      clearTimeout(waiter.timer);
+      waiter.reject(Object.assign(new Error('本机节点已离线'), { status: 503, code: 'NODE_OFFLINE' }));
     }
     const executorIds = [...node.executors.values()];
     for (const executorId of executorIds) {
@@ -249,14 +297,14 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
     return true;
   }
 
-  function registerNode({ nodeId, userId, agents, detected }) {
+  function registerNode({ nodeId, userId, agents, detected, features }) {
     if (typeof nodeId !== 'string' || !nodeId || nodeId.length > 80) throw Object.assign(new Error('节点 id 无效'), { status: 400 });
     if (typeof userId !== 'string' || !userId) throw Object.assign(new Error('节点缺少账号'), { status: 400 });
     const list = cleanAgents(agents);
     if (!list.length) throw Object.assign(new Error('节点没有上报任何可用 Agent'), { status: 400 });
     if (!nodes.has(nodeId) && nodes.size >= MAX_NODES) throw Object.assign(new Error('本账号连接的电脑已达上限'), { status: 429 });
     unregisterNode(nodeId);
-    const node = { nodeId, userId, agents: [], detected: cleanProducts(detected), executors: new Map(), previous: new Map(), queue: [], waiters: [], lastSeen: now(), closed: false };
+    const node = { nodeId, userId, agents: [], detected: cleanProducts(detected), features: cleanFeatures(features), workspaces: new Set(), executors: new Map(), previous: new Map(), queue: [], waiters: [], lastSeen: now(), closed: false };
     for (const agent of list) {
       const existing = registry.resolve(agent.id);
       // 默认沿用原来的 id（claude-code / codex），界面上的图标、名称和策略都不用改。
@@ -289,46 +337,122 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
     return node;
   }
 
-  function nextJob(nodeId, waitMs = 25_000) {
+  function nextJob(nodeId, waitMs = 25_000, kind) {
     const node = touch(nodeId);
     if (!node) return Promise.resolve(null);
-    while (node.queue.length) {
-      const job = readJob(node.queue.shift());
-      if (job && job.status === 'queued') {
-        job.status = 'running';
-        job.startedAt = now();
-        job.updatedAt = job.startedAt;
-        persist(job);
-        return Promise.resolve({ job: publicJob(job), task: taskOf(job) });
-      }
-    }
+    const filter = kind === 'file' || kind === 'agent' ? kind : undefined;
+    const payload = job => ({ job: publicJob(job), task: taskOf(job) });
+    const job = takeQueued(node, filter);
+    if (job) return Promise.resolve(payload(job));
     const wait = Number.isFinite(waitMs) ? Math.max(0, Math.min(waitMs, 30_000)) : 0;
     if (!wait) return Promise.resolve(null);
     return new Promise(resolve => {
-      let entry;
-      const timer = setTimeout(() => {
+      const entry = {
+        kind: filter,
+        timer: null,
+        resolve: next => resolve(next ? payload(next) : null)
+      };
+      entry.timer = setTimeout(() => {
         const index = node.waiters.indexOf(entry);
         if (index >= 0) node.waiters.splice(index, 1);
         resolve(null);
       }, wait);
-      timer.unref?.();
-      entry = { timer, resolve: ready => {
-        if (!ready) { resolve(null); return; }
-        const job = readJob(node.queue.shift());
-        if (!job || job.status !== 'queued') { resolve(null); return; }
-        job.status = 'running';
-        job.startedAt = now();
-        job.updatedAt = job.startedAt;
-        persist(job);
-        resolve({ job: publicJob(job), task: taskOf(job) });
-      } };
+      entry.timer.unref?.();
       node.waiters.push(entry);
     });
+  }
+
+  // 节点只上报它实际跑过哪些工作区；服务器据此把「项目路径 → 本机节点」对上。
+  function nodeForWorkspace(target) {
+    const wanted = normalizeWorkspace(target);
+    if (!wanted) return null;
+    let found = null;
+    for (const node of nodes.values()) {
+      if (node.closed || !node.features.includes('files')) continue;
+      const known = node.workspaces.has(wanted) || (() => {
+        try {
+          return store.list(JOB_KIND).some(job => job?.nodeId === node.nodeId
+            && normalizeWorkspace(job.input?.workspace || job.input?.executorInput?.workspace || job.file?.workspace) === wanted);
+        } catch { return false; }
+      })();
+      if (!known) continue;
+      if (!found || node.lastSeen > found.lastSeen) found = node;
+    }
+    return found ? { nodeId: found.nodeId } : null;
+  }
+
+  // 让节点读取项目文件。describe 返回条目，preview 返回预览 JSON，read 通过上传接口回传原始字节。
+  function requestFile(nodeId, input = {}, timeoutMs = NODE_FILE_TIMEOUT_MS) {
+    const node = touch(nodeId);
+    if (!node) throw Object.assign(new Error('本机节点已离线'), { status: 503, code: 'NODE_OFFLINE' });
+    if (!node.features.includes('files')) throw Object.assign(new Error('本机节点版本过旧，暂不支持文件回传'), { status: 409, code: 'NODE_FILES_UNSUPPORTED' });
+    const op = ['describe', 'preview', 'read'].includes(input?.op) ? input.op : '';
+    const workspace = typeof input?.workspace === 'string' ? input.workspace.trim() : '';
+    if (!op || !workspace) throw Object.assign(new Error('文件请求参数无效'), { status: 400 });
+    const file = { op, workspace };
+    if (op === 'describe') {
+      file.paths = Array.isArray(input.paths) ? input.paths.filter(item => typeof item === 'string' && item).slice(0, MAX_FILE_PATHS) : [];
+      if (!file.paths.length) throw Object.assign(new Error('文件请求参数无效'), { status: 400 });
+    } else {
+      file.path = typeof input.path === 'string' ? input.path : '';
+      if (!file.path) throw Object.assign(new Error('文件请求参数无效'), { status: 400 });
+    }
+    if (node.queue.length >= MAX_QUEUE) throw Object.assign(new Error('本机节点任务队列已满'), { status: 429, code: 'NODE_BUSY' });
+    const job = {
+      id: `node-file-${randomUUID()}`,
+      kind: 'file',
+      nodeId: node.nodeId,
+      userId: node.userId,
+      executorId: 'node-file',
+      agentId: 'file',
+      ticketId: '',
+      file,
+      status: 'queued',
+      activity: [],
+      createdAt: now(),
+      updatedAt: now()
+    };
+    persist(job);
+    node.queue.push(job.id);
+    settleWaiters(node, 'file');
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!fileWaiters.delete(job.id)) return;
+        const latest = readJob(job.id);
+        if (latest && latest.status === 'queued') {
+          latest.status = 'failed';
+          latest.error = '本机节点没有及时返回文件';
+          latest.updatedAt = now();
+          persist(latest);
+        }
+        reject(Object.assign(new Error('本机节点没有及时返回文件'), { status: 504, code: 'NODE_FILE_TIMEOUT' }));
+      }, Math.max(1000, Math.min(Number.isFinite(timeoutMs) ? timeoutMs : NODE_FILE_TIMEOUT_MS, 120_000)));
+      timer.unref?.();
+      fileWaiters.set(job.id, { resolve, reject, timer, nodeId: node.nodeId });
+    });
+  }
+
+  // 节点把原始文件 POST 上来后，由路由落盘，再把临时文件交给等待中的手机请求。
+  function deliverFile(nodeId, jobId, file, cleanup) {
+    const node = touch(nodeId);
+    const job = readJob(jobId);
+    if (!node || !job || job.nodeId !== nodeId || job.kind !== 'file') { cleanup?.(); return false; }
+    const waiter = fileWaiters.get(jobId);
+    if (!waiter) { cleanup?.(); return false; }
+    fileWaiters.delete(jobId);
+    clearTimeout(waiter.timer);
+    job.status = 'completed';
+    job.updatedAt = now();
+    persist(job);
+    waiter.resolve({ ...file, cleanup });
+    return true;
   }
 
   function publicJob(job) {
     return {
       id: job.id,
+      kind: job.kind === 'file' ? 'file' : 'agent',
+      ...(job.kind === 'file' ? { file: job.file } : {}),
       executorId: job.executorId,
       agentId: job.agentId,
       ticketId: job.ticketId,
@@ -353,7 +477,16 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
       updatedAt: now()
     };
     persist(next);
-    publishTask(next);
+    if (job.kind !== 'file') publishTask(next);
+    if (job.kind === 'file' && ['completed', 'failed', 'cancelled'].includes(next.status)) {
+      const waiter = fileWaiters.get(job.id);
+      if (waiter) {
+        fileWaiters.delete(job.id);
+        clearTimeout(waiter.timer);
+        if (next.status === 'completed') waiter.resolve(patch?.result && typeof patch.result === 'object' ? patch.result : {});
+        else waiter.reject(Object.assign(new Error(typeof patch?.error === 'string' && patch.error.trim() ? patch.error.slice(0, 300) : '本机读取文件失败'), { status: 422, code: 'NODE_FILE_FAILED' }));
+      }
+    }
     return { status: next.status, cancelled: next.status === 'cancelled' };
   }
 
@@ -363,7 +496,8 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
       nodeId: node.nodeId,
       lastSeen: node.lastSeen,
       agents: node.agents.map(agent => ({ ...agent })),
-      detected: (node.detected || []).map(product => ({ ...product }))
+      detected: (node.detected || []).map(product => ({ ...product })),
+      features: [...node.features]
     }));
   }
 
@@ -380,6 +514,9 @@ export function createNodeHub({ store, registry, engine = null, now = Date.now, 
     unregisterNode,
     nextJob,
     updateJob,
+    nodeForWorkspace,
+    requestFile,
+    deliverFile,
     hasNodes,
     listNodes,
     getJob: id => readJob(id),

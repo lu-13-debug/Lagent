@@ -19,6 +19,7 @@ import { claudeCodeExecutor } from '../server/work/executors/claude-code.js';
 import { codexExecutor } from '../server/work/executors/codex.js';
 import { localAgentExecutors } from '../server/work/executors/local-agent.js';
 import { createProviderRegistry } from '../server/work/providers.js';
+import { createProjectFiles } from '../server/work/project-files.js';
 
 const origin = String(process.env.LAGENT_NODE_URL || '').replace(/\/+$/, '');
 const stateDir = process.env.LAGENT_NODE_STATE || path.join(homedir(), '.lagent-node');
@@ -108,7 +109,7 @@ async function register() {
   const response = await fetch(`${origin}/api/node/register`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
-    body: JSON.stringify({ agents, detected: await detectedProducts })
+    body: JSON.stringify({ agents, detected: await detectedProducts, features: ['files'] })
   });
   if (!response.ok) throw new Error(`注册失败：HTTP ${response.status} ${(await response.text()).slice(0, 200)}`);
   const body = await response.json();
@@ -147,6 +148,67 @@ function startJob(job) {
   return executor.start(ticket, assignment, { executorInput: job.input || {} });
 }
 
+// 文件请求与 Agent 执行分开：长任务正在跑时，手机仍能预览和下载项目文件。
+function describeNodeFiles(service, paths) {
+  const groups = new Map();
+  for (const filePath of Array.isArray(paths) ? paths : []) {
+    if (typeof filePath !== 'string' || !filePath) continue;
+    const slash = filePath.lastIndexOf('/');
+    const dir = slash < 0 ? '' : filePath.slice(0, slash);
+    if (!groups.has(dir)) groups.set(dir, new Set());
+    groups.get(dir).add(filePath);
+  }
+  const found = new Map();
+  for (const [dir, members] of groups) {
+    try {
+      const listing = service.list('node', dir);
+      for (const entry of Array.isArray(listing?.entries) ? listing.entries : []) {
+        if (!members.has(entry.path) || entry.type !== 'file' || entry.locked) continue;
+        found.set(entry.path, entry);
+      }
+    } catch { /* 文件已删除或目录不可读。 */ }
+  }
+  return [...groups.values()].flatMap(members => [...members]).map(item => found.get(item)).filter(Boolean);
+}
+
+async function runFileJob(state, job) {
+  const file = job.file || {};
+  try {
+    const service = createProjectFiles({ getProject: () => ({ id: 'node', path: String(file.workspace || '') }) });
+    if (file.op === 'read') {
+      const source = service.file('node', file.path);
+      const bytes = readFileSync(source.absolute);
+      const response = await fetch(`${origin}/api/node/files/${encodeURIComponent(job.id)}`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${state.token}`,
+          'content-type': 'application/octet-stream',
+          'x-lagent-name': encodeURIComponent(source.name),
+          'x-lagent-mime': source.mime
+        },
+        body: bytes
+      });
+      if (!response.ok) throw new Error(`文件上传失败：HTTP ${response.status}`);
+      log(`已回传文件 ${source.name}（${bytes.length} 字节）`);
+      return;
+    }
+    const result = file.op === 'describe'
+      ? { entries: describeNodeFiles(service, file.paths) }
+      : await service.preview('node', file.path);
+    const response = await call(`/api/node/jobs/${encodeURIComponent(job.id)}`, {
+      method: 'POST', body: JSON.stringify({ status: 'completed', result })
+    }, state);
+    if (!response.ok) throw new Error(`文件结果回传失败：HTTP ${response.status}`);
+  } catch (error) {
+    try {
+      await call(`/api/node/jobs/${encodeURIComponent(job.id)}`, {
+        method: 'POST', body: JSON.stringify({ status: 'failed', error: error?.message || '文件读取失败' })
+      }, state);
+    } catch { /* 节点已断开时服务器会自行超时。 */ }
+    log(`文件请求 ${job.id} 失败：${error?.message || error}`);
+  }
+}
+
 async function runJob(state, job) {
   let task;
   try {
@@ -183,18 +245,50 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function main() {
   let state = readState();
-  while (!state) {
-    try { state = await register(); }
-    catch (error) {
-      log(`等待注册：${error?.message || error}`);
-      await sleep(10_000);
+  let refreshing = null;
+  const ensureState = async () => {
+    if (state) return state;
+    if (!refreshing) {
+      refreshing = (async () => {
+        while (!state) {
+          try { state = await register(); }
+          catch (error) {
+            log(`等待注册：${error?.message || error}`);
+            await sleep(10_000);
+          }
+        }
+        return state;
+      })().finally(() => { refreshing = null; });
     }
-  }
+    return refreshing;
+  };
+  await ensureState();
+
+  // 第二个长轮询只领文件请求，避免 Agent 长任务把手机预览卡住。
+  const fileLoop = async () => {
+    for (;;) {
+      const current = await ensureState();
+      let response;
+      try {
+        response = await call('/api/node/next?wait=25&kind=file', { method: 'GET' }, current);
+      } catch {
+        await sleep(3000);
+        continue;
+      }
+      if (response.status === 401 || response.status === 409) { state = null; continue; }
+      if (response.status === 204) continue;
+      if (!response.ok) { await sleep(3000); continue; }
+      const body = await response.json().catch(() => null);
+      if (body?.job?.kind === 'file') await runFileJob(current, body.job);
+    }
+  };
+  void fileLoop();
 
   for (;;) {
+    const current = await ensureState();
     let response;
     try {
-      response = await call('/api/node/next?wait=25', { method: 'GET' }, state);
+      response = await call('/api/node/next?wait=25&kind=agent', { method: 'GET' }, current);
     } catch (error) {
       log(`连接服务失败：${error?.message || error}`);
       await new Promise(resolve => setTimeout(resolve, 5000));
@@ -202,12 +296,7 @@ async function main() {
     }
     if (response.status === 401 || response.status === 409) {
       log('节点令牌失效，重新注册');
-      let next = null;
-      while (!next) {
-        try { next = await register(); }
-        catch (error) { log(`重新注册失败：${error?.message || error}`); await sleep(10_000); }
-      }
-      state = next;
+      state = null;
       continue;
     }
     if (response.status === 204) continue;
@@ -218,7 +307,7 @@ async function main() {
     }
     const body = await response.json().catch(() => null);
     if (!body?.job) continue;
-    await runJob(state, body.job);
+    await runJob(current, body.job);
   }
 }
 
