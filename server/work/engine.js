@@ -28,6 +28,8 @@ import { createSkillService } from './skills/service.js';
 import { createPluginService } from './skills/plugins.js';
 import { createTeamRoomService } from './team-room.js';
 import { conversationStatus, createConversationService } from './conversations.js';
+import { agentEffort, isEffort, normalizeEfforts } from './efforts.js';
+import { reportTextOfReport } from './report-text.js';
 import { createReportCenter } from './report-center.js';
 import { CONVERSATION_ROLES, isExecutorAllowed, LAGENT_EXECUTOR_ID, lagentReadiness, managedTurnShape, normalizeManagedAgents } from '../application/conversation/model.js';
 import { handoffBrief, normalizeHandoff } from './handoff.js';
@@ -50,12 +52,6 @@ const review = (question, approveLabel = '批准', rejectLabel = '退回') => ({
 const ACCESS_VERBS = { read: '读取', write: '写入', delete: '删除', command: '执行命令' };
 const accessPrompt = request => `Lagent 请求${ACCESS_VERBS[request.mode] || '访问'}：${String(request.path || '').slice(0, 240)}`;
 const accessReview = request => ({...review(accessPrompt(request), `允许这次${ACCESS_VERBS[request.mode] || '访问'}`, '拒绝'),kind:'access',accessMode:request.mode,accessPath:String(request.path || '').slice(0,240)});
-const datasetMetadata = dataset => ({
-  id: dataset.id,
-  name: typeof dataset.name === 'string' ? dataset.name : '未命名数据集',
-  rowCount: Number.isFinite(dataset.rowCount) ? dataset.rowCount : 0,
-  source: typeof dataset.source === 'string' ? dataset.source : ''
-});
 const sameValue = (left, right) => JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 // 对话级设置：模型、思考强度、工作权限。只允许这三个键，避免把任意输入塞进执行器。
 const normalizeCommandSettings = value => {
@@ -264,42 +260,12 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     });
     if (!allowed) throw workError(`浏览器只允许访问 ${list.join('、')}`, 403);
   };
-  const selectedDatasetId = value => {
-    if(value===undefined||value===null)return null;
-    if(typeof value!=='string'||!value.trim())throw workError('datasetId 必须是非空字符串');
-    return value.trim();
-  };
   const executorId = value => {
-    if(value===undefined||value===null)return 'analysis';
+    if(value===undefined||value===null)return 'terminal';
     if(typeof value!=='string'||!value.trim())throw workError('executorId 必须是非空字符串');
     return value.trim();
   };
-  const requireDataset = id => {
-    try {
-      const dataset=store.get('dataset',id);
-      if(!dataset)throw workError('数据集不存在或不属于当前工作区');
-      return dataset;
-    } catch(error) {
-      if(error.status===400)throw workError('数据集不存在或不属于当前工作区');
-      throw error;
-    }
-  };
-  const resolveStartDataset = (ticket,input) => {
-    const requested=selectedDatasetId(input?.datasetId);
-    if(requested)requireDataset(requested);
-    const frozen=selectedDatasetId(ticket.datasetId);
-    if(frozen){
-      requireDataset(frozen);
-      if(requested&&requested!==frozen)throw workError('数据集已选定，不能切换');
-      return frozen;
-    }
-    if(requested)return requested;
-    const datasets=store.list('dataset');
-    if(datasets.length===1)return datasets[0].id;
-    if(datasets.length>1)throw workError('当前工作区有多个数据集，请明确选择 datasetId');
-    return null;
-  };
-  const executorFor = assignment => executors.resolve(assignment?.executor || 'analysis');  const assignmentExecutorId = (ticket, assignment) => assignment?.executor || ticket?.executor || 'analysis';
+  const executorFor = assignment => executors.resolve(assignment?.executor || 'terminal');  const assignmentExecutorId = (ticket, assignment) => assignment?.executor || ticket?.executor || 'terminal';
   const normalizeExecutorInput = (id, target, input, fallbackText) => {
     let value = input;
     if (value === undefined && typeof target.defaultInput === 'function' && typeof fallbackText === 'string' && fallbackText.trim()) value = target.defaultInput(fallbackText);
@@ -472,7 +438,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         submit: true
       };
     }
-    if (!executor || executor.kind !== 'cli') throw workError('该执行器暂不支持项目对话', 400);
+    if (!executor || !['cli', 'model'].includes(executor.kind)) throw workError('该执行器暂不支持项目对话', 400);
     const requestedTurns = Number(options?.maxTurns);
     // 项目内的一次真实改动常常要读十来个文件、改几处、再验证一次；
     // 12 个回合会在「刚开始动手」时就被 error_max_turns 掐断。默认值和 CLI 执行器共用一套，
@@ -519,7 +485,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       workspace: project.path,
       write,
       // CLI 执行器按档位决定确认策略：full 才完全放行，read/workspace 保持各自限制。
-      ...(executor.kind === 'cli' ? { permission } : {}),
+      ...(['cli', 'model'].includes(executor.kind) ? { permission } : {}),
       // 模型 Agent 的会话级模型与思考强度：只在模型执行器上透传，其它 CLI 不认识这些键。
       ...(isModel && typeof options?.profileId === 'string' && options.profileId.trim() ? { profileId: options.profileId.trim().slice(0, 100) } : {}),
       ...(isModel && typeof options?.effort === 'string' && options.effort.trim() ? { effort: options.effort.trim().slice(0, 10) } : {}),
@@ -616,7 +582,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     if (!PROJECT_CHAT_EXECUTORS.includes(executorId)) throw workError('该执行器暂不支持项目工作区', 400);
     if (executorId === 'window') throw workError('窗口 Agent 需要先在项目中创建并绑定窗口对话');
     const target = executors.requireAvailable(executorId);
-    if (target.kind !== 'cli') throw workError('该执行器暂不支持项目工作区', 400);
+    if (!['cli', 'model'].includes(target.kind)) throw workError('该执行器暂不支持项目工作区', 400);
     return projects.createChat(project.id, {
       executorId,
       ...(parentChatId ? { parentChatId } : {}),
@@ -630,7 +596,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const context = projectContext(ticket.projectChatId, { required: true });
     const target = executors.resolve(ticket.executor || context.chat.executorId);
     if (!target) return ticket;
-    if (target.kind === 'cli') {
+    if (['cli', 'model'].includes(target.kind)) {
       const current = ticket.executorInput && typeof ticket.executorInput === 'object' && !Array.isArray(ticket.executorInput) ? ticket.executorInput : {};
       return {
         ...ticket,
@@ -660,11 +626,11 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     : id === 'codex' || id === 'claude-code' || id === 'opencode' || id.endsWith('-acp') ? '请确认只读 CLI 任务'
     : id === 'browser' ? '请确认受控浏览器读取'
     : id === 'github' ? '请确认 GitHub 只读查询'
-    : '请选择数据集并批准分析';
+    : '请确认执行此任务';
   // Control fields stay in the workspace, outside the event payload and API projection.
   const controlOf = ticket => {
-    const {clientRequestId, command, lastAction, datasetId, useAI, approvalSnapshot, executor, executorInput, projectChatId}=ticket;
-    return {id:ticket.id,clientRequestId,command,lastAction,datasetId:datasetId??null,useAI,approvalSnapshot,executor,executorInput,projectChatId:projectChatId??null,origin:ticket.origin==='mcp'?'mcp':'ui'};
+    const {clientRequestId, command, lastAction, approvalSnapshot, executor, executorInput, projectChatId}=ticket;
+    return {id:ticket.id,clientRequestId,command,lastAction,approvalSnapshot,executor,executorInput,projectChatId:projectChatId??null,origin:ticket.origin==='mcp'?'mcp':'ui'};
   };
   const write = (ticket,...entries) => {
     db.write([['ticket',publicTicket(ticket)],...entries],controlOf(ticket));
@@ -696,7 +662,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     get(ticketId);
     const assignment = latest(ticketId);
     if(!assignment?.sessionId) throw workError('团队尚未开始或快照不可用', 409);
-    if(assignmentExecutorId(null, assignment) !== 'analysis') throw workError('该执行器不提供团队能力', 409);
+    if(!projectTeamTask(executorFor(assignment)?.get?.(assignment.sessionId))) throw workError('该执行器不提供团队能力', 409);
     const outcome = store.atomic(() => {
       const task = executorFor(assignment)?.get?.(assignment.sessionId);
       if(!task) throw workError('团队尚未开始或快照不可用', 409);
@@ -723,12 +689,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     ...(ticket.executor||assignment?.executor?{executorId:ticket.executor||assignment.executor}:{})
   });
   const launchKey = assignment => `launch:${assignment.ticketId}:${assignment.id}`;
-  const launchStage = (activeId, active) => activeId==='terminal'?'terminal':active.kind==='cli'?'cli':active.kind==='tool'?'tool':'analysis';
-  const launchLabel = (activeId, active) => activeId==='terminal'?'终端命令':activeId==='workbuddy'?'WorkBuddy':active.kind==='cli'?'只读 CLI':active.kind==='tool'?(activeId==='browser'?'浏览器':activeId==='github'?'GitHub':active.name):'分析';
+  const launchStage = (activeId, active) => activeId==='terminal'?'terminal':['cli','model'].includes(active.kind)?'cli':['tool','window'].includes(active.kind)?'tool':'terminal';
+  const launchLabel = (activeId, active) => activeId==='terminal'?'终端命令':activeId==='workbuddy'?'WorkBuddy':activeId==='model'?'Lagent':active.kind==='cli'?'只读 CLI':['tool','window'].includes(active.kind)?(activeId==='browser'?'浏览器':activeId==='github'?'GitHub':active.name):'Agent';
   const queuedSummary = (activeId, active) => `${launchLabel(activeId, active)}等待启动`;
-  const launchInput = (ticket, payload) => ({
-    datasetId:payload.datasetId??null,
-    useAI:payload.useAI===true,
+  const launchInput = ticket => ({
     ...(ticket.executorInput!==undefined?{executorInput:ticket.executorInput}:{})
   });
   function markEffectFailed(effect, error) {
@@ -742,10 +706,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const ticket=db.get('ticket',effect.ticketId);
     if(!ticket)return;
     const assignment=db.get('assignment',effect.payload?.assignmentId);
-    const activeId=assignment?.executor||ticket.executor||'analysis';
+    const activeId=assignment?.executor||ticket.executor||'terminal';
     const active=executors.resolve(activeId);
     const status=forcedStatus||'failed';
-    const summary=status==='blocked'?'执行器启动受阻，未进入执行':`${launchLabel(activeId,active||{name:'执行器',kind:'analysis'})}启动失败，已停止重试`;
+    const summary=status==='blocked'?'执行器启动受阻，未进入执行':`${launchLabel(activeId,active||{name:'执行器',kind:'terminal'})}启动失败，已停止重试`;
     const next={...privateTicket(ticket.id),status,stage:status==='blocked'?'launch':'result',attention:undefined,summary,updatedAt:now()};
     const run=assignment?{...assignment,status,endedAt:now(),error:safe}:null;
     write(next,...(run?[['assignment',run],['report',makeReport(next,run,status,summary)]]:[]));
@@ -757,8 +721,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const ticket=db.get('ticket',effect.ticketId);
     const assignment=db.get('assignment',effect.payload?.assignmentId);
     if(!ticket||!assignment)return;
-    const activeId=assignment.executor||ticket.executor||'analysis';
-    const active=executors.resolve(activeId)||{name:'执行器',kind:'analysis'};
+    const activeId=assignment.executor||ticket.executor||'terminal';
+    const active=executors.resolve(activeId)||{name:'执行器',kind:'terminal'};
     const queued={...privateTicket(ticket.id),status:'queued',stage:'launch',attention:undefined,summary:queuedSummary(activeId,active),updatedAt:now()};
     write(queued,['assignment',{...assignment,status:'queued',error:safe}]);
     audit(ticket.id,'launch-retry',activeId,'queued',safe);
@@ -781,7 +745,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       complete(store,effect.id);
       return effect;
     }
-    const activeId=assignment.executor||ticket.executor||'analysis';
+    const activeId=assignment.executor||ticket.executor||'terminal';
     let active;
     try {
       active=executors.requireAvailable(activeId);
@@ -792,11 +756,11 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     }
     const privateState=scopedTicket(privateTicket(ticket.id));
     const startedAt=assignment.startedAt||now();
-    const working={...privateState,executor:activeId,status:'working',stage:launchStage(activeId,active),attention:undefined,summary:`${launchLabel(activeId,active)}执行中`,updatedAt:now(),datasetId:effect.payload?.datasetId??privateState.datasetId??null,useAI:effect.payload?.useAI??privateState.useAI};
+    const working={...privateState,executor:activeId,status:'working',stage:launchStage(activeId,active),attention:undefined,summary:`${launchLabel(activeId,active)}执行中`,updatedAt:now()};
     const run={...assignment,status:'working',startedAt,endedAt:undefined,error:undefined};
     try {
       write(working,['assignment',run]);
-      const task=active.start(working,run,launchInput(privateState,effect.payload||{}));
+      const task=active.start(working,run,launchInput(privateState));
       complete(store,effect.id);
       audit(ticket.id,'launch',activeId,'started');
       sync(working,run,task);active.resume?.(task);
@@ -932,7 +896,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const activeId=assignmentExecutorId(ticket, assignment);
     const active=executors.resolve(activeId);
     if(!active)return;
-    if(activeId==='analysis')announceTeam(ticket.id, task);
+    const team=projectTeamTask(task);
+    if(team)announceTeam(ticket.id, task, team);
     if(!['working','awaiting_review'].includes(ticket.status))return;
     // 只要执行器还在被轮询到，就记一次心跳；节流避免每次 store 变更都写盘。
     if (assignment && assignment.status === 'working' && ['running', 'awaiting_approval'].includes(task.status)) {
@@ -950,8 +915,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     const missing = status === 'completed' ? missingDeliverables(ticket.contract, projectPathForTicket(ticket)) : [];
     if (missing.length) status = 'failed';
     const terminal=activeId==='terminal';
-    const cli=active.kind==='cli';
-    const tool=active.kind==='tool';
+    const cli=['cli','model'].includes(active.kind);
+    const tool=['tool','window'].includes(active.kind);
     const label=terminal?'终端命令':cli?(activeId==='model'?'Lagent':activeId==='workbuddy'?'WorkBuddy':cliWritable(ticket)?'CLI':'只读 CLI'):tool?(activeId==='browser'?'浏览器':activeId==='github'?'GitHub':active.name):'分析';
     const toolInfo=tool?(task.artifacts?.[activeId]||{}):null;
     const toolSummary=activeId==='github'
@@ -988,7 +953,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       cancelled:`${label}已停止`
     }[status];
     const finished=['completed','failed','cancelled'].includes(status);
-    const next={...ticket,status,stage:status==='awaiting_review'?(task.steps?.[task.currentStep]?.id||(terminal||cli||tool?'approval':'plan')):finished?'result':terminal?'terminal':cli?'cli':tool?'tool':'analysis',summary,updatedAt:now(),approvalSnapshot,attention:status==='awaiting_review'?(task.accessRequest?accessReview(task.accessRequest):review(summary)):undefined};
+    const next={...ticket,status,stage:status==='awaiting_review'?(task.steps?.[task.currentStep]?.id||(terminal||cli||tool?'approval':'plan')):finished?'result':terminal?'terminal':cli?'cli':tool?'tool':'terminal',summary,updatedAt:now(),approvalSnapshot,attention:status==='awaiting_review'?(task.accessRequest?accessReview(task.accessRequest):review(summary)):undefined};
     const run={...assignment,status,sessionId:task.id,...(status==='working'?{heartbeatAt:now()}:{}),...(finished?{endedAt:now()}: {})};
     const kind={awaiting_review:'waiting',completed:'ready',failed:'failed',cancelled:'dropped'}[status];
     const artifacts={taskId:task.id,...(status==='completed'&&task.report?{report:task.report}:{}),...(terminal&&task.artifacts?.terminal?{terminal:task.artifacts.terminal}:{}),...(cli&&task.artifacts?.cli?{cli:task.artifacts.cli}:{}),...(tool&&task.artifacts?.[activeId]?{[activeId]:task.artifacts[activeId]}:{})};
@@ -1211,14 +1176,6 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       }
     }, 0);
   }
-  function blockWithoutDataset(ticket,assignment) {
-    const summary='当前工作区没有可用数据集，请先上传数据集后再批准';
-    const blocked={...ticket,status:'blocked',stage:'dataset',attention:undefined,summary,updatedAt:now()};
-    const run={...assignment,status:'blocked',endedAt:now(),error:summary};
-    write(blocked,['assignment',run],['report',makeReport(blocked,run,'blocked',summary)]);
-    if (blocked.planId && Number.isSafeInteger(blocked.planStep)) advancePlan(blocked.planId);
-    return get(ticket.id);
-  }
   function start(ticket,input,existing) {
     ticket = scopedTicket(ticket);
     const activeId=assignmentExecutorId(ticket, existing);
@@ -1229,26 +1186,22 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     if(existing?.startedAt&&Date.now()-Date.parse(existing.startedAt)>policy.budgets.maxRuntimeMs){audit(ticket.id,'start',activeId,'denied','执行时长达到策略上限');throw workError('执行时长达到策略上限',429);}
     const budgetCheck=checkTokenBudget(store,ticket.id,policy.budgets.maxTokensPerTicket);
     if(!budgetCheck.ok){audit(ticket.id,'start',activeId,'denied',`Token 预算已用 ${budgetCheck.used}/${budgetCheck.budget}`);throw workError(`Token 预算已用尽（已用 ${budgetCheck.used} / 上限 ${budgetCheck.budget}）`,429);}
-    const needsDataset=active.requiresDataset!==false;
-    const datasetId=needsDataset?resolveStartDataset(ticket,input):selectedDatasetId(ticket.datasetId);
     const assignment=existing||{id:randomUUID(),ticketId:ticket.id,executor:activeId,status:outboxEnabled?'queued':'working',...(outboxEnabled?{queuedAt:now()}:{startedAt:now(),heartbeatAt:now()})};
-    if(needsDataset&&!datasetId)return blockWithoutDataset({...ticket,executor:activeId,datasetId:null},assignment);
-    const useAI=input?.useAI??ticket.useAI;
     if(outboxEnabled){
-      const queued={...ticket,executor:activeId,status:'queued',stage:'launch',attention:undefined,summary:queuedSummary(activeId,active),updatedAt:now(),datasetId,useAI};
+      const queued={...ticket,executor:activeId,status:'queued',stage:'launch',attention:undefined,summary:queuedSummary(activeId,active),updatedAt:now()};
       write(queued,['assignment',{...assignment,status:'queued'}]);
-      enqueue(store,{kind:WORK_EFFECT_KIND,key:launchKey(assignment),ticketId:ticket.id,priority:ticket.origin==='mcp'?1:0,payload:{assignmentId:assignment.id,datasetId:queued.datasetId??null,useAI:queued.useAI===true}},{now:Date.now()});
+      enqueue(store,{kind:WORK_EFFECT_KIND,key:launchKey(assignment),ticketId:ticket.id,priority:ticket.origin==='mcp'?1:0,payload:{assignmentId:assignment.id}},{now:Date.now()});
       audit(ticket.id,'enqueue',activeId,'queued');
       return get(ticket.id);
     }
     const terminal=activeId==='terminal';
-    const cli=active.kind==='cli';
-    const tool=active.kind==='tool';
+    const cli=['cli','model'].includes(active.kind);
+    const tool=['tool','window'].includes(active.kind);
     const toolLabel=activeId==='browser'?'浏览器':activeId==='github'?'GitHub':active.name;
-    const working={...ticket,executor:activeId,status:'working',stage:terminal?'terminal':cli?'cli':tool?'tool':'analysis',attention:undefined,summary:terminal?'终端命令执行中':activeId==='workbuddy'?'WorkBuddy 执行中':cli?'只读 CLI 执行中':tool?`${toolLabel}执行中`:'分析执行中',updatedAt:now(),datasetId,useAI};
+    const working={...ticket,executor:activeId,status:'working',stage:terminal?'terminal':cli?'cli':tool?'tool':'terminal',attention:undefined,summary:terminal?'终端命令执行中':activeId==='workbuddy'?'WorkBuddy 执行中':activeId==='model'?'Lagent 执行中':cli?'只读 CLI 执行中':tool?`${toolLabel}执行中`:'执行中',updatedAt:now()};
     write(working,['assignment',assignment]);
     try {
-      const task=active.start(working,assignment,{datasetId:working.datasetId,useAI:working.useAI,...(working.executorInput!==undefined?{executorInput:working.executorInput}:{})});
+      const task=active.start(working,assignment,launchInput(working));
       sync(working,assignment,task);active.resume?.(task);
     } catch(error) {
       const status=error.status===400?'blocked':'failed';
@@ -1324,12 +1277,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
             : projects.listChats(owner.id).find(row => row.executorId === targetId && !row.parentChatId) || null;
         }
         if (!chat && targetId === 'window') throw workError(`第 ${index + 1} 步的窗口 Agent 需要先在项目中绑定窗口对话`);
-        if (!chat && target.kind === 'cli' && !PROJECT_CHAT_EXECUTORS.includes(targetId)) throw workError(`第 ${index + 1} 步的执行器不支持项目工作区`);
+        if (!chat && ['cli', 'model'].includes(target.kind) && !PROJECT_CHAT_EXECUTORS.includes(targetId)) throw workError(`第 ${index + 1} 步的执行器不支持项目工作区`);
       }
       const text = typeof step.text === 'string' ? step.text.trim() : '';
       if (!text || text.length > 3000) throw workError(`第 ${index + 1} 步说明须为 1–3000 字`);
-      const datasetId = selectedDatasetId(step.datasetId);
-      if (datasetId) requireDataset(datasetId);
       const dependsOn = step.dependsOn === undefined ? [] : step.dependsOn;
       if (!Array.isArray(dependsOn) || dependsOn.length > 3) throw workError(`第 ${index + 1} 步依赖必须是最多 3 项的数组`);
       if (new Set(dependsOn).size !== dependsOn.length || dependsOn.some(item => !Number.isInteger(item) || item < 0 || item >= index)) throw workError(`第 ${index + 1} 步依赖必须引用更早步骤`);
@@ -1343,7 +1294,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       // 契约以前只存不用：执行器根本看不到验收标准和交付清单。
       // 现在把它拼进步骤正文，内置模型、Claude Code、Codex 都能直接读到。
       const brief = contractBrief(contract);
-      return { targetId, target, text: brief ? `${text}\n\n${brief}` : text, rawInput: step.executorInput, datasetId, dependsOn: [...dependsOn], chat, scope, verify, contract, compensate, role };
+      return { targetId, target, text: brief ? `${text}\n\n${brief}` : text, rawInput: step.executorInput, dependsOn: [...dependsOn], chat, scope, verify, contract, compensate, role };
     });
     for (const step of prepared) {
       if (projectRecord && !step.chat && PROJECT_CHAT_EXECUTORS.includes(step.targetId)) {
@@ -1380,15 +1331,14 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         id: randomUUID(),
         title: headline.slice(0, 60),
         status: ready ? (autoStart ? 'queued' : 'awaiting_review') : 'waiting',
-        stage: ready && step.target.requiresDataset !== false ? 'dataset' : 'approval',
+        stage: 'approval',
         source: 'plan',
         executor: step.targetId,
-        summary: ready ? (autoStart ? '自动计划待启动' : step.targetId === 'analysis' ? '请选择数据集并批准计划步骤' : `请确认${step.target.name}计划步骤`) : `计划第 ${index + 1} 步，等待依赖步骤完成`,
+        summary: ready ? (autoStart ? '自动计划待启动' : `请确认${step.target.name}计划步骤`) : `计划第 ${index + 1} 步，等待依赖步骤完成`,
         ...(ready && !autoStart ? { attention: review(step.preview?.risk === 'high' ? previewQuestion(step.target.name, step.preview) : reviewQuestion(step.targetId, step.chat ? (step.chat.executorId === 'window' ? 'window' : 'write') : undefined)) } : {}),
         createdAt: stamp,
         updatedAt: stamp,
         command: step.text,
-        datasetId: step.datasetId,
         executorInput: step.executorInput,
         preview: step.preview,
         ...(step.verify ? { verify: step.verify } : {}),
@@ -1535,7 +1485,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         const ready = {
           ...ticket,
           status: needsReview ? 'awaiting_review' : 'queued',
-          stage: target.requiresDataset === false ? 'approval' : 'dataset',
+          stage: 'approval',
           summary: needsReview ? `计划第 ${step.index + 1}/${stored.steps.length} 步，依赖已满足，等待确认` : '自动计划执行中',
           ...(preview ? { preview } : {}),
           ...(needsReview ? { attention: review(preview?.risk === 'high' ? previewQuestion(target.name, preview) : reviewQuestion(ticket.executor)) } : { attention: undefined }),
@@ -1651,8 +1601,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       if(effects.some(effect=>['pending','running'].includes(effect.status)))continue;
       const failed=effects.find(effect=>effect.status==='failed');
       if(failed){settleLaunchFailure(failed,{code:'LAUNCH_LOST'},'failed');continue;}
-      enqueue(store,{kind:WORK_EFFECT_KIND,key,ticketId:ticket.id,priority:ticket.origin==='mcp'?1:0,payload:{assignmentId:assignment.id,datasetId:ticket.datasetId??null,useAI:ticket.useAI===true}},{now:Date.now()});
-      audit(ticket.id,'launch-reenqueue',assignment.executor||ticket.executor||'analysis','queued');
+      enqueue(store,{kind:WORK_EFFECT_KIND,key,ticketId:ticket.id,priority:ticket.origin==='mcp'?1:0,payload:{assignmentId:assignment.id}},{now:Date.now()});
+      audit(ticket.id,'launch-reenqueue',assignment.executor||ticket.executor||'terminal','queued');
     }
   }
   // 协作任务：把 record 与工单状态、文件是否落盘拼成前端直接能渲染的视图。
@@ -1802,9 +1752,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const reports = detail.reports || [];
       // Store.list 按写入倒序返回，reports[0] 是最新一份；重试/续跑后以它为准。
       for (let index = 0; index < reports.length; index += 1) {
-        const artifacts = reports[index].artifacts || {};
-        const value = artifacts?.acp?.text || artifacts?.cli?.summary || artifacts?.window?.text || artifacts?.report?.summary;
-        if (typeof value === 'string' && value.trim()) return value.trim();
+        const value = reportTextOfReport(reports[index]);
+        if (value) return value;
       }
       return String(reports[0]?.summary || detail.ticket.summary || '').trim();
     } catch { return ''; }
@@ -1837,7 +1786,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     }).chat;
   }
 
-  function dispatchConversationRun(conversation, agentId, text, { turnId, settings = null, datasetId = null, role = 'answer', clientRequestId, executorInput } = {}) {
+  function dispatchConversationRun(conversation, agentId, text, { turnId, settings = null, role = 'answer', clientRequestId, executorInput } = {}) {
     const shared = {
       ...(clientRequestId ? { clientRequestId } : {}),
       conversationId: conversation.id,
@@ -1866,7 +1815,6 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     return api.command({
       text,
       executorId: agentId,
-      ...(datasetId ? { datasetId } : {}),
       ...(settings ? { settings } : {}),
       ...(executorInput && typeof executorInput === 'object' ? { executorInput } : {}),
       ...shared
@@ -1934,15 +1882,20 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   }
 
   // 把模型/权限设置翻译成单个步骤的 executorInput；不同执行器只认识自己的字段。
-  function managedExecutorInput(executorId, { settings, models, executorInputs, prompt, maxSteps = 6, role = '' }) {
+  // efforts 是按 Agent 的强度映射：没有映射时沿用全局 effort，保持桌面旧行为。
+  function managedExecutorInput(executorId, { settings, models, efforts, executorInputs, prompt, maxSteps = 6, role = '' }) {
     const base = executorInputs?.[executorId] && typeof executorInputs[executorId] === 'object' && !Array.isArray(executorInputs[executorId])
       ? { ...executorInputs[executorId] }
       : {};
+    const mapped = efforts && typeof efforts === 'object' && !Array.isArray(efforts);
+    const effort = mapped
+      ? agentEffort(efforts, executorId, executorId === LAGENT_EXECUTOR_ID ? (settings?.effort || 'default') : 'default')
+      : (settings?.effort || '');
     if (executorId === LAGENT_EXECUTOR_ID) {
       return {
         ...base,
         ...(settings?.profileId ? { profileId: settings.profileId } : {}),
-        ...(settings?.effort ? { effort: settings.effort } : {}),
+        ...(effort ? { effort } : {}),
         ...(settings?.permission ? { permission: settings.permission } : {}),
         ...(prompt ? { prompt } : {}),
         ...(role ? { role } : {}),
@@ -1955,7 +1908,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       return {
         ...base,
         ...(model ? { model } : {}),
-        ...(settings?.effort && settings.effort !== 'default' ? { effort: settings.effort } : {}),
+        ...(effort && effort !== 'default' ? { effort } : {}),
         ...(prompt ? { prompt } : {})
       };
     }
@@ -1968,7 +1921,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
    * - 有协作 Agent：Lagent 分工 → 协作方并行 → Lagent 汇总；
    * - 计划模式：Lagent 先拆步骤，再把整体收进同一轮会话。
    */
-  function buildManagedSteps({ goal, collaborators, mode, settings, models, executorInputs, suggestedSteps = [] }) {
+  function buildManagedSteps({ goal, collaborators, mode, settings, models, efforts, executorInputs, suggestedSteps = [] }) {
     // 多 Agent 模式：Lagent 拆解分发 → 各自执行 → 互相验收 → Lagent 汇总。
     if (mode === 'multi') {
       const others = collaborators.filter(id => id !== LAGENT_EXECUTOR_ID);
@@ -1977,7 +1930,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           executorId: LAGENT_EXECUTOR_ID,
           text: `理解并拆解：${goal}`,
           role: 'coordination',
-          executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: coordinatorPrompt(goal, others), maxSteps: 8, role: 'coordination' })
+          executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, efforts, executorInputs, prompt: coordinatorPrompt(goal, others), maxSteps: 8, role: 'coordination' })
         }];
         const workIndices = [];
         others.forEach((executorId, index) => {
@@ -1991,6 +1944,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
             executorInput: managedExecutorInput(executorId, {
               settings,
               models,
+              efforts,
               executorInputs,
               prompt: [
                 '你是这次协作里的执行者之一，负责其中一部分。',
@@ -2019,6 +1973,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
               executorInput: managedExecutorInput(executorId, {
                 settings,
                 models,
+                efforts,
                 executorInputs,
                 prompt: crossTestPrompt(goal, executorId, target),
                 role: 'verify'
@@ -2034,6 +1989,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, {
             settings,
             models,
+            efforts,
             executorInputs,
             prompt: synthesisPrompt(goal, others, { crossTested: testIndices.length > 0 }),
             maxSteps: 10,
@@ -2048,7 +2004,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         .filter(step => step && step.executorId && step.executorId !== LAGENT_EXECUTOR_ID)
         .slice(0, 5);
       if (body.length) {
-        const steps = [{ executorId: LAGENT_EXECUTOR_ID, text: `理解并拆解：${goal}`, role: 'coordination', executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: coordinatorPrompt(goal, body.map(step => step.executorId)), maxSteps: 8, role: 'coordination' }) }];
+        const steps = [{ executorId: LAGENT_EXECUTOR_ID, text: `理解并拆解：${goal}`, role: 'coordination', executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, efforts, executorInputs, prompt: coordinatorPrompt(goal, body.map(step => step.executorId)), maxSteps: 8, role: 'coordination' }) }];
         body.forEach((step, index) => {
           const dependsOn = Array.isArray(step.dependsOn) && step.dependsOn.length
             ? [...new Set([0, ...step.dependsOn.map(item => Number(item) + 1).filter(item => item > 0 && item <= body.length)])]
@@ -2058,11 +2014,11 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
             text: typeof step.text === 'string' ? step.text : `执行任务第 ${index + 1} 部分`,
             role: 'step',
             dependsOn,
-            ...(typeof step.datasetId === 'string' ? { datasetId: step.datasetId } : {}),
             ...(Array.isArray(step.scope) && step.scope.length ? { scope: step.scope } : {}),
             executorInput: managedExecutorInput(step.executorId, {
               settings,
               models,
+              efforts,
               executorInputs,
               prompt: [
                 `整个任务：${goal}`,
@@ -2077,18 +2033,18 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           text: '汇总结果与下一步',
           role: 'synthesis',
           dependsOn: body.map((_, index) => index + 1),
-          executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: synthesisPrompt(goal, body.map(step => step.executorId)), maxSteps: 10, role: 'synthesis' })
+          executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, efforts, executorInputs, prompt: synthesisPrompt(goal, body.map(step => step.executorId)), maxSteps: 10, role: 'synthesis' })
         });
         return steps;
       }
     }
     const others = collaborators.filter(id => id !== LAGENT_EXECUTOR_ID);
-    if (!others.length) return [{ executorId: LAGENT_EXECUTOR_ID, text: goal, role: 'answer', executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs }) }];
+    if (!others.length) return [{ executorId: LAGENT_EXECUTOR_ID, text: goal, role: 'answer', executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, efforts, executorInputs }) }];
     const steps = [{
       executorId: LAGENT_EXECUTOR_ID,
       text: `理解并拆解：${goal}`,
       role: 'coordination',
-      executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: coordinatorPrompt(goal, others), maxSteps: 8, role: 'coordination' })
+      executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, efforts, executorInputs, prompt: coordinatorPrompt(goal, others), maxSteps: 8, role: 'coordination' })
     }];
     others.forEach((executorId, index) => {
       steps.push({
@@ -2099,6 +2055,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         executorInput: managedExecutorInput(executorId, {
           settings,
           models,
+          efforts,
           executorInputs,
           prompt: [
             '你是这次协作里的执行者之一，负责其中一部分。',
@@ -2114,30 +2071,40 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       text: '汇总结果与下一步',
       role: 'synthesis',
       dependsOn: others.map((_, index) => index + 1),
-      executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, executorInputs, prompt: synthesisPrompt(goal, others), maxSteps: 10, role: 'synthesis' })
+      executorInput: managedExecutorInput(LAGENT_EXECUTOR_ID, { settings, models, efforts, executorInputs, prompt: synthesisPrompt(goal, others), maxSteps: 10, role: 'synthesis' })
     });
     return steps;
   }
 
-  function startManagedTurn(conversation, { text, mode = 'auto', agentIds = [], settings = null, models = {}, executorInputs = {}, datasetId = null, clientRequestId = '', autoRun = true, suggestedSteps = [] } = {}) {
+  function startManagedTurn(conversation, { text, mode = 'auto', agentIds = [], settings = null, efforts = null, models = {}, executorInputs = {}, clientRequestId = '', autoRun = true, suggestedSteps = [] } = {}) {
+    // 轮次级幂等：同一个 clientRequestId 已经落过轮次时直接复用，弱网重试不重复派活。
+    const replay = clientRequestId ? conversations.turnByClientRequestId(conversation.id, clientRequestId) : null;
+    if (replay) {
+      const row = conversations.getRaw(conversation.id);
+      const tickets = (replay.runs || []).map(run => { try { return get(run.ticketId); } catch { return { id: run.ticketId }; } });
+      return { conversation: conversationSummary(row), turn: replay, tickets, replayed: true };
+    }
     assertLagentReady();
     const collaborators = normalizeManagedAgents(agentIds).filter(id => id !== LAGENT_EXECUTOR_ID);
     const onlyLagent = collaborators.length === 0;
     const turnId = randomUUID();
     if (onlyLagent) {
+      // Lagent 的强度优先取按 Agent 的映射；没有映射时保留旧的 settings.effort。
+      const lagentSettings = efforts && typeof efforts === 'object' && isEffort(efforts[LAGENT_EXECUTOR_ID])
+        ? { ...(settings || {}), effort: efforts[LAGENT_EXECUTOR_ID] }
+        : settings;
       const ticket = dispatchConversationRun(conversation, LAGENT_EXECUTOR_ID, text, {
         turnId,
-        settings,
-        datasetId,
+        settings: lagentSettings,
         role: 'answer',
         clientRequestId: clientRequestId ? `${clientRequestId}-model`.slice(0, 120) : undefined
       });
       const runs = [{ ticketId: ticket.id, agentId: LAGENT_EXECUTOR_ID, role: 'answer' }];
-      const { turn } = conversations.addTurn(conversation.id, { id: turnId, prompt: text, mode: 'auto', agentIds: [LAGENT_EXECUTOR_ID], runs });
+      const { turn } = conversations.addTurn(conversation.id, { id: turnId, prompt: text, mode: 'auto', agentIds: [LAGENT_EXECUTOR_ID], runs, clientRequestId });
       for (const run of runs) linkConversationTicket(run, conversation.id, turnId, run.agentId, run.role);
       return { conversation: conversationSummary(conversations.getRaw(conversation.id)), turn, tickets: [get(ticket.id)] };
     }
-    const steps = buildManagedSteps({ goal: text, collaborators, mode, settings, models, executorInputs, suggestedSteps });
+    const steps = buildManagedSteps({ goal: text, collaborators, mode, settings, models, efforts, executorInputs, suggestedSteps });
     const plan = startPlan({
       goal: text,
       steps,
@@ -2154,7 +2121,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       .map(step => ({ ticketId: step.ticketId, agentId: step.executorId || LAGENT_EXECUTOR_ID, role: CONVERSATION_ROLES.includes(step.role) ? step.role : 'step' }));
     if (!runs.length) throw workError('受管回合没有生成可执行的步骤', 500);
     const turnMode = mode === 'plan' ? 'plan' : mode === 'multi' ? 'multi' : 'review';
-    const { turn } = conversations.addTurn(conversation.id, { id: turnId, prompt: text, mode: turnMode, agentIds: [LAGENT_EXECUTOR_ID, ...collaborators], runs });
+    const { turn } = conversations.addTurn(conversation.id, { id: turnId, prompt: text, mode: turnMode, agentIds: [LAGENT_EXECUTOR_ID, ...collaborators], runs, clientRequestId });
     for (const run of runs) linkConversationTicket(run, conversation.id, turnId, run.agentId, run.role);
     const synthesis = planSteps.filter(step => step.role === 'synthesis' && step.ticketId).at(-1);
     if (synthesis) conversations.setSynthesis(conversation.id, turnId, { ticketId: synthesis.ticketId, agentId: LAGENT_EXECUTOR_ID });
@@ -2556,14 +2523,13 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         // 未绑定工作文件夹的对话，Agent 就在这个目录里读写。
         workspace,
         tickets,
-        attention:tickets.filter(t=>t.attention).map(t=>({ticketId:t.id,title:t.title,...t.attention})),
-        datasets:store.list('dataset').slice(0,50).map(datasetMetadata),
+        // 执行器已下线的历史待办（例如旧数据分析）不再进收件箱，避免点了批准才发现无法执行。
+        attention:tickets.filter(t=>t.attention&&executors.resolve(t.executor)).map(t=>({ticketId:t.id,title:t.title,...t.attention})),
         projects:projects.listProjects(),
         agents:executors.list().map(({id,name,kind,available,capabilities})=>({id,name,kind,status:(id==='model'?(available&&modelReady()?'available':'needs_setup'):(available?'available':'unavailable')),capabilities})),
         tools:[
           {id:'terminal',name:'受控终端',kind:'terminal',status:'connected',permissions:['git','npm','ls','pwd']},
-          ...executors.list().filter(agent=>['browser','github'].includes(agent.id)).map(agent=>({id:agent.id,name:agent.name,kind:agent.kind,status:agent.available?'connected':'needs_setup',permissions:agent.capabilities||[]})),
-          ...(windowBridge?[{id:'window',name:'窗口 Agent',kind:'window',status:'connected',permissions:['list','read','send']}]:[])
+          ...executors.list().filter(agent=>['browser','github'].includes(agent.id)).map(agent=>({id:agent.id,name:agent.name,kind:agent.kind,status:agent.available?'connected':'needs_setup',permissions:agent.capabilities||[]}))
         ],
         policy:JSON.parse(JSON.stringify(policy)),
         // 主控状态：前端据此在未配置模型时禁用发送并给出设置入口。
@@ -2713,7 +2679,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         const target=executors.requireAvailable(chat.executorId);
         if(chat.executorId==='window'&&!windowBridge)throw workError('窗口桥未启用',503);
         guard(chat.executorId,null,'project/chat');
-        if(target.kind!=='cli'&&chat.executorId!=='window')throw workError('该执行器暂不支持项目对话',400);
+        if(!['cli','model'].includes(target.kind)&&chat.executorId!=='window')throw workError('该执行器暂不支持项目对话',400);
       }catch(error){
         try{projects.deleteChat(chat.id);}catch{/* 回滚失败不掩盖原错误。 */}
         throw error;
@@ -3051,6 +3017,12 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     listReports(input={}){return reportCenter.list(input||{});},
     getReport(id){return reportCenter.detail(id);},
     reportMarkdown(id){return reportCenter.markdown(id);},
+    // 报告全文：直接读原始报告行，和会话结论共用同一套 artifacts 优先级。
+    reportText(id){
+      const report=db.get('report',id);
+      if(!report)throw workError('报告不存在',404);
+      return {ticketId:report.ticketId||null,text:reportTextOfReport(report)};
+    },
     renameConversation(id,input){return {conversation:conversationSummary(conversations.getRaw(conversations.rename(id,input).id))};},
     deleteConversation(id){
       const result=conversations.remove(id);
@@ -3078,8 +3050,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       if(!agentIds.length)agentIds=normalizeManagedAgents(row.participants||[]);
       if(!agentIds.length)throw workError('请至少选择一个 Agent',400);
       const settings=normalizeCommandSettings(input?.settings);
-      const datasetId=selectedDatasetId(input?.datasetId);
-      if(datasetId)requireDataset(datasetId);
+      // 按 Agent 的强度映射：键只保留本轮参与者，非法档位直接 400。
+      const efforts=normalizeEfforts(input?.efforts,agentIds);
       const executorInputs=input?.executorInputs&&typeof input.executorInputs==='object'&&!Array.isArray(input.executorInputs)?input.executorInputs:{};
       const models=input?.models&&typeof input.models==='object'&&!Array.isArray(input.models)?input.models:{};
       let suggestedSteps=[];
@@ -3089,7 +3061,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           suggestedSteps=Array.isArray(suggestion?.steps)?suggestion.steps:[];
         }catch{/* 规划器不可用时退回通用分工，不能让主控缺席。 */}
       }
-      return startManagedTurn(row,{text,mode,agentIds,settings,models,executorInputs,datasetId,suggestedSteps,
+      return startManagedTurn(row,{text,mode,agentIds,settings,efforts,models,executorInputs,suggestedSteps,
         clientRequestId:typeof input?.clientRequestId==='string'?input.clientRequestId.trim():'',
         autoRun:input?.autoRun!==false});
     },
@@ -3201,7 +3173,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           :{...base,prompt,...(settings.model?{model:settings.model}:{}),...(settings.effort?{effort:settings.effort}:{}),...(settings.permission?{write:settings.permission!=='read'}:{})};
       }
       // 非项目对话没有工作目录，但仍要遵守配置档里的工作约定（额度、审查口径、禁止项）。
-      if(!project&&(activeId==='model'||active.kind==='cli')){
+      if(!project&&(activeId==='model'||['cli','model'].includes(active.kind))){
         const libraryBlock=buildLibraryContext(activeLibrary(),{executorId:activeId});
         // 非项目会话没有工作目录，只带全局技能。
         const globalSkills=activeId==='model'?modelSkillIndex(''):[];
@@ -3220,8 +3192,6 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         ?normalizeExecutorInput(activeId,active,projectInput,trigger.text)
         :normalizeExecutorInput(activeId,active,rawInput,trigger.text);
       enforceBrowserHost(activeId, executorInput, policy.limits?.browserHosts);
-      const datasetId=selectedDatasetId(input?.datasetId);
-      if(datasetId)requireDataset(datasetId);
       const verify=normalizeVerify(input?.verify);
       const contract=normalizeContract(input?.contract);
       const origin=input?.origin==='mcp'?'mcp':'ui';
@@ -3229,17 +3199,16 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const prior=trigger.clientRequestId&&db.list('ticket').find(t=>store.get('work-control',t.id)?.clientRequestId===trigger.clientRequestId);
       if(prior){
         const control=store.get('work-control',prior.id);
-        if((control?.executor||'analysis')!==activeId||control?.command!==trigger.text||(control?.datasetId??null)!==(datasetId??null)||(control?.projectChatId??null)!==(project?.chat.id??null)||!sameValue(control?.executorInput,executorInput))throw workError('此请求编号已用于不同指令、数据集或执行器，请使用新的 clientRequestId',409);
+        if((control?.executor||'terminal')!==activeId||control?.command!==trigger.text||(control?.projectChatId??null)!==(project?.chat.id??null)||!sameValue(control?.executorInput,executorInput))throw workError('此请求编号已用于不同指令或执行器，请使用新的 clientRequestId',409);
         return publicTicket(prior);
       }
       const stamp=now();
-      const direct=active.requiresDataset===false;
-      const cli=active.kind==='cli';
-      // 不需要数据集、且策略没有要求先批准时直接开跑；高风险动作（窗口键入等）始终先确认。
-      const auto=direct&&policy.requireApproval!==true&&preview.risk!=='high'&&!(origin==='mcp'&&preview.risk!=='low');
+      const cli=['cli','model'].includes(active.kind);
+      // 策略没有要求先批准时直接开跑；高风险动作（窗口键入等）始终先确认。
+      const auto=policy.requireApproval!==true&&preview.risk!=='high'&&!(origin==='mcp'&&preview.risk!=='low');
       // 内置模型 Agent 的能力取决于权限模式，文案不能说「只读」。
       const modelCopy=executorInput?.write===true?'执行中（会在项目目录内读写文件）':'执行中（只读项目文件）';
-      const confirmCopy=preview.risk==='high'?previewQuestion(active.name,preview):activeId==='browser'?'请确认受控浏览器读取后批准执行':activeId==='github'?'请确认 GitHub 只读查询后批准执行':activeId==='terminal'?'请确认终端命令后批准执行':activeId==='model'?modelCopy:cli?'请确认只读 CLI 任务后批准执行':'请选择数据集并批准开始';
+      const confirmCopy=preview.risk==='high'?previewQuestion(active.name,preview):activeId==='browser'?'请确认受控浏览器读取后批准执行':activeId==='github'?'请确认 GitHub 只读查询后批准执行':activeId==='terminal'?'请确认终端命令后批准执行':activeId==='model'?modelCopy:cli?'请确认只读 CLI 任务后批准执行':'请确认执行此任务';
       // 标题只取第一行：把整段多行需求塞进标题会让侧栏和工单卡片变成一大坨。
       const headline=trigger.text.split('\n').map(line=>line.trim()).find(Boolean)||trigger.text;
       // 会话归属：一条命令属于哪个会话、哪一轮、由哪个 Agent 作答。
@@ -3248,7 +3217,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const turnId=typeof input?.turnId==='string'&&input.turnId.trim()?input.turnId.trim().slice(0,120):'';
       const agentId=typeof input?.agentId==='string'&&input.agentId.trim()?input.agentId.trim().slice(0,60):activeId;
       const role=['synthesis','step','verify'].includes(input?.role)?input.role:'answer';
-      const record={id:randomUUID(),title:(typeof input?.title==='string'&&input.title.trim()?input.title.trim():headline).slice(0,60),status:auto?'queued':'awaiting_review',stage:direct?(auto?'launch':'approval'):'dataset',source:'manual',executor:activeId,summary:auto?(activeId==='model'?modelCopy:activeId==='terminal'?'终端命令执行中':cli?'CLI 执行中':'执行中'):confirmCopy,attention:auto?undefined:review(preview.risk==='high'?previewQuestion(active.name,preview):reviewQuestion(activeId,project?((projectChatView?.executorId||project.chat.executorId)==='window'?'window':'write'):undefined)),createdAt:stamp,updatedAt:stamp,command:trigger.text,clientRequestId:trigger.clientRequestId,origin,datasetId,executorInput,preview,...(verify?{verify}:{}),...(contract?{contract}:{}),...(project?{projectChatId:project.chat.id}:{}),...(conversationId?{conversationId,turnId:turnId||null,agentId,role}:{})};
+      const record={id:randomUUID(),title:(typeof input?.title==='string'&&input.title.trim()?input.title.trim():headline).slice(0,60),status:auto?'queued':'awaiting_review',stage:auto?'launch':'approval',source:'manual',executor:activeId,summary:auto?(activeId==='model'?modelCopy:activeId==='terminal'?'终端命令执行中':cli?'CLI 执行中':'执行中'):confirmCopy,attention:auto?undefined:review(preview.risk==='high'?previewQuestion(active.name,preview):reviewQuestion(activeId,project?((projectChatView?.executorId||project.chat.executorId)==='window'?'window':'write'):undefined)),createdAt:stamp,updatedAt:stamp,command:trigger.text,clientRequestId:trigger.clientRequestId,origin,executorInput,preview,...(verify?{verify}:{}),...(contract?{contract}:{}),...(project?{projectChatId:project.chat.id}:{}),...(conversationId?{conversationId,turnId:turnId||null,agentId,role}:{})};
       // write() 返回的是 publicTicket（会剥掉 executorInput），直接执行必须用原始记录，否则会写回一份空的执行输入。
       const created=write(record);
       if(project)touchProjectChat(project.chat,{lastTicketId:created.id});
@@ -3285,7 +3254,6 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const projectInput=projectExecutorInput(project.chat,project.project,text,{},active);
       const executorInput=normalizeExecutorInput(activeId,active,projectInput,text);
       enforceBrowserHost(activeId,executorInput,policy.limits?.browserHosts);
-      if(active.requiresDataset!==false)throw workError('建议工单暂不支持需要数据集的执行器',400);
       const preview=buildPreview({executor:active,executorInput,project:project.project,fallbackText:text});
       const title=(typeof body.title==='string'&&body.title.trim()?body.title.trim():text.split('\n')[0]).slice(0,60);
       const question=(typeof body.question==='string'&&body.question.trim()?body.question.trim():`Routine「${title}」建议执行，是否批准？`).slice(0,300);
@@ -3335,7 +3303,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         const kinds=new Map(executors.list().map(agent=>[agent.id,agent.kind]));
         allowedExecutors=allowedExecutors.filter(id=>{
           if(id==='window')return projectWindows.length>0||project?.chat.executorId==='window';
-          return PROJECT_CHAT_EXECUTORS.includes(id)||kinds.get(id)==='tool'||id==='analysis';
+          return PROJECT_CHAT_EXECUTORS.includes(id)||kinds.get(id)==='tool';
         });
       }
       if(!allowedExecutors.length)throw workError(projectRow?'项目中没有可用的 Agent':'没有可用于规划的执行器');
@@ -3343,25 +3311,21 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const nowMs=Date.now();
       while(planSuggestionTimes.length&&planSuggestionTimes[0]<=nowMs-60000)planSuggestionTimes.shift();
       if(planSuggestionTimes.length>=5)throw workError('规划请求过于频繁，请稍后再试',429);
-      const datasets=store.list('dataset').slice(0,10).map(dataset=>({id:dataset.id,name:typeof dataset.name==='string'?dataset.name.slice(0,120):dataset.id}));
       // 窗口枚举依赖桌面桥；桥不可用时按「没有可分发窗口」处理，不能让拆解直接 502。
       let windows=[];
       if(windowBridge){try{windows=await windowBridge.listWindows();}catch{/* 忽略窗口桥错误，继续用其余执行器规划。 */}}
-      const analysis=analyzeTask({goal,executors:allowedExecutors,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch}}:{}),hasDataset:datasets.length>0,hasWindow:windows.length>0});
-      const result=await options.planner({goal,executors:allowedExecutors,agents:agentDescriptors,datasets,windows,analysis,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch,memory:memory.digest(projectRow.id,{limit:5}),chats:projectChats.map(chat=>({executorId:chat.executorId,title:chat.title,window:chat.window?.process||null}))}}:{})});
+      const analysis=analyzeTask({goal,executors:allowedExecutors,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch}}:{}),hasWindow:windows.length>0});
+      const result=await options.planner({goal,executors:allowedExecutors,agents:agentDescriptors,windows,analysis,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch,memory:memory.digest(projectRow.id,{limit:5}),chats:projectChats.map(chat=>({executorId:chat.executorId,title:chat.title,window:chat.window?.process||null}))}}:{})});
       const steps=Array.isArray(result?.steps)?result.steps:[];
       if(steps.length<2||steps.length>5)throw workError('规划模型必须返回 2–5 个步骤',502);
       const allowedSet=new Set(allowedExecutors);
       const kindsOf=new Map(executors.list().map(agent=>[agent.id,agent.kind]));
-      const datasetIds=new Set(datasets.map(dataset=>dataset.id));
       const safeSteps=steps.map((step,index)=>{
         const executor=typeof step?.executorId==='string'?step.executorId.trim():'';
         if(!allowedSet.has(executor))throw workError(`规划第 ${index+1} 步使用了不可用执行器`,502);
         if(projectRow&&!PROJECT_CHAT_EXECUTORS.includes(executor)&&kindsOf.get(executor)==='cli')throw workError(`规划第 ${index+1} 步的执行器不支持项目工作区`,502);
         const text=typeof step?.text==='string'?step.text.trim():'';
         if(!text||text.length>500)throw workError(`规划第 ${index+1} 步说明无效`,502);
-        const datasetId=typeof step?.datasetId==='string'?step.datasetId.trim():'';
-        if(datasetId&&!datasetIds.has(datasetId))throw workError(`规划第 ${index+1} 步引用了未知数据集`,502);
         const dependsOn=step?.dependsOn===undefined?[]:step.dependsOn;
         if(!Array.isArray(dependsOn)||dependsOn.length>3||new Set(dependsOn).size!==dependsOn.length||dependsOn.some(item=>!Number.isInteger(item)||item<0||item>=index))throw workError(`规划第 ${index+1} 步依赖无效`,502);
         let executorInput;
@@ -3382,7 +3346,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         if(step?.verify!==undefined){try{verify=normalizeVerify(step.verify);}catch(error){throw workError(`规划第 ${index+1} 步的验收命令无效：${error.message}`,502);}}
         let contract;
         if(step?.contract!==undefined){try{contract=normalizeContract(step.contract);}catch(error){throw workError(`规划第 ${index+1} 步的任务契约无效：${error.message}`,502);}}
-        return {executorId:executor,text,...(datasetId?{datasetId}:{}),...(executorInput?{executorInput}:{}),...(scope.length?{scope}:{}),...(dependsOn.length?{dependsOn:[...dependsOn]}:{}),...(verify?{verify}:{}),...(contract?{contract}:{})};
+        return {executorId:executor,text,...(executorInput?{executorInput}:{}),...(scope.length?{scope}:{}),...(dependsOn.length?{dependsOn:[...dependsOn]}:{}),...(verify?{verify}:{}),...(contract?{contract}:{})};
       });
       planSuggestionTimes.push(nowMs);
       audit(null,'plan/suggest','planner','suggested',`步骤 ${safeSteps.length}`);
@@ -3398,7 +3362,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const requested=Array.isArray(input?.executors)?input.executors.filter(id=>typeof id==='string'):null;
       const scoped=requested&&requested.length?available.filter(id=>requested.includes(id)):available;
       const pool=scoped.length?scoped:available;
-      const local=analyzeTask({goal,executors:pool,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch}}:{}),hasDataset:store.list('dataset').length>0,hasWindow:input?.hasWindow===true});
+      const local=analyzeTask({goal,executors:pool,...(projectRow?{project:{name:projectRow.name,path:projectRow.path,gitBranch:projectRow.gitBranch}}:{}),hasWindow:input?.hasWindow===true});
       const availability=brain?.availability?.()||{ok:false,reason:'没有配置模型'};
       local.modelAvailable=Boolean(availability.ok);
       if(!availability.ok)return {...local,source:'local'};
@@ -3700,7 +3664,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         return {...row,...(beat&&nowMs-beat>heartbeatStaleMs?{stalled:true}:{})};
       });
       const stalled=rows.some(row=>row.stalled);
-      return {ticket:stalled?{...ticket,stalled:true}:ticket,assignments:rows,reports:related('report',id),team:activeId==='analysis'?projectTeamTask(taskFor(id)):null,...(activity.length?{activity}:{}),...(project?{project:{id:project.id,name:project.name,path:project.path,gitBranch:project.gitBranch||''},projectChat:projectChat?{id:projectChat.id,title:projectChat.title,executorId:projectChat.executorId}:null}:{})};
+      return {ticket:stalled?{...ticket,stalled:true}:ticket,assignments:rows,reports:related('report',id),team:projectTeamTask(taskFor(id)),...(activity.length?{activity}:{}),...(project?{project:{id:project.id,name:project.name,path:project.path,gitBranch:project.gitBranch||''},projectChat:projectChat?{id:projectChat.id,title:projectChat.title,executorId:projectChat.executorId}:null}:{})};
     },
     reviewTeamNode(id,nodeId,decision){return mutateTeam(id,task=>reviewTeamNode(task,nodeId,decision));},
     // 一条工单的完整时间线：执行、报告、用量、事件按时间排序，失败时能直接定位到哪一步。
@@ -3758,8 +3722,6 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const brief=handoffBrief(handoff,{sourceTitle:source.title,sourceSummary:source.summary});
       const promptText=brief?`${baseText}\n\n${brief}`:baseText;
       const frozenInput=normalizeExecutorInput(targetId,target,input.executorInput,promptText);
-      const requestedDatasetId=selectedDatasetId(input.datasetId);
-      if(requestedDatasetId)requireDataset(requestedDatasetId);
       const titleFor=sourceTicket=>{
         if(input.text===undefined)return typeof sourceTicket.title==='string'?sourceTicket.title.slice(0,100):'交接工单';
         if(typeof input.text!=='string'||!input.text.trim()||input.text.length>3000)throw workError('交接 text 必须是非空字符串且不超过 3000 字');
@@ -3779,13 +3741,6 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         if(current.status!=='completed')throw workError('只有已完成工单可以交接',409);
         const depth=Number.isSafeInteger(current.handoffDepth)?current.handoffDepth:0;
         if(depth>=3)throw workError('交接深度已达到上限',409);
-        const sourceDatasetId=selectedDatasetId(current.datasetId);
-        let datasetId=requestedDatasetId;
-        if(target.requiresDataset!==false&&sourceDatasetId){
-          requireDataset(sourceDatasetId);
-          if(requestedDatasetId&&requestedDatasetId!==sourceDatasetId)throw workError('数据集已选定，不能切换',409);
-          datasetId=sourceDatasetId;
-        }
         const stamp=now();
         const title=titleFor(current);
         const preview=buildPreview({executor:target,executorInput:frozenInput,project:projectByPath(frozenInput?.workspace)||null,fallbackText:title});
@@ -3793,14 +3748,13 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           id:randomUUID(),
           title,
           status:'awaiting_review',
-          stage:target.requiresDataset===false?'approval':'dataset',
+          stage:'approval',
           source:'handoff',
           executor:targetId,
           summary:`已交接至${target.name}，等待人工确认`,
           attention:review(reviewQuestion(targetId)),
           createdAt:stamp,
           updatedAt:stamp,
-          datasetId,
           parentTicketId:current.id,
           chainRootId:current.chainRootId||current.id,
           handoffDepth:depth+1,
@@ -3818,8 +3772,6 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           clientRequestId:undefined,
           command:title,
           lastAction:undefined,
-          datasetId:child.datasetId,
-          useAI:false,
           executor:targetId,
           executorInput:frozenInput,
           projectChatId:child.projectChatId||null
@@ -3850,18 +3802,12 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       if(!active)throw workError('执行器不存在',400);
       if(['approve','retry'].includes(action))guard(activeId,id,action);
       const task=active.get?.(assignment?.sessionId);
-      const requested=selectedDatasetId(input?.datasetId);
       // 同一个动作重复点：approve 之外大多幂等，直接返回当前状态。
       // 但「重试」要分清两种情形：还在跑的时候连点=没事发生；上一次已经失败/被挡住，再点必须真的重跑。
       const retryable = ['failed', 'blocked', 'cancelled', 'waiting'].includes(ticket.status);
       if (action !== 'retry' && ticket.lastAction === action && !(action === 'approve' && ticket.status === 'awaiting_review')) return publicTicket(ticket);
       if (action === 'retry' && ticket.lastAction === 'retry' && !retryable) return publicTicket(ticket);
       assertWorkAction(ticket.status,action);
-      if(requested)requireDataset(requested);
-      if(action==='approve'&&task) {
-        const frozen=selectedDatasetId(ticket.datasetId??task.datasetId);
-        if(requested&&requested!==frozen)throw workError('数据集已选定，不能切换');
-      }
       const next={...ticket,lastAction:action,updatedAt:now()};
       // 重试/继续表示用户撤销了上次中断：中断标记只属于那一次执行。
       if(['approve','retry'].includes(action)){delete next.interrupted;delete next.interruptedAt;}
@@ -3898,7 +3844,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         // 执行器返回 false 表示挂起的确认已经失效（服务重启或任务已结束），
         // 这时不能再把工单写成 working，否则会永远卡在那里。
         if(active.approve(task,input,ticket.approvalSnapshot)===false)throw workError('审批请求已失效，请先停止并重试这个工单',409);
-        return write({...next,status:'working',stage:activeId==='terminal'?'terminal':active.kind==='cli'?'cli':active.kind==='tool'?'tool':'analysis',approvalSnapshot:undefined,attention:undefined,summary:activeId==='terminal'?'终端命令执行中':active.kind==='cli'?'只读 CLI 执行中':active.kind==='tool'?(activeId==='browser'?'浏览器执行中':activeId==='github'?'GitHub 查询中':`${active.name}执行中`):'分析已继续'});
+        return write({...next,status:'working',stage:activeId==='terminal'?'terminal':['cli','model'].includes(active.kind)?'cli':['tool','window'].includes(active.kind)?'tool':'terminal',approvalSnapshot:undefined,attention:undefined,summary:activeId==='terminal'?'终端命令执行中':activeId==='model'?'Lagent 已继续':active.kind==='cli'?'只读 CLI 执行中':['tool','window'].includes(active.kind)?(activeId==='browser'?'浏览器执行中':activeId==='github'?'GitHub 查询中' :`${active.name}执行中`):'已继续'});
       }
       if(action==='stop'){
         if(outboxEnabled)cancelTicketEffects(store,id,{now:Date.now()});

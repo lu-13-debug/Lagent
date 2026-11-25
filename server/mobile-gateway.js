@@ -1,8 +1,11 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { tokenHash } from './accounts.js';
+import { projectFileMime } from './work/project-files.js';
+import { clipReportText, reportTextOfReport } from './work/report-text.js';
+import { isEffort } from './work/efforts.js';
 
 export const MOBILE_PAIR_TTL_MS = 5 * 60 * 1000;
 export const MOBILE_DEVICE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
@@ -12,6 +15,11 @@ export const MOBILE_HEARTBEAT_MS = 15 * 1000;
 export const MOBILE_MAX_CLAIM_ATTEMPTS = 5;
 export const MOBILE_NOTIFICATION_MAX = 200;
 export const MOBILE_NOTIFICATION_DEFAULT_LIMIT = 50;
+// 下载链接是短期能力票据：手机 WebView 的下载器没法带 Bearer 头，
+// 所以用签名 URL 代替设备 token，10 分钟内有效，且只能取这一个文件。
+export const MOBILE_FILE_TOKEN_TTL_MS = 10 * 60 * 1000;
+export const MOBILE_TICKET_FILE_MAX = 100;
+const MOBILE_FILE_SECRET = randomBytes(32);
 
 export const mobileError = (message, status = 400) => Object.assign(new Error(message), { status });
 const iso = value => new Date(value).toISOString();
@@ -137,7 +145,7 @@ function mobileContract(value) {
 
 export function sanitizeMobileTicket(value) {
   const source = object(value);
-  const ticket = pick(source, ['id', 'status', 'stage', 'source', 'executor', 'datasetId', 'createdAt', 'updatedAt']);
+  const ticket = pick(source, ['id', 'status', 'stage', 'source', 'executor', 'createdAt', 'updatedAt']);
   if (!ticket) return null;
   const title = text(source?.title, 100);
   const summary = text(source?.summary, 400);
@@ -175,8 +183,101 @@ const sanitizeReport = value => {
   if (!report) return null;
   const summary = text(source?.summary, 400);
   if (summary !== undefined) report.summary = summary;
+  // 正文只从 artifacts 取；回落时用已截断的 400 字摘要，保证不比旧版多暴露原始字段。
+  const { text: body, truncated } = clipReportText(reportTextOfReport({ artifacts: object(source?.artifacts), summary }), 20000);
+  if (body) report.text = body;
+  if (truncated) report.truncated = true;
   return report;
 };
+
+const CONVERSATION_STATUS = new Set(['waiting', 'working', 'awaiting_review', 'completed', 'failed', 'cancelled']);
+const activityKinds = new Set(['thought', 'tool', 'observation', 'error', 'permission']);
+
+export const sanitizeMobileSettings = value => {
+  const source = object(value);
+  if (!source) return null;
+  const result = {};
+  const profileId = text(source.profileId, 100);
+  if (profileId && /^[A-Za-z0-9._:-]{1,100}$/.test(profileId)) result.profileId = profileId;
+  if (isEffort(source.effort)) result.effort = source.effort;
+  return Object.keys(result).length ? result : null;
+};
+
+// 键不属于本轮 Agent 的直接丢弃；键属于但档位非法才是 400。
+export const sanitizeMobileEfforts = (value, agentIds = []) => {
+  if (value === undefined || value === null) return undefined;
+  if (!object(value)) throw mobileError('efforts 必须是对象', 400);
+  const allowed = new Set(Array.isArray(agentIds) ? agentIds : []);
+  const result = {};
+  for (const [key, effort] of Object.entries(value)) {
+    if (!allowed.has(key)) continue;
+    if (!isEffort(effort)) throw mobileError('思考强度无效', 400);
+    result[key] = effort;
+  }
+  return Object.keys(result).length ? result : undefined;
+};
+
+export function sanitizeMobileProject(value) {
+  const source = object(value);
+  const project = pick(source, ['id', 'name', 'gitBranch']);
+  if (!project?.id) return null;
+  const projectPath = text(source.path, 500);
+  if (projectPath !== undefined) project.path = projectPath;
+  return project;
+}
+
+export function sanitizeMobileConversationSummary(value) {
+  const source = object(value);
+  const conversation = pick(source, ['id', 'title', 'goal', 'projectId', 'createdAt', 'updatedAt']);
+  if (!conversation?.id) return null;
+  conversation.status = CONVERSATION_STATUS.has(source.status) ? source.status : 'waiting';
+  conversation.turnCount = Math.max(0, integer(source.turnCount) || 0);
+  const lastPrompt = text(source.lastPrompt, 4000);
+  if (lastPrompt !== undefined) conversation.lastPrompt = lastPrompt;
+  if (['auto', 'multi', 'plan', 'review'].includes(source.lastMode)) conversation.lastMode = source.lastMode;
+  conversation.participants = Array.isArray(source.participants)
+    ? source.participants.filter(item => typeof item === 'string').slice(0, 4).map(item => item.slice(0, 60))
+    : [];
+  return conversation;
+}
+
+export function sanitizeMobileTurn(value) {
+  const source = object(value);
+  const turn = pick(source, ['id', 'index', 'prompt', 'mode', 'createdAt']);
+  if (!turn?.id) return null;
+  if (!['auto', 'multi', 'plan', 'review'].includes(source.mode)) turn.mode = 'auto';
+  turn.agentIds = Array.isArray(source.agentIds) ? source.agentIds.filter(item => typeof item === 'string').slice(0, 4).map(item => item.slice(0, 60)) : [];
+  turn.runs = Array.isArray(source.runs)
+    ? source.runs.slice(0, 8).map(run => pick(run, ['ticketId', 'agentId', 'role'])).filter(run => run?.ticketId)
+    : [];
+  if (typeof source.synthesisTicketId === 'string') turn.synthesisTicketId = source.synthesisTicketId.slice(0, 100);
+  return turn;
+}
+
+export function sanitizeMobileActivity(value) {
+  const source = object(value);
+  if (!source || !activityKinds.has(source.kind)) return null;
+  const result = { kind: source.kind };
+  const body = text(source.text, 1200);
+  if (body !== undefined) result.text = body;
+  const detail = text(source.detail, 600);
+  if (detail !== undefined) result.detail = detail;
+  if (typeof source.at === 'string') result.at = source.at.slice(0, 40);
+  if (typeof source.requestId === 'string') result.requestId = source.requestId.slice(0, 120);
+  if (typeof source.decided === 'boolean') result.decided = source.decided;
+  return result;
+}
+
+export function pageMobileTurns(turns, { limit = 30, before = null } = {}) {
+  const list = Array.isArray(turns) ? turns : [];
+  const size = Math.max(1, Math.min(50, Number(limit) || 30));
+  const visible = before === null || before === undefined
+    ? list.slice(-size)
+    : list.filter(turn => (integer(turn.index) || 0) < before).slice(-size);
+  const first = visible[0];
+  const hasMore = Boolean(first) && list.some(turn => (integer(turn.index) || 0) < first.index);
+  return { turns: visible, hasMore, nextBefore: hasMore ? first.index : null };
+}
 
 export function sanitizeMobilePolicy(value) {
   const source = object(value);
@@ -247,7 +348,6 @@ export function sanitizeMobileBootstrap(value, notificationState = {}) {
     capabilities: { work: true },
     tickets,
     attention: tickets.filter(ticket => ticket.attention).map(ticket => ({ ticketId: ticket.id, ...ticket.attention })),
-    datasets: Array.isArray(source.datasets) ? source.datasets.slice(0, 50).map(item => pick(item, ['id', 'name', 'rowCount', 'source'])).filter(Boolean) : [],
     agents: Array.isArray(source.agents) ? source.agents.slice(0, 50).map(item => {
       const agent = pick(item, ['id', 'name', 'kind', 'status']);
       if (Array.isArray(object(item)?.capabilities)) agent.capabilities = item.capabilities.filter(entry => typeof entry === 'string').slice(0, 20).map(entry => entry.slice(0, 80));
@@ -265,6 +365,20 @@ export function sanitizeMobileBootstrap(value, notificationState = {}) {
       if (currentStep === undefined || currentStep < 0 || totalSteps === undefined || totalSteps < 2 || totalSteps > 5) return null;
       return { id, goal, status, currentStep, totalSteps, updatedAt: timestamp(plan?.updatedAt) };
     }).filter(Boolean) : [],
+    // 工作文件夹只来自电脑端已导入项目；凭据、路径列表等私有字段一律不下发。
+    projects: Array.isArray(source.projects) ? source.projects.slice(0, 100).map(sanitizeMobileProject).filter(Boolean) : [],
+    conversations: Array.isArray(source.conversations) ? source.conversations.slice(0, 30).map(sanitizeMobileConversationSummary).filter(Boolean) : [],
+    lagent: (() => {
+      const state = object(source.lagent);
+      if (!state) return null;
+      return {
+        name: text(state.name, 60) || 'Lagent',
+        executorId: text(state.executorId, 60) || 'model',
+        ready: state.ready === true,
+        configured: state.configured === true,
+        ...(text(state.reason, 300) ? { reason: text(state.reason, 300) } : {})
+      };
+    })(),
     notifications: { unread: unread === undefined ? 0 : Math.max(0, Math.min(MOBILE_NOTIFICATION_MAX, unread)) }
   };
 }
@@ -279,6 +393,9 @@ export function sanitizeMobileDetail(value) {
   };
   const team = sanitizeMobileTeam(source.team);
   if (team) result.team = team;
+  if (Array.isArray(source.activity)) result.activity = source.activity.slice(-40).map(sanitizeMobileActivity).filter(Boolean);
+  const project = sanitizeMobileProject(source.project);
+  if (project) result.project = project;
   return result;
 }
 
@@ -286,11 +403,171 @@ export function mobileWorkEvent(event) {
   const payload = object(event?.payload) || {};
   const safe = pick(payload, ['status']);
   if (typeof payload.id === 'string' && event?.type === 'report') safe.reportId = payload.id.slice(0, 100);
+  // 思考过程走同一条 SSE，只透出白名单字段并限制长度。
+  if (Array.isArray(payload.activity)) {
+    const activity = payload.activity.slice(-40).map(sanitizeMobileActivity).filter(Boolean);
+    if (activity.length) safe.activity = activity;
+  }
   return {
     type: String(event?.type || 'event').slice(0, 40),
     ticketId: typeof event?.ticketId === 'string' ? event.ticketId.slice(0, 100) : null,
     payload: safe
   };
+}
+
+const fileSignature = body => createHmac('sha256', MOBILE_FILE_SECRET).update(body).digest('base64url');
+
+function signMobileFile(payload) {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  return `${body}.${fileSignature(body)}`;
+}
+
+function readMobileFile(value) {
+  if (typeof value !== 'string' || value.length < 16 || value.length > 4096) return null;
+  const dot = value.lastIndexOf('.');
+  if (dot <= 0) return null;
+  const body = value.slice(0, dot);
+  const actual = Buffer.from(value.slice(dot + 1));
+  const expected = Buffer.from(fileSignature(body));
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+  let payload;
+  try { payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')); } catch { return null; }
+  if (!payload || typeof payload !== 'object') return null;
+  if (typeof payload.ownerId !== 'string' || !payload.ownerId) return null;
+  if (typeof payload.projectId !== 'string' || !payload.projectId) return null;
+  if (typeof payload.path !== 'string' || !payload.path) return null;
+  if (typeof payload.name !== 'undefined' && typeof payload.name !== 'string') return null;
+  if (typeof payload.mime !== 'undefined' && typeof payload.mime !== 'string') return null;
+  if (!Number.isFinite(payload.expiresAt) || payload.expiresAt <= Date.now()) return null;
+  return payload;
+}
+
+// 云端在进入账号工作区之前，用签名下载令牌确认归属账号；
+// 这样系统下载器不需要携带设备 token，也不会把设备凭据放进 URL。
+export function mobileFileOwner(value) {
+  return readMobileFile(value)?.ownerId || null;
+}
+
+function fileDisposition(name, download) {
+  // 中文文件名用 RFC 5987 的 filename*，同时保留 ASCII 回退，兼容老下载器。
+  const fallback = String(name || 'file').replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  const encoded = encodeURIComponent(String(name || 'file')).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${download ? 'attachment' : 'inline'}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
+const dirnamePosix = value => {
+  const slash = value.lastIndexOf('/');
+  return slash < 0 ? '' : value.slice(0, slash);
+};
+
+function cleanTicketPath(value) {
+  if (typeof value !== 'string') return '';
+  const normalized = value.replaceAll('\\', '/').trim().replace(/^\.\/+/, '');
+  if (!normalized || normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized) || normalized.split('/').includes('..')) return '';
+  return normalized;
+}
+
+// 工单 → 项目：优先用 detail 的项目对话，计划步骤再回落到 plan.projectId。
+function ticketProjectOf(engine, ticketId) {
+  const detail = engine.detail(ticketId);
+  if (!detail?.ticket) throw mobileError('工单不存在', 404);
+  let project = detail.project || null;
+  if (!project) {
+    const projectId = engine.ticketProjectId?.(ticketId) || (detail.ticket.planId ? engine.planProjectId?.(detail.ticket.planId) : null);
+    if (projectId) project = engine.getProject?.(projectId) || null;
+  }
+  return { detail, ticket: detail.ticket, project };
+}
+
+// 只暴露这个工单的变更记录里记录过的文件，而不是整个项目目录；
+// 手机端没有文件浏览器，列出来的每一项都应当能对应到某次执行。
+function ticketFilePaths(engine, projectId, ticketId) {
+  const changes = Array.isArray(engine.projectChanges?.(projectId)) ? engine.projectChanges(projectId) : [];
+  const wanted = new Set();
+  const paths = [];
+  for (const change of changes) {
+    if (!change || change.ticketId !== ticketId) continue;
+    for (const value of Array.isArray(change.files) ? change.files : []) {
+      const cleaned = cleanTicketPath(value);
+      if (!cleaned || wanted.has(cleaned)) continue;
+      wanted.add(cleaned);
+      paths.push(cleaned);
+      if (paths.length >= MOBILE_TICKET_FILE_MAX) break;
+    }
+    if (paths.length >= MOBILE_TICKET_FILE_MAX) break;
+  }
+  return paths;
+}
+
+function localTicketFileEntries(engine, projectId, paths) {
+  const groups = new Map();
+  for (const filePath of paths) {
+    const dir = dirnamePosix(filePath);
+    if (!groups.has(dir)) groups.set(dir, new Set());
+    groups.get(dir).add(filePath);
+  }
+  const found = new Map();
+  for (const [dir, members] of groups) {
+    try {
+      const listing = engine.projectFiles(projectId, dir);
+      for (const entry of Array.isArray(listing?.entries) ? listing.entries : []) {
+        if (!members.has(entry.path) || entry.type !== 'file' || entry.locked) continue;
+        found.set(entry.path, entry);
+      }
+    } catch { /* 文件在记录之后被删掉或移走：从清单里隐去，不让手机端看到坏链接。 */ }
+  }
+  return paths.map(filePath => found.get(filePath)).filter(Boolean);
+}
+
+const basenamePosix = value => String(value || '').split('/').pop() || 'file';
+
+function mobileFileEntry(value) {
+  const entry = pick(value, ['name', 'path', 'type', 'ext', 'kind', 'mime', 'size', 'modifiedAt', 'previewable']);
+  if (!entry || entry.type !== 'file' || typeof entry.path !== 'string' || !entry.path) return null;
+  if (typeof entry.name !== 'string' || !entry.name) entry.name = basenamePosix(entry.path);
+  if (typeof entry.kind !== 'string' || !entry.kind) entry.kind = 'unsupported';
+  return entry;
+}
+
+// 项目在服务器上可读就直接读；Windows 本机路径在云端读不到，才交给实际跑过该目录的节点。
+function projectFileRelay(app, project) {
+  if (!project?.path) return null;
+  try { if (statSync(project.path).isDirectory()) return null; } catch { /* 云端看不到本机路径。 */ }
+  const hub = app?.locals?.nodeHub;
+  if (typeof hub?.nodeForWorkspace !== 'function' || typeof hub?.requestFile !== 'function') return null;
+  return hub.nodeForWorkspace(project.path);
+}
+
+async function describeTicketFiles(app, engine, project, paths) {
+  if (!paths.length) return [];
+  const node = projectFileRelay(app, project);
+  let raw;
+  if (node) raw = (await app.locals.nodeHub.requestFile(node.nodeId, { op: 'describe', workspace: project.path, paths }))?.entries;
+  else raw = localTicketFileEntries(engine, project.id, paths);
+  const allowed = new Set(paths);
+  const found = new Map();
+  for (const item of Array.isArray(raw) ? raw : []) {
+    const entry = mobileFileEntry(item);
+    if (entry && allowed.has(entry.path)) found.set(entry.path, entry);
+  }
+  return paths.map(filePath => found.get(filePath)).filter(Boolean);
+}
+
+async function ticketFileOf(app, engine, ticketId) {
+  const { project } = ticketProjectOf(engine, ticketId);
+  if (!project?.id) return { project: null, entries: [] };
+  const paths = ticketFilePaths(engine, project.id, ticketId);
+  return { project, entries: await describeTicketFiles(app, engine, project, paths) };
+}
+
+// 链接只校验「这个路径属于该工单」；真正的读取仍由项目文件服务在下载/预览时校验敏感文件与越界。
+function requireTicketFile(engine, ticketId, requested) {
+  const filePath = cleanTicketPath(requested);
+  if (!filePath) throw mobileError('文件路径无效', 400);
+  const { project } = ticketProjectOf(engine, ticketId);
+  if (!project) throw mobileError('这个工单没有关联项目', 404);
+  if (!ticketFilePaths(engine, project.id, ticketId).includes(filePath)) throw mobileError('这个文件不属于该工单', 403);
+  return { project, path: filePath };
 }
 
 function notificationProjection(row) {
@@ -654,7 +931,7 @@ export function registerMobilePairingRoutes(app, gateway, { desktopOwner } = {})
   });
 }
 
-export function registerMobileWorkRoutes(app, gateway, { engine, ownerId, onConnect } = {}) {
+export function registerMobileWorkRoutes(app, gateway, { engine, executors, ownerId, onConnect } = {}) {
   if (!gateway || !engine) throw new TypeError('移动 Work 路由需要 gateway 与 engine');
   const auth = req => {
     if (req.mobileAuthenticated === true && req.mobileDevice) {
@@ -663,9 +940,165 @@ export function registerMobileWorkRoutes(app, gateway, { engine, ownerId, onConn
     }
     return gateway.authenticateRequest(req, { ownerId });
   };
+  const MOBILE_AGENT_KINDS = new Set(['model', 'cli']);
+  const LAGENT_ID = 'model';
+  const readText = (value, max, message) => {
+    const result = typeof value === 'string' ? value.trim() : '';
+    if (!result || result.length > max) throw mobileError(message, 400);
+    return result;
+  };
+  const mobileProfile = id => (app.locals.modelHub?.publicState?.()?.profiles || []).find(item => item.id === id);
+  // 协作方只接受已注册、可用、model/cli 类型且在策略白名单内的 Agent。
+  const collaboratorIds = value => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) throw mobileError('agentIds 必须是数组', 400);
+    const ids = [...new Set(value.map(item => typeof item === 'string' ? item.trim() : '').filter(Boolean))];
+    if (ids.length > 3) throw mobileError('多 Agent 模式最多选择 3 个协作 Agent', 400);
+    const list = executors?.list?.() || [];
+    const policy = engine.policy?.() || {};
+    const allowed = new Set(Array.isArray(policy.allowedExecutors) ? policy.allowedExecutors : []);
+    for (const id of ids) {
+      if (id === LAGENT_ID) throw mobileError('Lagent 由主控自动加入', 400);
+      const agent = list.find(item => item.id === id);
+      if (!agent || !MOBILE_AGENT_KINDS.has(agent.kind)) throw mobileError(`「${id}」不是可协作的 Agent`, 400);
+      if (!agent.available) throw mobileError(`「${agent.name || id}」当前不可用`, 400);
+      if (allowed.size && !allowed.has(id)) throw mobileError(`「${agent.name || id}」不在允许的执行器范围内`, 403);
+    }
+    return ids;
+  };
+  const settingsOf = value => {
+    const settings = sanitizeMobileSettings(value);
+    if (settings?.profileId) {
+      const profile = mobileProfile(settings.profileId);
+      if (!profile || profile.unavailable) throw mobileError('所选模型不可用', 400);
+    }
+    return settings;
+  };
   app.get('/api/mobile/bootstrap', (req, res) => {
     const device = auth(req);
     res.json(sanitizeMobileBootstrap(engine.bootstrap(), { unread: gateway.unreadNotificationCount(device.ownerId) }));
+  });
+  app.get('/api/mobile/models', (req, res) => {
+    auth(req);
+    const state = app.locals.modelHub?.publicState?.() || {};
+    const efforts = ['default', 'low', 'medium', 'high', 'xhigh', 'max'];
+    res.json({
+      profiles: (Array.isArray(state.profiles) ? state.profiles : []).map(profile => ({
+        id: String(profile.id),
+        name: String(profile.name || profile.id).slice(0, 80),
+        model: String(profile.model || '').slice(0, 120),
+        available: profile.unavailable !== true,
+        efforts: ['default', ...new Set((Array.isArray(profile.capabilities?.efforts) ? profile.capabilities.efforts : []).filter(item => efforts.includes(item)))]
+      })),
+      defaultProfileId: state.workflow?.defaultProfileId || null
+    });
+  });
+  app.get('/api/mobile/conversations', (req, res) => {
+    auth(req);
+    let limit = 60;
+    if (req.query.limit !== undefined) {
+      if (typeof req.query.limit !== 'string' || !/^\d+$/.test(req.query.limit)) throw mobileError('会话数量参数无效');
+      limit = Number(req.query.limit);
+      if (limit < 1 || limit > 100) throw mobileError('会话数量参数无效');
+    }
+    const result = engine.listConversations(limit);
+    res.json({ conversations: (result?.conversations || []).map(sanitizeMobileConversationSummary).filter(Boolean) });
+  });
+  app.post('/api/mobile/conversations', (req, res) => {
+    auth(req);
+    const goal = typeof req.body?.goal === 'string' ? req.body.goal.trim() : '';
+    if (goal.length > 4000) throw mobileError('会话目标不能超过 4000 字', 400);
+    const title = req.body?.title === undefined ? '' : readText(req.body.title, 200, '会话标题须为 1–200 字');
+    const collaborators = collaboratorIds(req.body?.agentIds);
+    let projectId;
+    if (req.body?.projectId !== undefined) {
+      if (typeof req.body.projectId !== 'string' || !req.body.projectId.trim()) throw mobileError('项目 id 无效', 400);
+      projectId = req.body.projectId.trim();
+    }
+    const result = engine.createConversation({
+      title: title || (goal ? goal.split('\n')[0].slice(0, 60) : undefined),
+      goal,
+      ...(projectId ? { projectId } : {}),
+      agentIds: [LAGENT_ID, ...collaborators]
+    });
+    res.status(201).json({ conversation: sanitizeMobileConversationSummary(result?.conversation) });
+  });
+  app.get('/api/mobile/conversations/:id', (req, res) => {
+    auth(req);
+    let limit = 30;
+    if (req.query.limit !== undefined) {
+      if (typeof req.query.limit !== 'string' || !/^\d+$/.test(req.query.limit)) throw mobileError('分页参数无效');
+      limit = Number(req.query.limit);
+      if (limit < 1 || limit > 50) throw mobileError('分页参数无效');
+    }
+    let before = null;
+    if (req.query.before !== undefined) {
+      if (typeof req.query.before !== 'string' || !/^\d+$/.test(req.query.before)) throw mobileError('分页参数无效');
+      before = Number(req.query.before);
+    }
+    const result = engine.getConversation(req.params.id);
+    const page = pageMobileTurns(result?.conversation?.turns, { limit, before });
+    const ticketIds = new Set();
+    for (const turn of page.turns) {
+      for (const run of Array.isArray(turn.runs) ? turn.runs : []) if (run.ticketId) ticketIds.add(run.ticketId);
+      if (turn.synthesisTicketId) ticketIds.add(turn.synthesisTicketId);
+    }
+    res.json({
+      conversation: {
+        ...sanitizeMobileConversationSummary(result?.conversation),
+        turns: page.turns.map(sanitizeMobileTurn).filter(Boolean),
+        hasMore: page.hasMore,
+        nextBefore: page.nextBefore
+      },
+      tickets: (result?.tickets || []).filter(ticket => ticketIds.has(ticket.id)).map(sanitizeMobileTicket).filter(Boolean)
+    });
+  });
+  app.patch('/api/mobile/conversations/:id', (req, res) => {
+    auth(req);
+    const title = readText(req.body?.title, 200, '会话标题须为 1–200 字');
+    res.json({ conversation: sanitizeMobileConversationSummary(engine.renameConversation(req.params.id, { title })?.conversation) });
+  });
+  app.delete('/api/mobile/conversations/:id', (req, res) => {
+    auth(req);
+    res.json({ ok: true, ...engine.deleteConversation(req.params.id) });
+  });
+  app.post('/api/mobile/conversations/:id/messages', async (req, res) => {
+    auth(req);
+    const text = readText(req.body?.text, 3000, '消息须为 1–3000 字');
+    const mode = req.body?.mode === 'multi' ? 'multi' : 'auto';
+    let agentIds = [LAGENT_ID];
+    if (mode === 'multi') {
+      const collaborators = collaboratorIds(req.body?.agentIds);
+      if (!collaborators.length) throw mobileError('多 Agent 模式至少选择一个协作 Agent', 400);
+      agentIds = [LAGENT_ID, ...collaborators];
+    }
+    const settings = settingsOf(req.body?.settings);
+    const efforts = sanitizeMobileEfforts(req.body?.efforts, agentIds);
+    let clientRequestId = '';
+    if (req.body?.clientRequestId !== undefined) {
+      if (typeof req.body.clientRequestId !== 'string' || !/^[A-Za-z0-9._:-]{1,120}$/.test(req.body.clientRequestId.trim())) {
+        throw mobileError('clientRequestId 无效', 400);
+      }
+      clientRequestId = req.body.clientRequestId.trim();
+    }
+    const result = await engine.conversationMessage(req.params.id, { text, mode, agentIds, settings, efforts, clientRequestId, autoRun: true });
+    res.status(201).json({
+      conversation: sanitizeMobileConversationSummary(result?.conversation),
+      turn: sanitizeMobileTurn(result?.turn),
+      tickets: (result?.tickets || []).map(sanitizeMobileTicket).filter(Boolean)
+    });
+  });
+  app.get('/api/mobile/reports/:id/text', (req, res) => {
+    auth(req);
+    const result = engine.reportText(req.params.id);
+    res.json(clipReportText(result?.text, 200000));
+  });
+  app.post('/api/mobile/tickets/:id/permissions/:requestId', (req, res) => {
+    auth(req);
+    const decision = req.body?.decision;
+    if (decision !== 'allow' && decision !== 'deny') throw mobileError('授权决定只能是 allow 或 deny', 400);
+    const result = engine.permissionDecision(req.params.id, req.params.requestId, decision);
+    res.json({ ticket: sanitizeMobileTicket(result?.ticket) });
   });
   app.get('/api/mobile/policy', (req, res) => { auth(req); res.json({ policy: sanitizeMobilePolicy(engine.policy()) }); });
   app.get('/api/mobile/notifications', (req, res) => {
@@ -690,11 +1123,11 @@ export function registerMobileWorkRoutes(app, gateway, { engine, ownerId, onConn
     res.json({ ok: true, ...result });
   });
   // 移动端不直接派外部 Agent：先在 Lagent 会话里建一轮，由主控拆分与汇总。
-  const toolExecutors = new Set(['analysis', 'terminal', 'browser', 'github', 'model', 'window']);
+  const toolExecutors = new Set(['terminal', 'browser', 'github', 'model', 'window']);
   app.post('/api/mobile/command', async (req, res) => {
     auth(req);
     const input = {};
-    for (const key of ['text', 'clientRequestId', 'executorId', 'executorInput', 'datasetId']) if (req.body?.[key] !== undefined) input[key] = req.body[key];
+    for (const key of ['text', 'clientRequestId', 'executorId', 'executorInput']) if (req.body?.[key] !== undefined) input[key] = req.body[key];
     if (input.executorId && !toolExecutors.has(input.executorId)) {
       const text = typeof input.text === 'string' ? input.text.trim() : '';
       const conversation = engine.createConversation({ title: text.slice(0, 60), goal: text }).conversation;
@@ -709,6 +1142,66 @@ export function registerMobileWorkRoutes(app, gateway, { engine, ownerId, onConn
     res.status(201).json({ ticket: sanitizeMobileTicket(engine.command(input)) });
   });
   app.get('/api/mobile/tickets/:id', (req, res) => { auth(req); res.json(sanitizeMobileDetail(engine.detail(req.params.id))); });
+  // 工单产物：只列这次执行改动/产出的文件，路径、大小和预览类型都来自项目文件服务。
+  app.get('/api/mobile/tickets/:id/files', async (req, res) => {
+    auth(req);
+    const { project, entries } = await ticketFileOf(app, engine, req.params.id);
+    res.json({
+      project: project ? { id: project.id, name: project.name } : null,
+      files: entries,
+      ...(project && !entries.length ? { message: '这次执行没有记录到可下载的文件。' } : {}),
+      ...(!project ? { message: '这个工单没有关联项目，暂时没有可下载的文件。' } : {})
+    });
+  });
+  app.get('/api/mobile/tickets/:id/file/preview', async (req, res) => {
+    auth(req);
+    const { project, path: filePath } = requireTicketFile(engine, req.params.id, req.query?.path);
+    const node = projectFileRelay(app, project);
+    if (node) return res.json(await app.locals.nodeHub.requestFile(node.nodeId, { op: 'preview', workspace: project.path, path: filePath }));
+    res.json(await engine.projectFilePreview(project.id, filePath));
+  });
+  // 下载和 PDF/图片预览都走短期签名 URL：WebView 的下载器只认普通 http(s) 地址。
+  app.post('/api/mobile/tickets/:id/file/link', (req, res) => {
+    const device = auth(req);
+    const { project, path: filePath } = requireTicketFile(engine, req.params.id, req.body?.path);
+    const download = req.body?.download === true;
+    const name = basenamePosix(filePath).slice(0, 200);
+    const mime = projectFileMime(name);
+    const expiresAt = Date.now() + MOBILE_FILE_TOKEN_TTL_MS;
+    const token = signMobileFile({ ownerId: device.ownerId, projectId: project.id, path: filePath, download, expiresAt, name, mime });
+    res.json({ url: `/api/mobile/files/${token}`, name, mime, expiresAt: new Date(expiresAt).toISOString() });
+  });
+  app.get('/api/mobile/files/:token', async (req, res, next) => {
+    const payload = readMobileFile(req.params.token);
+    if (!payload) throw mobileError('下载链接已过期或无效，请重新打开文件', 401);
+    const project = engine.getProject(payload.projectId);
+    const node = projectFileRelay(app, project);
+    const name = payload.name || basenamePosix(payload.path);
+    const mime = payload.mime || projectFileMime(name);
+    let absolute = '';
+    let cleanup = null;
+    if (node) {
+      const uploaded = await app.locals.nodeHub.requestFile(node.nodeId, { op: 'read', workspace: project.path, path: payload.path });
+      absolute = uploaded.path;
+      cleanup = uploaded.cleanup || null;
+    } else {
+      absolute = engine.projectFileSource(project.id, payload.path).absolute;
+    }
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', fileDisposition(name, payload.download === true));
+    // 在 iframe 里打开项目 HTML/SVG 时按沙箱处理，和桌面端预览的边界保持一致。
+    if (payload.download !== true && ['html', 'htm', 'svg'].includes(String(name).split('.').pop()?.toLowerCase() || '')) {
+      res.setHeader('Content-Security-Policy', 'sandbox');
+    }
+    res.sendFile(absolute, error => {
+      cleanup?.();
+      if (!error) return;
+      if (res.headersSent) res.end();
+      else next(error);
+    });
+  });
   app.post('/api/mobile/tickets/:id/actions', (req, res) => {
     auth(req);
     if (req.body?.action === 'handoff') {

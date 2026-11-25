@@ -148,6 +148,9 @@ export function createConversationService(db, { now = () => new Date().toISOStri
     if (!runs.length) throw workError('这一轮至少要有一个 Agent 作答', 400);
     const turns = turnIdsOf(row);
     if (turns.length >= MAX_TURNS) throw workError(`单个会话最多 ${MAX_TURNS} 轮，请新建会话`, 429);
+    // 轮次级幂等：同一个 clientRequestId 只落一轮，弱网重试不会重复派活。
+    // 只存内部字段，publicConversation 不投影它。
+    const requestId = identifier(input.clientRequestId, 'clientRequestId');
     const turn = {
       id: identifier(input.id, '轮次 id') || randomUUID(),
       index: turns.length,
@@ -156,6 +159,7 @@ export function createConversationService(db, { now = () => new Date().toISOStri
       // 不论前端传什么，主控都要在轮次里：这样才能保证每一轮都有 Lagent 的分工与收口。
       agentIds: agentIdsOf([...(Array.isArray(input.agentIds) ? input.agentIds : []), ...runs.map(run => run.agentId)]),
       runs,
+      ...(requestId ? { clientRequestId: requestId } : {}),
       createdAt: now()
     };
     const participants = agentIdsOf([...(Array.isArray(row.participants) ? row.participants : []), ...turn.agentIds]);
@@ -168,6 +172,14 @@ export function createConversationService(db, { now = () => new Date().toISOStri
     };
     db.put(KIND, next);
     return { conversation: publicConversation(next), turn };
+  }
+
+  // 建轮次之前先查：同一会话里已有相同 clientRequestId 的轮次时直接复用。
+  function turnByClientRequestId(id, clientRequestId) {
+    const clean = identifier(clientRequestId, 'clientRequestId');
+    if (!clean) return null;
+    const row = find(id);
+    return turnIdsOf(row).find(turn => turn.clientRequestId === clean) || null;
   }
 
   function setSynthesis(id, turnId, input = {}) {
@@ -229,6 +241,7 @@ export function createConversationService(db, { now = () => new Date().toISOStri
   return {
     create,
     addTurn,
+    turnByClientRequestId,
     setSynthesis,
     rename,
     remove,

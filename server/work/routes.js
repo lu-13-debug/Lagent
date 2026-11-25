@@ -427,7 +427,7 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
       res.json(result);
     });
   }
-  if(mobileGateway)registerMobileWorkRoutes(app,mobileGateway,{engine,ownerId:mobileOwnerId,onConnect:onMobileEventConnect});
+  if(mobileGateway)registerMobileWorkRoutes(app,mobileGateway,{engine,executors:executor,ownerId:mobileOwnerId,onConnect:onMobileEventConnect});
   if(mobileGateway){
     const mcpTokens=createMcpTokenService({store,engine,onIssue:mcpTokenIndex?.onIssue,onRevoke:mcpTokenIndex?.onRevoke});
     registerMcpRoutes(app,{engine,gateway:mobileGateway,ownerId:mobileOwnerId,windowBridge,mcpTokens});

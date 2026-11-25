@@ -1,18 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import express from 'express';
 import { createApp } from './app.js';
 import { createCloudApp } from './cloud-app.js';
 import { tokenHash } from './accounts.js';
+import { createProjectFiles } from './work/project-files.js';
 import {
   MOBILE_DEVICE_TTL_MS,
   MOBILE_NOTIFICATION_MAX,
   MOBILE_REQUEST_LIMIT,
   MobileGateway,
   mobileWorkEvent,
+  registerMobileWorkRoutes,
   sanitizeMobileBootstrap,
   sanitizeMobileDetail,
   sanitizeMobilePolicy,
@@ -144,21 +147,21 @@ test('移动投影和 Work 事件采用字段 allowlist，不泄露命令、prom
   const publicTitle = 'T'.repeat(120);
   const publicSummary = 'S'.repeat(450);
   const ticket = {
-    id: 'ticket-1', status: 'awaiting_review', stage: 'executor', source: 'manual', executor: 'analysis',
-    datasetId: 'dataset-1', createdAt: '2026-11-06T00:00:00.000Z', updatedAt: '2026-11-06T00:00:01.000Z',
+    id: 'ticket-1', status: 'awaiting_review', stage: 'executor', source: 'manual', executor: 'terminal',
+    createdAt: '2026-11-06T00:00:00.000Z', updatedAt: '2026-11-06T00:00:01.000Z',
     title: publicTitle, summary: publicSummary, handoffSummary: 'H'.repeat(450), parentTicketId: 'ticket-parent', handoffDepth: 2,
     planId: 'plan-1', planStep: 1, planTotal: 3, planSecret: secret,
     chainRootId: secret, handoffChildId: secret, command: secret, executorInput: secret, approvalSnapshot: secret, prompt: secret,
     attention: { question: '确认执行？', createdAt: secret, options: [{ id: 'approve', label: '批准', action: 'approve', prompt: secret }] }
   };
   const bootstrap = {
-    capabilities: { work: true, credentials: secret }, tickets: [ticket], datasets: [{ id: 'dataset-1', name: '数据', rowCount: 2, source: 'upload', records: [{ secret }], privateToken: secret }],
-    agents: [{ id: 'agent-1', name: '分析', kind: 'analysis', status: 'ready', capabilities: ['work'], prompt: secret }],
-    tools: [{ command: secret }], plans: [{ id: 'plan-1', goal: '计划目标', status: 'active', currentStep: 1, totalSteps: 3, updatedAt: ticket.updatedAt, command: secret, executorInput: secret }], policy: { mode: 'personal', acceptMode: 'explicit', requireApproval: true, allowedExecutors: ['analysis'], budgets: { maxConcurrent: 2 }, limits: { browserHosts: [], githubRepos: [] }, privateToken: secret }
+    capabilities: { work: true, credentials: secret }, tickets: [ticket],
+    agents: [{ id: 'agent-1', name: '受控终端', kind: 'terminal', status: 'ready', capabilities: ['work'], prompt: secret }],
+    tools: [{ command: secret }], plans: [{ id: 'plan-1', goal: '计划目标', status: 'active', currentStep: 1, totalSteps: 3, updatedAt: ticket.updatedAt, command: secret, executorInput: secret }], policy: { mode: 'personal', acceptMode: 'explicit', requireApproval: true, allowedExecutors: ['terminal'], budgets: { maxConcurrent: 2 }, limits: { browserHosts: [], githubRepos: [] }, privateToken: secret }
   };
   const detail = {
     ticket,
-    assignments: [{ id: 'assignment-1', ticketId: ticket.id, executor: 'analysis', status: 'queued', command: secret }],
+    assignments: [{ id: 'assignment-1', ticketId: ticket.id, executor: 'terminal', status: 'queued', command: secret }],
     reports: [{ id: 'report-1', ticketId: ticket.id, assignmentId: 'assignment-1', kind: 'result', createdAt: ticket.createdAt, summary: `${'R'.repeat(450)}${secret}`, artifacts: [{ content: secret }], prompt: secret, rawRecords: [secret] }],
     team: { revision: 1, updatedAt: ticket.updatedAt, cancelled: false, limits: { maxNodes: 4 }, usage: { calls: 1 }, nodes: [{ id: 'node-1', status: 'done', prompt: secret, artifacts: [{ content: secret }], proposals: [{ id: 'proposal-1', kind: 'patch', status: 'pending', content: secret }] }], events: [{ type: 'node', nodeId: 'node-1', status: 'done', seq: 1, createdAt: ticket.updatedAt, prompt: secret }] }
   };
@@ -170,7 +173,7 @@ test('移动投影和 Work 事件采用字段 allowlist，不泄露命令、prom
   const serialized = JSON.stringify(projected);
   assert.doesNotMatch(serialized, new RegExp(secret));
   assert.doesNotMatch(serialized, /privateToken|rawRecords|records|prompt|command|executorInput|approvalSnapshot|artifacts|chainRootId|handoffChildId/);
-  assert.deepEqual(Object.keys(projected.ticket).sort(), ['attention', 'createdAt', 'datasetId', 'executor', 'handoffDepth', 'handoffSummary', 'id', 'parentTicketId', 'planId', 'planStep', 'planTotal', 'source', 'stage', 'status', 'summary', 'title', 'updatedAt']);
+  assert.deepEqual(Object.keys(projected.ticket).sort(), ['attention', 'createdAt', 'executor', 'handoffDepth', 'handoffSummary', 'id', 'parentTicketId', 'planId', 'planStep', 'planTotal', 'source', 'stage', 'status', 'summary', 'title', 'updatedAt']);
   assert.equal(projected.ticket.title.length, 100);
   assert.equal(projected.ticket.summary.length, 400);
   assert.equal(projected.ticket.handoffSummary.length, 400);
@@ -293,13 +296,12 @@ test('本地应用完成配对、移动 Work API、只读 policy、脱敏与设�
   assert.equal(bootstrapResponse.status, 200);
   const bootstrap = await bootstrapResponse.json();
   assert.equal(bootstrap.capabilities.work, true);
-  assert.ok(bootstrap.datasets.length > 0);
   assert.deepEqual(bootstrap.notifications, { unread: 0 });
 
   const secret = 'LOCAL_MOBILE_SECRET_PROMPT';
   const commandResponse = await request(base, '/api/mobile/command', {
     method: 'POST', token,
-    body: { text: '整理销售数据', executorId: 'terminal', executorInput: { program: 'git', args: ['status', '--short', secret] }, clientRequestId: 'mobile-command-once', datasetId: bootstrap.datasets[0].id }
+    body: { text: '整理销售数据', executorId: 'terminal', executorInput: { program: 'git', args: ['status', '--short', secret] }, clientRequestId: 'mobile-command-once' }
   });
   assert.equal(commandResponse.status, 201);
   const commandText = await commandResponse.text();
@@ -374,8 +376,10 @@ test('云端设备 token 按账号 owner 选择工作区，跨账号工单不可
   const cookieB = await register(base, 'mobile_owner_b');
   const deviceA = await pairDevice(base, cookieA);
   const deviceB = await pairDevice(base, cookieB);
+  // 这条用例验证待审通知与跨账号隔离，显式打开审批策略。
+  assert.equal((await request(base, '/api/work/policy', { method: 'PUT', cookie: cookieA, body: { requireApproval: true } })).status, 200);
 
-  const command = await request(base, '/api/mobile/command', { method: 'POST', token: deviceA.deviceToken, body: { text: 'A 的私有工单' } });
+  const command = await request(base, '/api/mobile/command', { method: 'POST', token: deviceA.deviceToken, body: { text: 'A 的私有工单', executorInput: { program: 'pwd', args: [] } } });
   assert.equal(command.status, 201);
   const ticketId = (await command.json()).ticket.id;
 
@@ -432,7 +436,7 @@ test('移动端交接路由返回脱敏子工单且重复交接幂等', async t 
   assert.equal(detail.ticket.status, 'completed');
 
   const handoff = body => request(base, `/api/mobile/tickets/${source.id}/actions`, { method: 'POST', token, body: { action: 'handoff', input: body } });
-  const first = await handoff({ executorId: 'analysis', text: '移动子任务' });
+  const first = await handoff({ executorId: 'terminal', text: '移动子任务', executorInput: { program: 'pwd', args: [] } });
   assert.equal(first.status, 201);
   const child = (await first.json()).ticket;
   assert.equal(child.title, '移动子任务');
@@ -441,7 +445,7 @@ test('移动端交接路由返回脱敏子工单且重复交接幂等', async t 
   assert.equal(child.handoffSummary, detail.ticket.summary);
   assert.equal(child.chainRootId, undefined);
   assert.equal(child.handoffChildId, undefined);
-  const duplicate = await handoff({ executorId: 'analysis', text: '重复不应新建' });
+  const duplicate = await handoff({ executorId: 'terminal', text: '重复不应新建', executorInput: { program: 'pwd', args: [] } });
   assert.equal(duplicate.status, 200);
   assert.equal((await duplicate.json()).ticket.id, child.id);
   assert.equal((await request(base, `/api/mobile/tickets/${child.id}`, { token })).status, 200);
@@ -490,4 +494,132 @@ test('一个账号生成配对码不会作废其他账号的未领取配对码',
   gateway.createPair('owner-b');
   const device = gateway.claim(alice.code, 'Alice 手机', nextActor());
   assert.match(device.deviceToken, /^[A-Za-z0-9_-]{43}$/);
+});
+
+test('移动端工单产物只列本工单文件，预览与签名下载受设备鉴权和路径白名单约束', async t => {
+  const dir = tempDir('mobile-files-');
+  const root = join(dir, 'project');
+  mkdirSync(join(root, 'out'), { recursive: true });
+  writeFileSync(join(root, 'report.md'), '# 交付报告\n\n手机端可以看到这段内容。');
+  writeFileSync(join(root, 'out', 'note.txt'), '产物说明');
+  writeFileSync(join(root, 'private.pdf'), '%PDF-1.4\nsecret');
+  writeFileSync(join(root, '.env'), 'TOKEN=should-not-leak');
+  const service = createProjectFiles({ getProject: () => ({ id: 'p-1', path: root }) });
+  const engine = {
+    detail: id => id === 'no-project'
+      ? { ticket: { id }, assignments: [], reports: [] }
+      : { ticket: { id, projectChatId: 'chat-1' }, project: { id: 'p-1', name: '测试项目', path: root } },
+    ticketProjectId: () => null,
+    getProject: () => ({ id: 'p-1', name: '测试项目', path: root }),
+    projectChanges: id => id === 'p-1' ? [{
+      projectId: 'p-1', ticketId: 't-1',
+      files: ['report.md', 'out/note.txt', '.env', 'missing.pdf', '../escape.txt', 'C:/outside.txt']
+    }] : [],
+    projectFiles: (id, path) => service.list(id, path),
+    projectFilePreview: (id, path) => service.preview(id, path),
+    projectFileSource: (id, path) => service.file(id, path)
+  };
+  const gateway = new MobileGateway({ dataDir: join(dir, 'gateway') });
+  const app = express();
+  app.use(express.json());
+  registerMobileWorkRoutes(app, gateway, { engine, ownerId: 'owner-a' });
+  app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.message }));
+  const { server, base } = await serve(app);
+  t.after(async () => { await stop(server, app); gateway.close(); rmSync(dir, { recursive: true, force: true }); });
+
+  const pair = gateway.createPair('owner-a');
+  const device = gateway.claim(pair.code, '测试手机', nextActor());
+  const token = device.deviceToken;
+  assert.equal((await request(base, '/api/mobile/tickets/t-1/files')).status, 401);
+
+  const listing = await (await request(base, '/api/mobile/tickets/t-1/files', { token })).json();
+  assert.equal(listing.project.name, '测试项目');
+  assert.deepEqual(listing.files.map(file => file.path).sort(), ['out/note.txt', 'report.md']);
+  assert.equal(JSON.stringify(listing).includes('should-not-leak'), false);
+
+  const preview = await (await request(base, `/api/mobile/tickets/t-1/file/preview?path=${encodeURIComponent('report.md')}`, { token })).json();
+  assert.equal(preview.kind, 'markdown');
+  assert.match(preview.text, /手机端可以看到/);
+  assert.equal((await request(base, `/api/mobile/tickets/t-1/file/preview?path=${encodeURIComponent('.env')}`, { token })).status, 403);
+  assert.equal((await request(base, `/api/mobile/tickets/t-1/file/preview?path=${encodeURIComponent('private.pdf')}`, { token })).status, 403);
+  assert.equal((await request(base, `/api/mobile/tickets/t-1/file/preview?path=${encodeURIComponent('../escape.txt')}`, { token })).status, 400);
+
+  const link = await (await request(base, '/api/mobile/tickets/t-1/file/link', { method: 'POST', token, body: { path: 'out/note.txt', download: true } })).json();
+  assert.match(link.url, /^\/api\/mobile\/files\//);
+  assert.equal(link.name, 'note.txt');
+  const downloaded = await fetch(base + link.url);
+  assert.equal(downloaded.status, 200);
+  assert.match(downloaded.headers.get('content-disposition') || '', /^attachment;/);
+  assert.equal(await downloaded.text(), '产物说明');
+  const tampered = await fetch(base + link.url.slice(0, -2) + (link.url.endsWith('AA') ? 'BB' : 'AA'));
+  assert.equal(tampered.status, 401);
+
+  const inline = await (await request(base, '/api/mobile/tickets/t-1/file/link', { method: 'POST', token, body: { path: 'report.md' } })).json();
+  const inlineResponse = await fetch(base + inline.url);
+  assert.equal(inlineResponse.status, 200);
+  assert.match(inlineResponse.headers.get('content-disposition') || '', /^inline;/);
+
+  const noProject = await (await request(base, '/api/mobile/tickets/no-project/files', { token })).json();
+  assert.equal(noProject.project, null);
+  assert.deepEqual(noProject.files, []);
+  assert.match(noProject.message, /没有关联项目/);
+  assert.equal((await request(base, '/api/mobile/tickets/no-project/file/link', { method: 'POST', token, body: { path: 'report.md' } })).status, 404);
+});
+
+test('项目在本机节点时，移动端文件列表、预览与下载改走节点回传', async t => {
+  const dir = tempDir('mobile-relay-');
+  const remote = 'Z:\lagent-remote-project';
+  const project = { id: 'p-remote', name: '本机项目', path: remote };
+  const calls = [];
+  const engine = {
+    detail: () => ({ ticket: { id: 't-remote', projectChatId: 'chat-remote' }, project }),
+    ticketProjectId: () => null,
+    getProject: () => project,
+    projectChanges: () => [{ ticketId: 't-remote', files: ['docs/报告.md', '../escape.md'] }],
+    projectFiles: () => { throw Object.assign(new Error('项目文件夹已不在本机'), { status: 409 }); },
+    projectFilePreview: () => { throw new Error('不应在服务器本地预览'); },
+    projectFileSource: () => { throw new Error('不应在服务器本地读取'); }
+  };
+  const hub = {
+    nodeForWorkspace: value => value === remote ? { nodeId: 'node-remote' } : null,
+    requestFile: async (nodeId, input) => {
+      calls.push({ nodeId, ...input });
+      if (input.op === 'describe') return { entries: [{
+        type: 'file', path: 'docs/报告.md', name: '报告.md', ext: 'md', kind: 'markdown',
+        mime: 'text/markdown; charset=utf-8', size: 12, previewable: true
+      }] };
+      if (input.op === 'preview') return { path: 'docs/报告.md', name: '报告.md', kind: 'markdown', text: '# 节点报告' };
+      const file = join(dir, 'relayed-download.md');
+      writeFileSync(file, '# 节点报告');
+      return { path: file, name: '报告.md', mime: 'text/markdown; charset=utf-8', size: 12, cleanup: () => rmSync(file, { force: true }) };
+    }
+  };
+  const gateway = new MobileGateway({ dataDir: join(dir, 'gateway') });
+  const app = express();
+  app.use(express.json());
+  app.locals.nodeHub = hub;
+  registerMobileWorkRoutes(app, gateway, { engine, ownerId: 'owner-a' });
+  app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.message }));
+  const { server, base } = await serve(app);
+  t.after(async () => { await stop(server, app); gateway.close(); rmSync(dir, { recursive: true, force: true }); });
+
+  const pair = gateway.createPair('owner-a');
+  const token = gateway.claim(pair.code, '测试手机', nextActor()).deviceToken;
+  const listing = await (await request(base, '/api/mobile/tickets/t-remote/files', { token })).json();
+  assert.deepEqual(listing.files.map(file => file.path), ['docs/报告.md']);
+  assert.equal(listing.files[0].mime, 'text/markdown; charset=utf-8');
+  assert.equal(calls[0].nodeId, 'node-remote');
+  assert.equal(calls[0].op, 'describe');
+
+  const preview = await (await request(base, `/api/mobile/tickets/t-remote/file/preview?path=${encodeURIComponent('docs/报告.md')}`, { token })).json();
+  assert.equal(preview.text, '# 节点报告');
+  assert.equal(calls[1].op, 'preview');
+
+  const link = await (await request(base, '/api/mobile/tickets/t-remote/file/link', { method: 'POST', token, body: { path: 'docs/报告.md', download: true } })).json();
+  assert.equal(link.name, '报告.md');
+  const downloaded = await fetch(base + link.url);
+  assert.equal(downloaded.status, 200);
+  assert.equal(await downloaded.text(), '# 节点报告');
+  assert.equal(calls.at(-1).op, 'read');
+  assert.equal(existsSync(join(dir, 'relayed-download.md')), false, '临时文件在下载后清理');
 });
