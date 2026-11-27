@@ -774,3 +774,14 @@
   .pjf-text { padding: 18px 16px 36px; }
   .pjf-table-page, .pjf-sheets, .pjf-slides { padding: 12px; }
 }
+
+/* 隔离执行：概览里的一个普通区块，开关用现有按钮样式，工作树列表保持两行一条。 */
+.pj-isolation ul, .pj-worktrees {
+  list-style: none; margin: 8px 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.pj-worktrees li {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+  font-size: 13px; color: var(--sa-text-2);
+}
+.pj-worktrees code { color: var(--sa-text); }

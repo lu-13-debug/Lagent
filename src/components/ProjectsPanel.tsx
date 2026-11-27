@@ -4,7 +4,7 @@ import { api } from '../api';
 import { Modal } from './ui';
 import { ProjectFiles } from './ProjectFiles';
 import { FileKindIcon, FILE_KIND_LABELS, FilePreviewBody, fileKindFromPath, formatFileSize, formatFileTime, useProjectFilePreview } from './ProjectFilePreview';
-import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession } from '../superagent';
+import type { WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectMemory, WorkProjectSession, WorkWorktree } from '../superagent';
 import { STATUS_LABELS } from '../status';
 import { EXECUTOR_LABELS } from '../executor-label';
 import '../projects.css';
@@ -54,6 +54,9 @@ export function ProjectsPanel({ notify, allowedExecutors = ['claude-code', 'code
   const [brief, setBrief] = useState<WorkProjectBrief | null>(null);
   const [briefDraft, setBriefDraft] = useState({ goal: '', summary: '', keyPoints: '', decisions: '', constraints: '', openQuestions: '', nextSteps: '', verifyCommands: '' });
   const [changes, setChanges] = useState<WorkProjectChange[]>([]);
+  // 隔离执行：项目开关 + 进行中的工作树。服务端未开 LAGENT_WORKTREE 时列表为空。
+  const [worktrees, setWorktrees] = useState<WorkWorktree[]>([]);
+  const [isolationBusy, setIsolationBusy] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState('');
   const [confirm, setConfirm] = useState<{ title: string; body?: string; quote?: string; notes?: string[]; label: string; run: () => Promise<void> } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
@@ -93,6 +96,48 @@ export function ProjectsPanel({ notify, allowedExecutors = ['claude-code', 'code
     finally { if (!quiet) setLoading(false); }
   };
   useEffect(() => { void loadProjects(); }, []);
+  // 隔离执行的工作树按项目刷新；切页签或换项目时重拉，失败就当没有。
+  useEffect(() => {
+    if (!activeProjectId) { setWorktrees([]); return; }
+    let alive = true;
+    api.workProjectWorktrees(activeProjectId)
+      .then(result => { if (alive) setWorktrees(result.worktrees); })
+      .catch(() => { if (alive) setWorktrees([]); });
+    return () => { alive = false; };
+  }, [activeProjectId, tab]);
+
+  const toggleIsolation = async () => {
+    if (!project) return;
+    setIsolationBusy(true);
+    try {
+      const next = project.isolation === 'worktree' ? 'direct' : 'worktree';
+      const result = await api.workSetIsolation(project.id, next);
+      setProjects(previous => previous.map(item => item.id === result.project.id ? { ...item, ...result.project } : item));
+      notify(next === 'worktree' ? '已开启隔离执行：之后的任务在独立工作树里运行。' : '已关闭隔离执行，任务直接在当前项目目录运行。');
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setIsolationBusy(false); }
+  };
+
+  const reloadWorktrees = async (projectId: string) => {
+    try { setWorktrees((await api.workProjectWorktrees(projectId)).worktrees); }
+    catch { setWorktrees([]); }
+  };
+
+  const commitWorktree = async (id: string) => {
+    try {
+      const result = await api.workCommitWorktree(id);
+      notify(`已提交到分支 ${result.worktree.branch}；合并时机由你决定。`);
+      if (activeProjectId) await reloadWorktrees(activeProjectId);
+    } catch (cause) { notify((cause as Error).message, true); }
+  };
+
+  const releaseWorktree = async (id: string) => {
+    try {
+      const result = await api.workReleaseWorktree(id);
+      notify(`已清理工作树目录，分支 ${result.branch} 保留在主仓库里。`);
+      if (activeProjectId) await reloadWorktrees(activeProjectId);
+    } catch (cause) { notify((cause as Error).message, true); }
+  };
   // 侧栏「添加本地文件夹」：打开导入表单，并把焦点放进路径输入框。
   useEffect(() => {
     if (!requestImport) return;
@@ -414,6 +459,26 @@ export function ProjectsPanel({ notify, allowedExecutors = ['claude-code', 'code
               <div className="pj-overview-stat"><span>产物文件</span><strong>{artifactRows.length}</strong></div>
               <div className="pj-overview-stat"><span>最近更新</span><strong>{brief ? new Date(brief.updatedAt).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }) : '—'}</strong></div>
             </div>
+            <section className="pj-overview-block pj-isolation">
+              <h3>隔离执行</h3>
+              <p>{project?.isolation === 'worktree'
+                ? '已开启：任务在独立工作树里执行，你正在编辑的文件不会被改动；结束后改动提交到独立分支，合并时机由你决定。'
+                : '关闭：任务直接在项目目录里执行。开启后 Agent 改坏代码也只影响工作树，主工作区保持原样。'}</p>
+              <div className="pj-head-actions">
+                <button type="button" className={`pj-btn ${project?.isolation === 'worktree' ? '' : 'pj-primary'}`} disabled={isolationBusy} onClick={() => void toggleIsolation()}>
+                  {isolationBusy ? '处理中…' : project?.isolation === 'worktree' ? '关闭隔离执行' : '开启隔离执行'}
+                </button>
+              </div>
+              {project?.isolation === 'worktree' && (worktrees.length
+                ? <ul className="pj-worktrees">{worktrees.map(item => <li key={item.id}>
+                    <code>{item.branch}</code>
+                    <span>{item.ticketId ? `工单 ${item.ticketId.slice(0, 8)}` : '等待任务'}{item.files?.length ? ` · ${item.files.length} 个文件` : ''}</span>
+                    <button type="button" className="pj-link" onClick={() => void commitWorktree(item.id)}>提交</button>
+                    <button type="button" className="pj-link" onClick={() => void releaseWorktree(item.id)}>清理</button>
+                  </li>)}</ul>
+                : <p>还没有进行中的隔离工作树，下一次任务开始时自动创建。</p>)}
+            </section>
+
             <section className="pj-overview-block">
               <h3>现在做到哪</h3>
               <p>{brief?.summary || brief?.goal || '还没有项目简报。打开「变更档案」补充目标与当前进展。'}</p>

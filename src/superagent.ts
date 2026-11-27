@@ -309,6 +309,15 @@ export interface WorkProjectChat {
 export interface WorkProject {
   id: string; name: string; path: string; gitBranch: string; entryCount: number;
   chatCount: number; chats: WorkProjectChat[]; lastActivity?: string; createdAt: string; updatedAt: string;
+  /** worktree：任务在独立工作树里执行，主工作区不动；缺省为直接执行。 */
+  isolation?: 'worktree';
+}
+/** 隔离执行的独立工作树：改动提交到 lagent/xxxxxxxx 分支，等人工合并。 */
+export interface WorkWorktree {
+  id: string; ticketId?: string; threadId?: string; projectPath: string; path: string;
+  branch: string; status: 'active' | 'committed' | 'released' | 'removed' | string;
+  createdAt: string; committedAt?: string; releasedAt?: string;
+  copied?: number; files?: string[]; diffStat?: string; message?: string;
 }
 export type WorkProjectFileKind = 'dir' | 'markdown' | 'html' | 'pdf' | 'docx' | 'doc' | 'pptx' | 'ppt' | 'csv' | 'sheet' | 'legacy' | 'image' | 'code' | 'text' | 'unsupported';
 export interface WorkProjectFileEntry {
