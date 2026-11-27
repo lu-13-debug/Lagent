@@ -5,7 +5,7 @@ import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Cl
 import { api } from '../api';
 import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
-import type { WorkAction, WorkBootstrap, WorkConversation, WorkConversationRun, WorkConversationSummary, WorkConversationTurn, WorkInboxItem, WorkMcpToken, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTeamTemplate, WorkThread, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
+import type { WorkAction, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkConversation, WorkConversationRun, WorkConversationSummary, WorkConversationTurn, WorkInboxItem, WorkMcpToken, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTeamTemplate, WorkThread, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
 import { MemoryPanel } from './MemoryPanel';
 import { AgentConclusionList, AgentThinkingPanel } from './AgentThinkingPanel';
 import { ChatModelPicker, CliModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
@@ -314,6 +314,13 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [conversations, setConversations] = useState<WorkConversationSummary[]>(() => []);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('conv'));
   const [activeConversation, setActiveConversation] = useState<WorkConversation | null>(null);
+  const [inspectorTab, setInspectorTab] = useState<'inbox' | 'run' | 'changes' | 'artifacts'>('inbox');
+  // 本轮改动：检查点列表 + 当前预览（含确认令牌）。回滚必须两步：先预览，再确认。
+  const [checkpoints, setCheckpoints] = useState<WorkCheckpoint[]>([]);
+  const [checkpointPreview, setCheckpointPreview] = useState<WorkCheckpointPreview | null>(null);
+  const [checkpointOpenId, setCheckpointOpenId] = useState('');
+  const [checkpointConfirm, setCheckpointConfirm] = useState(false);
+  const [checkpointBusy, setCheckpointBusy] = useState(false);
   // 交接链路（thread 投影的可选字段）：开关关闭或接口 404 时保持空，不影响会话。
   const [threadLineage, setThreadLineage] = useState<WorkThread['lineage'] | null>(null);
   useEffect(() => {
@@ -324,6 +331,40 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       .catch(() => { if (alive) setThreadLineage(null); });
     return () => { alive = false; };
   }, [activeConversationId]);
+  // 检查器「本轮改动」：执行前检查点按会话列出；先预览拿到确认令牌，再二次确认回滚。
+  async function loadCheckpoints() {
+    if (!activeConversationId) { setCheckpoints([]); return; }
+    try { setCheckpoints((await api.workCheckpoints({ threadId: activeConversationId, limit: 20 })).checkpoints); }
+    catch { setCheckpoints([]); }
+  }
+  useEffect(() => {
+    if (inspectorTab !== 'changes') return;
+    void loadCheckpoints();
+    // 切换会话或页签时清掉上一份预览，避免把 A 会话的文件当成 B 会话的。
+    setCheckpointOpenId(''); setCheckpointPreview(null); setCheckpointConfirm(false);
+  }, [inspectorTab, activeConversationId]);
+  async function openCheckpoint(id: string) {
+    setCheckpointOpenId(id); setCheckpointConfirm(false);
+    try { setCheckpointPreview((await api.workCheckpointPreview({ checkpointId: id, scope: 'workspace' })).preview); }
+    catch (cause) { setCheckpointPreview(null); notify((cause as Error).message, true); }
+  }
+  async function restoreCheckpoint() {
+    const preview = checkpointPreview;
+    if (!preview || !preview.checkpointId) return;
+    if (!checkpointConfirm) { setCheckpointConfirm(true); return; }
+    setCheckpointBusy(true);
+    try {
+      const result = await api.workCheckpointRestore({
+        checkpointId: preview.checkpointId, scope: 'workspace', paths: preview.files.map(file => file.path), token: preview.token
+      });
+      const labels: Record<string, string> = { restored: '恢复', deleted: '删除', reverted: '退回', skipped: '跳过' };
+      const summary = Object.entries(result.restore.counts).map(([action, count]) => `${labels[action] || action} ${count}`).join(' · ');
+      notify(`已回滚：${summary || '没有文件需要回滚'}。`);
+      setCheckpointOpenId(''); setCheckpointPreview(null); setCheckpointConfirm(false);
+      await loadCheckpoints();
+    } catch (cause) { notify((cause as Error).message, true); }
+    finally { setCheckpointBusy(false); }
+  }
   // 会话切换时可能有多个请求在飞；只允许最新一次写回状态，避免旧响应盖掉新会话。
   const conversationRequest = useRef(0);
   const activeConversationIdRef = useRef(activeConversationId);
@@ -435,7 +476,6 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [railCollapsed, setRailCollapsed] = useState<boolean>(() => readJson<boolean>(RAIL_COLLAPSED_KEY, false));
   const [moreOpen, setMoreOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState<boolean>(() => typeof window === 'undefined' || window.innerWidth >= 1280);
-  const [inspectorTab, setInspectorTab] = useState<'inbox' | 'run' | 'artifacts'>('inbox');
   const [cardOpen, setCardOpen] = useState<Record<string, boolean>>({});
   const [cardDetails, setCardDetails] = useState<Record<string, WorkTicketDetail>>({});
   const autoOpened = useRef(false);
@@ -2718,6 +2758,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             {([
               { id: 'inbox', label: '需要你', count: attentionRows.length },
               { id: 'run', label: '当前运行', count: tickets.filter(ticket => ticket.status === 'working').length },
+              { id: 'changes', label: '本轮改动', count: checkpoints.length },
               { id: 'artifacts', label: '产物', count: inspectorArtifacts.length },
             ] as const).map(tab => <button key={tab.id} type="button" role="tab" aria-selected={inspectorTab === tab.id} className={inspectorTab === tab.id ? 'active' : ''} onClick={() => setInspectorTab(tab.id)}>
               {tab.label}{tab.count ? <span className="sa-tab-count">{tab.count}</span> : null}
@@ -2735,6 +2776,29 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
               </article>}
               {!activeTicket && (inspectorRows.length ? inspectorRows.map(inspectorCard) : <p className="sa-inspector-empty">还没有工作。在左侧描述一个目标开始。</p>)}
             </>}
+            {inspectorTab === 'changes' && (checkpoints.length
+              ? <div className="sa-changes">{checkpoints.map(item => <article className={`sa-card2 sa-changes-item ${checkpointOpenId === item.id ? 'is-open' : ''}`} key={item.id}>
+                <button type="button" className="sa-changes-head" aria-expanded={checkpointOpenId === item.id} onClick={() => void openCheckpoint(item.id)}>
+                  <span className="sa-card2-name">{time(item.createdAt)} · {item.files.length} 个文件</span>
+                  <ChevronRight size={12} />
+                </button>
+                {checkpointOpenId === item.id && checkpointPreview ? <>
+                  <ul className="sa-changes-files">
+                    {checkpointPreview.files.map(file => <li key={file.path}>
+                      <code>{file.path}</code>
+                      <span className="sa-changes-state" data-before={file.before}>{file.before === 'absent' ? '本次新增' : file.before === 'head' ? '取回原版' : file.before === 'unreadable' ? '太大跳过' : '恢复存档'}</span>
+                      {file.diff ? <details><summary>补丁</summary><pre className="sa-diff">{file.diff}</pre></details> : null}
+                    </li>)}
+                  </ul>
+                  <div className="sa-changes-actions">
+                    <button type="button" className={`sa-link ${checkpointConfirm ? 'is-danger' : ''}`} disabled={checkpointBusy} onClick={() => void restoreCheckpoint()}>
+                      {checkpointConfirm ? '确认回滚（覆盖这些文件当前内容）' : '回滚到这次之前'}
+                    </button>
+                    {checkpointConfirm ? <button type="button" className="sa-link" onClick={() => setCheckpointConfirm(false)}>取消</button> : null}
+                  </div>
+                </> : null}
+              </article>)}</div>
+              : <p className="sa-inspector-empty">没有可回滚的检查点。只有 Git 项目在「开始前已有未提交改动」时才会存档；执行器没有改动文件时也不会产生。</p>)}
             {inspectorTab === 'artifacts' && (inspectorArtifacts.length
               ? <div className="sa-inspector-artifacts">{inspectorArtifacts.map(item => <article className="sa-card2" key={`${item.name}-${item.at}`}>
                 <header className="sa-card2-head"><Database size={13} /><span className="sa-card2-name">{item.name}</span></header>

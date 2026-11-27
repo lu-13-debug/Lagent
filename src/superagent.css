@@ -9131,3 +9131,38 @@ label.sa-team-toggle { cursor: pointer; }
   color: var(--sa-text-2);
 }
 .sa-lineage .sa-link { font-size: 12px; }
+
+/* 本轮改动：检查点列表 + 补丁预览 + 二次确认回滚。
+   回滚是不可逆操作，按钮在确认前只是普通链接，确认后才变成危险色。 */
+.sa-changes { display: flex; flex-direction: column; gap: 8px; }
+.sa-changes-item { padding: 0; overflow: hidden; }
+.sa-changes-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; padding: 10px 12px;
+  background: none; border: 0; color: inherit; cursor: pointer;
+  font: inherit; text-align: left;
+}
+.sa-changes-head:hover { background: var(--sa-surface-2); }
+.sa-changes-head svg { transition: transform .16s ease; color: var(--sa-text-2); }
+.sa-changes-item.is-open .sa-changes-head svg { transform: rotate(90deg); }
+.sa-changes-files {
+  margin: 0; padding: 0 12px 10px; list-style: none;
+  display: flex; flex-direction: column; gap: 8px;
+  border-top: 1px solid var(--sa-line);
+}
+.sa-changes-files li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.sa-changes-files code { font-size: 12px; word-break: break-all; }
+.sa-changes-state {
+  font-size: 12px; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--sa-line); color: var(--sa-text-2);
+}
+.sa-changes-state[data-before="unreadable"] { color: var(--sa-danger, #b4543c); }
+.sa-changes-files details { flex-basis: 100%; }
+.sa-changes-files summary { font-size: 12px; color: var(--sa-text-2); cursor: pointer; }
+.sa-diff {
+  margin: 6px 0 0; padding: 8px; max-height: 220px; overflow: auto;
+  font-size: 12px; line-height: 1.5; white-space: pre;
+  background: var(--sa-surface-3); border-radius: 4px;
+}
+.sa-changes-actions { display: flex; gap: 12px; padding: 0 12px 12px; }
+.sa-link.is-danger { color: var(--sa-danger, #b4543c); }

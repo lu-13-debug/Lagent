@@ -154,6 +154,43 @@ export interface WorkThread {
   };
   cursor: { lastSeq: number; updatedAt: string | null };
 }
+/** 执行前检查点：任务开始前存档的工作区改动，可按单文件 / 工作区 / 会话回滚。 */
+export interface WorkCheckpointFile {
+  path: string;
+  state: string;
+  before: 'saved' | 'absent' | 'head' | 'unreadable' | string;
+  size?: number;
+  warning?: string;
+  diff?: string;
+}
+export interface WorkCheckpoint {
+  id: string;
+  projectId?: string;
+  projectPath: string;
+  threadId?: string;
+  ticketId?: string;
+  createdAt: string;
+  files: WorkCheckpointFile[];
+  lastRestoredAt?: string;
+  stats?: { files: number; bytes: number };
+}
+export interface WorkCheckpointPreview {
+  scope: 'file' | 'workspace' | 'session';
+  checkpointId?: string;
+  threadId?: string;
+  checkpointIds: string[];
+  projectPath: string;
+  files: WorkCheckpointFile[];
+  token: string;
+  confirmRequired: boolean;
+}
+export interface WorkCheckpointRestore {
+  checkpointId: string;
+  scope: string;
+  restoredAt: string;
+  files: { path: string; action: string; reason?: string }[];
+  counts: Record<string, number>;
+}
 export interface WorkAgent { id: string; name: string; kind: 'model' | 'claude-code' | 'codex' | 'browser' | 'terminal' | 'window' | string; status: string; capabilities: string[] }
 /** Agent 档案：能力、权限、成本、可靠性与最近使用，用于路由解释。 */
 export interface WorkRosterEntry {

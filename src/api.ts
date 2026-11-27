@@ -1,5 +1,5 @@
 import type { ModelUsageReport, Bootstrap, PublicReport, ModelCatalog, Runtime, Settings, User } from './types';
-import type { WorkAction, WorkAcceptance, WorkApproval, WorkBootstrap, WorkConversation, WorkConversationSummary, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveFrame, WorkLiveSession, WorkMcpServer, WorkMcpToken, WorkPlan, WorkPlanStep, WorkPlugins, WorkPolicy, WorkProfile, WorkProfilesActive, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectFileList, WorkProjectFilePreview, WorkProjectFileSearch, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkReportDetail, WorkReportList, WorkReview, WorkRoomMessage, WorkRosterEntry, WorkRoutine, WorkRun, WorkSkill, WorkSkillCatalogEntry, WorkSkillPreview, WorkSkillScope, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamRoom, WorkTeamTemplate, WorkThread, WorkThreadSummary, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
+import type { WorkAction, WorkAcceptance, WorkApproval, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkCheckpointRestore, WorkConversation, WorkConversationSummary, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveFrame, WorkLiveSession, WorkMcpServer, WorkMcpToken, WorkPlan, WorkPlanStep, WorkPlugins, WorkPolicy, WorkProfile, WorkProfilesActive, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectFileList, WorkProjectFilePreview, WorkProjectFileSearch, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkReportDetail, WorkReportList, WorkReview, WorkRoomMessage, WorkRosterEntry, WorkRoutine, WorkRun, WorkSkill, WorkSkillCatalogEntry, WorkSkillPreview, WorkSkillScope, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamRoom, WorkTeamTemplate, WorkThread, WorkThreadSummary, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
 
 const sessionExpiredListeners = new Set<() => void>();
 let sessionBoundary = 0;
@@ -104,6 +104,39 @@ export const api = {
   workThreads: (limit = 50) => request<{ threads: WorkThreadSummary[] }>(`/work/threads?limit=${limit}`),
   workThread: (id: string, afterSeq = 0) => request<{ thread: WorkThread }>(`/work/threads/${encodeURIComponent(id)}${afterSeq ? `?after_seq=${afterSeq}` : ''}`),
   workThreadEvents: (id: string, afterSeq = 0, limit = 500) => request<{ threadId: string; afterSeq: number; latestSeq: number; events: (WorkThreadTimelineRow & { seq: number; payload?: unknown; createdAt?: string })[] }>(`/work/threads/${encodeURIComponent(id)}/events?after_seq=${afterSeq}&limit=${limit}`),
+  // 执行前检查点：列表 / 预览（只读，返回确认令牌） / 回滚（必须带令牌与 confirm）。
+  workCheckpoints: (options: { threadId?: string; projectId?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (options.threadId) params.set('threadId', options.threadId);
+    if (options.projectId) params.set('projectId', options.projectId);
+    if (options.limit) params.set('limit', String(options.limit));
+    return request<{ checkpoints: WorkCheckpoint[] }>(`/work/checkpoints${params.size ? `?${params}` : ''}`);
+  },
+  workCheckpointPreview: (options: { checkpointId?: string; threadId?: string; scope?: 'file' | 'workspace' | 'session'; path?: string; paths?: string[] }) => {
+    const params = new URLSearchParams();
+    params.set('scope', options.scope || 'workspace');
+    if (options.threadId) params.set('threadId', options.threadId);
+    if (options.path) params.set('path', options.path);
+    if (options.paths?.length) params.set('paths', options.paths.join(','));
+    return request<{ preview: WorkCheckpointPreview }>(`/work/checkpoints/${encodeURIComponent(options.checkpointId || '')}/preview?${params}`);
+  },
+  workCheckpointSessionPreview: (options: { threadId: string; paths?: string[] }) => {
+    const params = new URLSearchParams();
+    params.set('threadId', options.threadId);
+    params.set('scope', 'session');
+    if (options.paths?.length) params.set('paths', options.paths.join(','));
+    return request<{ preview: WorkCheckpointPreview }>(`/work/checkpoints/preview?${params}`);
+  },
+  workCheckpointRestore: (input: { checkpointId?: string; threadId?: string; scope: 'file' | 'workspace' | 'session'; path?: string; paths?: string[]; token: string }) =>
+    request<{ restore: WorkCheckpointRestore }>(`/work/checkpoints/${encodeURIComponent(input.checkpointId || '')}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ ...input, confirm: true })
+    }),
+  workCheckpointSessionRestore: (input: { threadId: string; paths?: string[]; token: string }) =>
+    request<{ restore: WorkCheckpointRestore }>('/work/checkpoints/restore', {
+      method: 'POST',
+      body: JSON.stringify({ threadId: input.threadId, scope: 'session', paths: input.paths, token: input.token, confirm: true })
+    }),
   workDeleteTicket: (id: string) => request<{ id: string; removed: number; ids: string[]; planRemoved: boolean }>(`/work/tickets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   // 编排器：一次运行 = 分析 → 拆解 → 批准 → 分发 → 验证（可返工）→ 汇总
   workRuns: (limit = 20, includePlans = false) => request<{ runs: WorkRun[] }>(`/work/runs?limit=${limit}${includePlans ? '&include=plans' : ''}`),
