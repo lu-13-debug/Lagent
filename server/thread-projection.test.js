@@ -189,3 +189,24 @@ test('交接工单让父子线程互相可见（lineage）', t => {
   const lonely = projection.get('conv-1').lineage.parent;
   assert.equal(lonely, null, '没有上一棒时 parent 为空');
 });
+
+test('子线程的待确认事项冒泡到父线程，并标出来源', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-thread-bubble-'));
+  const store = new Store(dir);
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
+  const approvals = createApprovalService(store, { publish: () => {}, now: () => Date.parse('2026-11-27T00:00:00.000Z') });
+  store.put('conversation', { id: 'parent', title: '父会话', status: 'completed', turns: [], createdAt: '2026-11-27T00:00:00.000Z', updatedAt: '2026-11-27T00:00:00.000Z' });
+  store.put('conversation', { id: 'child', title: '子会话', status: 'working', turns: [], createdAt: '2026-11-27T00:01:00.000Z', updatedAt: '2026-11-27T00:01:00.000Z' });
+  store.put('work-ticket', { id: 'tp', conversationId: 'parent', title: '父工单', status: 'completed', createdAt: '2026-11-27T00:00:00.000Z', updatedAt: '2026-11-27T00:00:10.000Z' });
+  store.put('work-ticket', { id: 'tc', conversationId: 'child', parentTicketId: 'tp', handoffDepth: 1, title: '子工单', status: 'working', createdAt: '2026-11-27T00:01:00.000Z', updatedAt: '2026-11-27T00:01:10.000Z' });
+  approvals.request({ threadId: 'child', ticketId: 'tc', kind: 'ticket', title: '确认发布', summary: '子 Agent 请求确认' });
+
+  const threads = createThreadProjection({ store, runEvents: null });
+  const parent = threads.get('parent');
+  assert.equal(parent.status, 'waiting_approval', '子线程待确认时父线程显示等待审批');
+  assert.equal(parent.inspector.pendingApprovals.length, 1);
+  assert.equal(parent.inspector.pendingApprovals[0].fromThreadId, 'child');
+  assert.equal(parent.inspector.pendingApprovals[0].fromThreadTitle, '子会话');
+  assert.equal(parent.approvals.some(item => item.fromThreadId === 'child'), true, '顶层 approvals 也带来源');
+  assert.equal(threads.get('child').inspector.pendingApprovals.length, 1, '子线程自己仍看得到');
+});

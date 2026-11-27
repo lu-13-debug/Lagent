@@ -9166,3 +9166,20 @@ label.sa-team-toggle { cursor: pointer; }
 }
 .sa-changes-actions { display: flex; gap: 12px; padding: 0 12px 12px; }
 .sa-link.is-danger { color: var(--sa-danger, #b4543c); }
+
+/* 行模型时间线：一件事一行，类型用点的颜色区分，不靠图标堆叠。 */
+.sa-timeline { list-style: none; margin: 0; padding: 0 0 0 2px; display: flex; flex-direction: column; }
+.sa-timeline li { position: relative; display: flex; gap: 10px; padding: 8px 0 8px 14px; border-left: 1px solid var(--sa-line); }
+.sa-timeline li:last-child { border-left-color: transparent; }
+.sa-timeline-dot {
+  position: absolute; left: -4px; top: 14px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--sa-text-3); box-shadow: 0 0 0 3px var(--sa-surface);
+}
+.sa-timeline li[data-kind="approval"] .sa-timeline-dot { background: var(--sa-warning); }
+.sa-timeline li[data-kind="error"] .sa-timeline-dot { background: var(--sa-danger); }
+.sa-timeline li[data-kind="artifact"] .sa-timeline-dot { background: var(--sa-success); }
+.sa-timeline li[data-kind="plan"] .sa-timeline-dot { background: var(--sa-accent); }
+.sa-timeline-head { display: flex; align-items: baseline; gap: 8px; font-size: 12px; color: var(--sa-text-3); }
+.sa-timeline-title { font-size: 13px; color: var(--sa-text); }
+.sa-timeline-text { font-size: 12px; line-height: 1.6; color: var(--sa-text-2); word-break: break-word; }
+.sa-timeline-head time { font-variant-numeric: tabular-nums; }

@@ -104,6 +104,9 @@ export interface WorkApproval {
   resolvedAt?: string;
   /** 只有 detail 接口带原始输入；列表与 bootstrap 不带。 */
   input?: unknown;
+  /** 冒泡到父线程时，标出这条审批来自哪条子线程。 */
+  fromThreadId?: string;
+  fromThreadTitle?: string;
 }
 /** P0.3：thread 时间线行。P0 先给读模型，UI 行组件按 kind 分派。 */
 export interface WorkThreadTimelineRow {

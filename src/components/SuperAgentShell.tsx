@@ -5,7 +5,7 @@ import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Cl
 import { api } from '../api';
 import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
-import type { WorkAction, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkConversation, WorkConversationRun, WorkConversationSummary, WorkConversationTurn, WorkInboxItem, WorkMcpToken, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTeamTemplate, WorkThread, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
+import type { WorkAction, WorkApproval, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkConversation, WorkConversationRun, WorkConversationSummary, WorkConversationTurn, WorkInboxItem, WorkMcpToken, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTeamTemplate, WorkThread, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
 import { MemoryPanel } from './MemoryPanel';
 import { AgentConclusionList, AgentThinkingPanel } from './AgentThinkingPanel';
 import { ChatModelPicker, CliModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
@@ -103,6 +103,12 @@ const brandOf = (id: string) => BRAND_MARKS[baseExecutorId(id).replace(/-(acp|de
 // 本机节点连上来时，执行器 id 可能带 node-<短id>- 前缀，但它在对话里和内置的同名 Agent 是一类。
 const isConversationExecutor = (id: string) => conversationExecutorIds.includes(id) || conversationExecutorIds.includes(baseExecutorId(id));
 const time = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '–';
+// 行模型的类型标签：一件事一行，先看类型再看内容。
+const TIMELINE_KINDS: Record<string, string> = {
+  thinking: '思考', tool: '工具', command: '命令', approval: '审批', plan: '计划',
+  artifact: '产物', subagent: '协作', error: '错误', fold: '汇总', text: '说明'
+};
+const timelineKindLabel = (kind: string) => TIMELINE_KINDS[kind] || kind || '事件';
 const shortTime = (value?: string) => {
   if (!value) return '–';
   const date = new Date(value);
@@ -314,7 +320,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [conversations, setConversations] = useState<WorkConversationSummary[]>(() => []);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('conv'));
   const [activeConversation, setActiveConversation] = useState<WorkConversation | null>(null);
-  const [inspectorTab, setInspectorTab] = useState<'inbox' | 'run' | 'changes' | 'artifacts'>('inbox');
+  const [inspectorTab, setInspectorTab] = useState<'inbox' | 'run' | 'timeline' | 'changes' | 'artifacts'>('inbox');
   // 本轮改动：检查点列表 + 当前预览（含确认令牌）。回滚必须两步：先预览，再确认。
   const [checkpoints, setCheckpoints] = useState<WorkCheckpoint[]>([]);
   const [checkpointPreview, setCheckpointPreview] = useState<WorkCheckpointPreview | null>(null);
@@ -323,12 +329,21 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [checkpointBusy, setCheckpointBusy] = useState(false);
   // 交接链路（thread 投影的可选字段）：开关关闭或接口 404 时保持空，不影响会话。
   const [threadLineage, setThreadLineage] = useState<WorkThread['lineage'] | null>(null);
+  // 冒泡上来的子线程审批：父会话里提示「子会话有待确认」，点进去处理。
+  const [childApprovals, setChildApprovals] = useState<WorkApproval[]>([]);
+  // 行模型：thread 投影给出的统一时间线（思考/工具/审批/计划/产物各一行）。
+  const [threadTimeline, setThreadTimeline] = useState<WorkThreadTimelineRow[]>([]);
   useEffect(() => {
-    if (!activeConversationId) { setThreadLineage(null); return; }
+    if (!activeConversationId) { setThreadLineage(null); setChildApprovals([]); setThreadTimeline([]); return; }
     let alive = true;
     api.workThread(activeConversationId)
-      .then(result => { if (alive) setThreadLineage(result.thread.lineage || null); })
-      .catch(() => { if (alive) setThreadLineage(null); });
+      .then(result => {
+        if (!alive) return;
+        setThreadLineage(result.thread.lineage || null);
+        setChildApprovals((result.thread.inspector?.pendingApprovals || []).filter(item => item.fromThreadId));
+        setThreadTimeline(result.thread.timeline || []);
+      })
+      .catch(() => { if (alive) { setThreadLineage(null); setChildApprovals([]); setThreadTimeline([]); } });
     return () => { alive = false; };
   }, [activeConversationId]);
   // 检查器「本轮改动」：执行前检查点按会话列出；先预览拿到确认令牌，再二次确认回滚。
@@ -2163,6 +2178,9 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         {threadLineage && (threadLineage.parent || threadLineage.children.length > 0) && <p className="sa-lineage">
           {threadLineage.parent && <button type="button" className="sa-link" onClick={() => openConversation(threadLineage.parent!.threadId)}>接手自「{threadLineage.parent.title || threadLineage.parent.ticketId}」</button>}
           {threadLineage.children.map(child => <button type="button" key={child.threadId} className="sa-link" onClick={() => openConversation(child.threadId)}>已交给「{child.title || child.ticketId}」</button>)}
+          {childApprovals.length > 0 && <button type="button" className="sa-link is-danger" onClick={() => openConversation(childApprovals[0].fromThreadId!)}>
+            子会话「{childApprovals[0].fromThreadTitle || childApprovals[0].fromThreadId}」有 {childApprovals.length} 项待确认
+          </button>}
         </p>}
         <p className="sa-inline-note">一个任务一条会话；选中的 Agent 在下面分 tab 呈现思考过程，结论并列比较，不各自创建对话。</p>
         {activeConversation.turns.map(renderConversationTurn)}
@@ -2758,6 +2776,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             {([
               { id: 'inbox', label: '需要你', count: attentionRows.length },
               { id: 'run', label: '当前运行', count: tickets.filter(ticket => ticket.status === 'working').length },
+              { id: 'timeline', label: '时间线', count: threadTimeline.length },
               { id: 'changes', label: '本轮改动', count: checkpoints.length },
               { id: 'artifacts', label: '产物', count: inspectorArtifacts.length },
             ] as const).map(tab => <button key={tab.id} type="button" role="tab" aria-selected={inspectorTab === tab.id} className={inspectorTab === tab.id ? 'active' : ''} onClick={() => setInspectorTab(tab.id)}>
@@ -2776,6 +2795,16 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
               </article>}
               {!activeTicket && (inspectorRows.length ? inspectorRows.map(inspectorCard) : <p className="sa-inspector-empty">还没有工作。在左侧描述一个目标开始。</p>)}
             </>}
+            {inspectorTab === 'timeline' && (threadTimeline.length
+              ? <ol className="sa-timeline">{threadTimeline.slice(-200).reverse().map((row, index) => <li key={`${row.id}-${index}`} data-kind={row.kind}>
+                  <span className="sa-timeline-dot" aria-hidden="true" />
+                  <div>
+                    <p className="sa-timeline-head"><span>{timelineKindLabel(row.kind)}</span>{row.at ? <time>{time(row.at)}</time> : null}</p>
+                    {row.title ? <p className="sa-timeline-title">{row.title}</p> : null}
+                    {row.text ? <p className="sa-timeline-text">{row.text}</p> : null}
+                  </div>
+                </li>)}</ol>
+              : <p className="sa-inspector-empty">这条会话还没有时间线。开启 thread 投影（LAGENT_THREAD_API=1）后，思考、工具、审批、计划和产物会按顺序出现在这里。</p>)}
             {inspectorTab === 'changes' && (checkpoints.length
               ? <div className="sa-changes">{checkpoints.map(item => <article className={`sa-card2 sa-changes-item ${checkpointOpenId === item.id ? 'is-open' : ''}`} key={item.id}>
                 <button type="button" className="sa-changes-head" aria-expanded={checkpointOpenId === item.id} onClick={() => void openCheckpoint(item.id)}>

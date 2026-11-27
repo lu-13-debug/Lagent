@@ -57,7 +57,7 @@ function runSummary(run) {
   };
 }
 
-function approvalSummary(approval) {
+function approvalSummary(approval, extra = {}) {
   const result = publicApproval(approval);
   if (!result) return null;
   return {
@@ -76,7 +76,8 @@ function approvalSummary(approval) {
     ...(result.decidedBy ? { decidedBy: result.decidedBy } : {}),
     createdAt: result.createdAt,
     expiresAt: result.expiresAt,
-    ...(result.resolvedAt ? { resolvedAt: result.resolvedAt } : {})
+    ...(result.resolvedAt ? { resolvedAt: result.resolvedAt } : {}),
+    ...extra
   };
 }
 
@@ -216,6 +217,7 @@ export function createThreadProjection({
   function lineageOf(threadId, ticketIds) {
     const all = tickets();
     const chatThread = new Map(chats().map(chat => [chat.id, chat.conversationId || chat.id]));
+    const convTitles = new Map(conversations().map(conversation => [conversation.id, text(conversation.title, 120)]));
     const threadOf = ticket => ticket.conversationId
       || (ticket.projectChatId ? (chatThread.get(ticket.projectChatId) || ticket.projectChatId) : ticket.id);
     let parent = null;
@@ -226,7 +228,7 @@ export function createThreadProjection({
       parent = {
         ticketId: parentTicket.id,
         threadId: threadOf(parentTicket),
-        title: text(parentTicket.title, 120) || '',
+        title: convTitles.get(parentTicket.conversationId) || text(parentTicket.title, 120) || '',
         ...(text(parentTicket.status, 30) ? { status: text(parentTicket.status, 30) } : {})
       };
       break;
@@ -241,7 +243,7 @@ export function createThreadProjection({
       children.push({
         ticketId: ticket.id,
         threadId: childThreadId,
-        title: text(ticket.title, 120) || '',
+        title: convTitles.get(ticket.conversationId) || text(ticket.title, 120) || '',
         status: text(ticket.status, 30) || 'unknown',
         depth: Number.isSafeInteger(ticket.handoffDepth) ? ticket.handoffDepth : 1
       });
@@ -266,7 +268,24 @@ export function createThreadProjection({
     const conversation = store.get('conversation', threadId) || null;
     const events = eventsOf(threadId, { afterSeq, limit: timelineLimit, ticketIds });
     const timeline = timelineRows(events);
-    const pendingApprovals = threadApprovals.filter(approval => approval.status === 'pending').map(approvalSummary).filter(Boolean);
+    // 审批冒泡：子线程（交接出去的工单）里的待确认事项，在父线程也列一份，
+    // 并标出来自哪条线程；决定仍然在全局收件箱里做，不复制审批对象。
+    const lineage = lineageOf(threadId, ticketIds);
+    const childIds = new Set(lineage.children.map(child => child.threadId));
+    const childPending = childIds.size
+      ? approvalsRows()
+        .filter(approval => approval.status === 'pending' && childIds.has(approval.threadId))
+        .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))
+      : [];
+    const childTitles = new Map(lineage.children.map(child => [child.threadId, child.title]));
+    const bubbled = childPending.map(approval => approvalSummary(approval, {
+      fromThreadId: approval.threadId,
+      ...(childTitles.get(approval.threadId) ? { fromThreadTitle: childTitles.get(approval.threadId) } : {})
+    })).filter(Boolean);
+    const pendingApprovals = [
+      ...threadApprovals.filter(approval => approval.status === 'pending').map(approval => approvalSummary(approval)),
+      ...bubbled
+    ].filter(Boolean);
     const reports = store.list('work-report')
       .filter(report => ticketIds.has(report.ticketId))
       .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')));
@@ -284,7 +303,8 @@ export function createThreadProjection({
     ].filter(Boolean).sort().at(-1) || null;
     // 空会话（还没有工单/运行）用会话自身的状态兜底，避免列表里显示成 idle。
     const conversationStatus = { completed: 'settled', failed: 'failed', working: 'running', awaiting_review: 'waiting_approval' }[conversation?.status];
-    const status = threadStatusOf(threadTickets, threadApprovals, threadRuns);
+    // 子线程有待确认事项时，父线程也显示成「等待审批」，否则用户会以为父线程已经结束。
+    const status = threadStatusOf(threadTickets, [...threadApprovals, ...childPending], threadRuns);
     return {
       id: threadId,
       title: text(conversation?.title, 120) || text(threadTickets[0]?.title, 120) || text(threadRuns[0]?.goal, 120) || threadId,
@@ -293,8 +313,8 @@ export function createThreadProjection({
       ...(text(conversation?.id, 100) ? { conversationId: conversation.id } : {}),
       runs: threadRuns.map(runSummary),
       tickets: threadTickets.map(ticketSummary),
-      lineage: lineageOf(threadId, ticketIds),
-      approvals: threadApprovals.map(approvalSummary).filter(Boolean),
+      lineage,
+      approvals: [...threadApprovals.map(approval => approvalSummary(approval)), ...bubbled].filter(Boolean),
       timeline,
       inspector: {
         pendingApprovals,
