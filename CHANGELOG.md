@@ -9,6 +9,8 @@
 - 新增 thread 只读投影：把 conversation / ticket / run / approval 聚合成统一线程视图，返回 `cursor.lastSeq`，带 1 秒缓存；新增 `GET /api/work/threads/:id` 与 `/events?after_seq=` 接口。
 - 服务端开关默认关闭，可逐项启用与回滚：`LAGENT_RUN_EVENTS`、`LAGENT_SSE_V2`、`LAGENT_APPROVALS`、`LAGENT_THREAD_API`。
 - 界面落实 A 控制室双主题：夜间石墨底配琥珀强调，白天暖纸底配陶土强调，结构与组件完全一致，只切换 token；统一 2/4/6px 圆角、点阵底纹与 244/340/46 三档宽度，检查器宽度改用 `--sa-rail`（340px），修掉写死 304px 的问题。
+- 会话页中间区改为可切换页面：对话 / 当前运行 / 时间线 / 本轮改动，切换按钮放在工作区顶部；右侧工作坞只保留「需要你」与「产物」，不再塞满五个页签。
+- 右侧工作坞加宽到 420px（窄屏按窗口比例收窄），保留一键折叠；「产物」按本次会话/工单实际改动的文件列出，点开即可在工作坞里直接预览 Markdown、文本、代码、表格、图片、PDF 等，不必再切到项目页。
 - 首帧主题色跟随明暗切换（`#0b0d0c` / `#f3f1ea`），不再有深色启动闪白。
 - 新增 P0 验收脚本 `npm run p0:acceptance`：覆盖默认关闭、四开关全开、同一数据回滚三种模式，共 17 项断言。
 - 版本号与手机外壳同步到 1.2.4（Android `versionCode 10204`）。

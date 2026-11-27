@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Clock, Database, FileText, FolderGit2, GitBranch, Globe, ListChecks, Menu, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Puzzle, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Trash2, Users, Wrench, X } from 'lucide-react';
+import { Activity, AlertTriangle, AppWindow, ArrowLeft, Bot, Brain, Check, ChevronRight, Clock, Database, FileText, FolderGit2, GitBranch, Globe, ListChecks, Menu, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pin, Plus, Puzzle, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, Sparkles, Square, SunMoon, Terminal, Trash2, Users, Wrench, X } from 'lucide-react';
 import { api } from '../api';
 import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
-import type { WorkAction, WorkApproval, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkConversation, WorkConversationRun, WorkConversationSummary, WorkConversationTurn, WorkInboxItem, WorkMcpToken, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTeamTemplate, WorkThread, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
+import type { WorkAction, WorkApproval, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkConversation, WorkConversationRun, WorkConversationSummary, WorkConversationTurn, WorkInboxItem, WorkMcpToken, WorkPlan, WorkPolicy, WorkProject, WorkProjectChange, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTeamTemplate, WorkThread, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
 import { MemoryPanel } from './MemoryPanel';
 import { AgentConclusionList, AgentThinkingPanel } from './AgentThinkingPanel';
 import { ChatModelPicker, CliModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
 import { ProjectsPanel } from './ProjectsPanel';
+import { FileKindIcon, FilePreviewBody, fileKindFromPath, formatFileTime, useProjectFilePreview } from './ProjectFilePreview';
 import { ReportCenter } from './ReportCenter';
 import { reportTextOf as reportText } from '../report-text';
 import { lagentOnlySuggestion } from '../agent-choice';
@@ -322,7 +323,11 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [conversations, setConversations] = useState<WorkConversationSummary[]>(() => []);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('conv'));
   const [activeConversation, setActiveConversation] = useState<WorkConversation | null>(null);
-  const [inspectorTab, setInspectorTab] = useState<'inbox' | 'run' | 'timeline' | 'changes' | 'artifacts'>('inbox');
+  // 右栏只保留「需要你 / 产物」；运行、时间线、本轮改动放回中间区，作为可切换页面。
+  const [inspectorTab, setInspectorTab] = useState<'inbox' | 'artifacts'>('inbox');
+  const [chatPage, setChatPage] = useState<'chat' | 'run' | 'timeline' | 'changes'>('chat');
+  const [artifactPath, setArtifactPath] = useState<string | null>(null);
+  const [projectChanges, setProjectChanges] = useState<WorkProjectChange[]>([]);
   // 本轮改动：检查点列表 + 当前预览（含确认令牌）。回滚必须两步：先预览，再确认。
   const [checkpoints, setCheckpoints] = useState<WorkCheckpoint[]>([]);
   const [checkpointPreview, setCheckpointPreview] = useState<WorkCheckpointPreview | null>(null);
@@ -355,11 +360,11 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     catch { setCheckpoints([]); }
   }
   useEffect(() => {
-    if (inspectorTab !== 'changes') return;
-    void loadCheckpoints();
-    // 切换会话或页签时清掉上一份预览，避免把 A 会话的文件当成 B 会话的。
+    // 检查点数量要显示在页签上，所以进入会话就取一次；只有切到「本轮改动」时才清预览。
+    if (activeConversationId) void loadCheckpoints(); else setCheckpoints([]);
+    if (chatPage !== 'changes') return;
     setCheckpointOpenId(''); setCheckpointPreview(null); setCheckpointConfirm(false);
-  }, [inspectorTab, activeConversationId]);
+  }, [chatPage, activeConversationId]);
   async function openCheckpoint(id: string) {
     setCheckpointOpenId(id); setCheckpointConfirm(false);
     try { setCheckpointPreview((await api.workCheckpointPreview({ checkpointId: id, scope: 'workspace' })).preview); }
@@ -421,6 +426,19 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [projects, setProjects] = useState<WorkProject[] | null>(null);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const [activeDetail, setActiveDetail] = useState<WorkTicketDetail | null>(null);
+  // 切换会话或工单时回到「对话」页，避免停在上一轮的时间线/改动页。
+  useEffect(() => { setChatPage('chat'); }, [activeConversationId, activeTicketId, activeGroupId, projectChatId]);
+  // 右栏产物：取当前项目登记过的文件变更，才能按路径直接预览。
+  const artifactProjectId = activeDetail?.project?.id || activeConversation?.projectId || folderState.projectId || '';
+  useEffect(() => {
+    setArtifactPath(null);
+    if (!artifactProjectId) { setProjectChanges([]); return; }
+    let alive = true;
+    api.workProjectChanges(artifactProjectId)
+      .then(result => { if (alive) setProjectChanges(result.changes); })
+      .catch(() => { if (alive) setProjectChanges([]); });
+    return () => { alive = false; };
+  }, [artifactProjectId, activeTicketId]);
   const [runs, setRuns] = useState<WorkRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [runDetail, setRunDetail] = useState<WorkRun | null>(null);
@@ -1837,18 +1855,23 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const activeAttention = activeTicketId ? attention.find(item => item.ticketId === activeTicketId) : undefined;
   const activeReports = activeDetail?.reports || [];
   // 产物只看这次工作真正留下的东西：报告里的 artifacts 字段，按名字去重。
-  const inspectorArtifacts = useMemo(() => {
-    const seen = new Set<string>();
-    const rows: { name: string; kind: string; at: string; bytes?: number }[] = [];
-    for (const report of activeDetail?.reports || []) {
-      for (const [name, value] of Object.entries(report.artifacts || {})) {
-        if (seen.has(name)) continue;
-        seen.add(name);
-        rows.push({ name, kind: report.kind, at: report.createdAt, bytes: typeof value === 'string' ? value.length : undefined });
+  // 产物按「本次工单实际改过的文件」列，路径来自项目变更记录，点开即可在右栏预览。
+  const artifactFiles = useMemo(() => {
+    if (!artifactProjectId) return [] as { path: string; at: string }[];
+    const ticketIds = activeTicketId ? new Set([activeTicketId]) : new Set(activeConversation?.ticketIds || []);
+    const seen = new Map<string, { path: string; at: string }>();
+    for (const change of projectChanges) {
+      if (ticketIds.size && !ticketIds.has(change.ticketId)) continue;
+      for (const file of change.files) {
+        // Windows 变更记录里同一文件可能同时出现 \ 与 / 两种写法，按规范化路径去重。
+        const key = file.replace(/\\/g, '/');
+        const previous = seen.get(key);
+        if (!previous || change.createdAt > previous.at) seen.set(key, { path: file, at: change.createdAt });
       }
     }
-    return rows;
-  }, [activeDetail]);
+    return [...seen.values()].sort((left, right) => right.at.localeCompare(left.at));
+  }, [artifactProjectId, projectChanges, activeTicketId, activeConversation]);
+  const { preview: artifactPreview, loading: artifactLoading, error: artifactError } = useProjectFilePreview(artifactProjectId, artifactPath);
   // 实时过程优先用 SSE 推送的那份；刷新后从详情里补回来。
   // result 这一步就是下面的「结果」块，不在这里重复一遍。
   const liveSteps: LiveStep[] = activityOf(activeTicketId ? liveActivity[activeTicketId] : undefined, activeDetail);
@@ -2136,6 +2159,16 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const conversationRows = activeConversation ? activeConversation.turns.flatMap(buildConversationRows) : [];
 
   const conversationPage = <div className={`sa-workspace ${isLanding ? 'sa-workspace-landing' : ''}`}>
+    {!isLanding && <div className="sa-chat-pages" role="tablist" aria-label="会话页面">
+      {([
+        { id: 'chat', label: '对话', count: 0 },
+        { id: 'run', label: '当前运行', count: tickets.filter(ticket => ticket.status === 'working').length },
+        { id: 'timeline', label: '时间线', count: threadTimeline.length },
+        { id: 'changes', label: '本轮改动', count: checkpoints.length },
+      ] as const).map(tab => <button key={tab.id} type="button" role="tab" aria-selected={chatPage === tab.id} className={chatPage === tab.id ? 'active' : ''} onClick={() => setChatPage(tab.id)}>
+        {tab.label}{tab.count ? <span className="sa-tab-count">{tab.count}</span> : null}
+      </button>)}
+    </div>}
     {isLanding ? <div className="sa-landing sa-board" ref={landingRef}>
       <div className="sa-board-main">
         <header className="sa-board-head">
@@ -2193,7 +2226,60 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           </div>
         </section>}
       </div>
-    </div> : activeConversationId && !activeConversation ? <div className="sa-thread">
+    </div> : chatPage !== 'chat' ? <section className={`sa-chat-panel sa-chat-panel-${chatPage}`} aria-label={chatPage === 'run' ? '当前运行' : chatPage === 'timeline' ? '时间线' : '本轮改动'}>
+      <header className="sa-chat-panel-head">
+        <p className="sa-eyebrow">工作详情</p>
+        <h2>{chatPage === 'run' ? '当前运行' : chatPage === 'timeline' ? '时间线' : '本轮改动'}</h2>
+        <p>{chatPage === 'run'
+          ? `${tickets.filter(ticket => ticket.status === 'working').length} 个任务正在执行；下面是这次会话最近的工作。`
+          : chatPage === 'timeline'
+            ? '思考、工具、审批、计划与产物按发生顺序排列。'
+            : '执行前存下的文件快照；回滚前先预览，再确认。'}</p>
+      </header>
+      <div className="sa-chat-panel-body">
+        {chatPage === 'run' && <>
+          {activeTicket && <article className="sa-card2">
+            <header className="sa-card2-head"><span className="sa-card2-dot" aria-hidden="true" data-status={activeTicket.status} /><span className="sa-card2-name">{activeTicket.title}</span><Status status={activeTicket.status} /></header>
+            <p className="sa-card2-summary">{executorNames[activeTicket.executor] || activeTicket.executor}{activeTicket.planId ? ` · 计划第 ${(activeTicket.planStep ?? 0) + 1}/${activeTicket.planTotal ?? 0} 步` : ''} · {activeDetail?.activity?.length ?? 0} 个动作</p>
+            <button type="button" className="sa-link" onClick={() => void open(activeTicket.id)}>打开运行详情<ChevronRight size={12} /></button>
+          </article>}
+          {!activeTicket && (inspectorRows.length ? inspectorRows.map(inspectorCard) : <p className="sa-inspector-empty">还没有工作。在对话里描述一个目标开始。</p>)}
+        </>}
+        {chatPage === 'timeline' && (threadTimeline.length
+          ? <ol className="sa-timeline">{threadTimeline.slice(-200).reverse().map((row, index) => <li key={`${row.id}-${index}`} data-kind={row.kind}>
+              <span className="sa-timeline-dot" aria-hidden="true" />
+              <div>
+                <p className="sa-timeline-head"><span>{timelineKindLabel(row.kind)}</span>{row.at ? <time>{time(row.at)}</time> : null}</p>
+                {row.title ? <p className="sa-timeline-title">{row.title}</p> : null}
+                {row.text ? <p className="sa-timeline-text">{row.text}</p> : null}
+              </div>
+            </li>)}</ol>
+          : <p className="sa-inspector-empty">这条会话还没有时间线。开启 thread 投影（LAGENT_THREAD_API=1）后，思考、工具、审批、计划和产物会按顺序出现在这里。</p>)}
+        {chatPage === 'changes' && (checkpoints.length
+          ? <div className="sa-changes">{checkpoints.map(item => <article className={`sa-card2 sa-changes-item ${checkpointOpenId === item.id ? 'is-open' : ''}`} key={item.id}>
+            <button type="button" className="sa-changes-head" aria-expanded={checkpointOpenId === item.id} onClick={() => void openCheckpoint(item.id)}>
+              <span className="sa-card2-name">{time(item.createdAt)} · {item.files.length} 个文件</span>
+              <ChevronRight size={12} />
+            </button>
+            {checkpointOpenId === item.id && checkpointPreview ? <>
+              <ul className="sa-changes-files">
+                {checkpointPreview.files.map(file => <li key={file.path}>
+                  <code>{file.path}</code>
+                  <span className="sa-changes-state" data-before={file.before}>{file.before === 'absent' ? '本次新增' : file.before === 'head' ? '取回原版' : file.before === 'unreadable' ? '太大跳过' : '恢复存档'}</span>
+                  {file.diff ? <details><summary>补丁</summary><pre className="sa-diff">{file.diff}</pre></details> : null}
+                </li>)}
+              </ul>
+              <div className="sa-changes-actions">
+                <button type="button" className={`sa-link ${checkpointConfirm ? 'is-danger' : ''}`} disabled={checkpointBusy} onClick={() => void restoreCheckpoint()}>
+                  {checkpointConfirm ? '确认回滚（覆盖这些文件当前内容）' : '回滚到这次之前'}
+                </button>
+                {checkpointConfirm ? <button type="button" className="sa-link" onClick={() => setCheckpointConfirm(false)}>取消</button> : null}
+              </div>
+            </> : null}
+          </article>)}</div>
+          : <p className="sa-inspector-empty">没有可回滚的检查点。只有 Git 项目在「开始前已有未提交改动」时才会存档；执行器没有改动文件时也不会产生。</p>)}
+      </div>
+    </section> : activeConversationId && !activeConversation ? <div className="sa-thread">
       <div className="sa-thread-inner"><p className="sa-empty"><RefreshCw size={14} className="sa-spin" /> 正在载入会话…</p></div>
     </div> : activeConversation ? <div className="sa-thread" ref={threadRef}>
       <div className="sa-thread-inner">
@@ -2319,7 +2405,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         </> : null}
       </div>
     </div>}
-    <div className="sa-composer-dock">
+    {(isLanding || chatPage === 'chat') && <div className="sa-composer-dock">
       {(() => {
         const collaborators = selectedAgents.filter(id => id !== 'model');
         const suggestion = lagentOnlySuggestion({
@@ -2442,7 +2528,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         </div>
       </form>
       <p className="sa-note"><ShieldCheck size={14} />{composeMode === 'multi' ? '多 Agent 模式由 Lagent 先拆解分发，协作 Agent 完成后互相验收，最后统一汇总；会消耗对应执行器的额度。' : '单 Agent 模式只由 Lagent 完成，不会调用其他执行器。'}<span className="sa-keyhint">Enter 发送 · Shift + Enter 换行</span></p>
-    </div>
+    </div>}
   </div>;
 
   const dshWindow = windows.find(window => /deepseek/i.test(`${window.process} ${window.title}`));
@@ -2799,10 +2885,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           <div className="sa-inspector-tabs" role="tablist" aria-label="工作详情分类">
             {([
               { id: 'inbox', label: '需要你', count: attentionRows.length },
-              { id: 'run', label: '当前运行', count: tickets.filter(ticket => ticket.status === 'working').length },
-              { id: 'timeline', label: '时间线', count: threadTimeline.length },
-              { id: 'changes', label: '本轮改动', count: checkpoints.length },
-              { id: 'artifacts', label: '产物', count: inspectorArtifacts.length },
+              { id: 'artifacts', label: '产物', count: artifactFiles.length },
             ] as const).map(tab => <button key={tab.id} type="button" role="tab" aria-selected={inspectorTab === tab.id} className={inspectorTab === tab.id ? 'active' : ''} onClick={() => setInspectorTab(tab.id)}>
               {tab.label}{tab.count ? <span className="sa-tab-count">{tab.count}</span> : null}
             </button>)}
@@ -2811,53 +2894,33 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             {inspectorTab === 'inbox' && (attentionRows.length
               ? renderAttention(attentionRows.map(row => row.item))
               : <p className="sa-inspector-empty">没有需要你确认的事。需要批准的工单会排在这里，按风险从高到低。</p>)}
-            {inspectorTab === 'run' && <>
-              {activeTicket && <article className="sa-card2">
-                <header className="sa-card2-head"><span className="sa-card2-dot" aria-hidden="true" data-status={activeTicket.status} /><span className="sa-card2-name">{activeTicket.title}</span><Status status={activeTicket.status} /></header>
-                <p className="sa-card2-summary">{executorNames[activeTicket.executor] || activeTicket.executor}{activeTicket.planId ? ` · 计划第 ${(activeTicket.planStep ?? 0) + 1}/${activeTicket.planTotal ?? 0} 步` : ''} · {activeDetail?.activity?.length ?? 0} 个动作</p>
-                <button type="button" className="sa-link" onClick={() => void open(activeTicket.id)}>打开运行详情<ChevronRight size={12} /></button>
-              </article>}
-              {!activeTicket && (inspectorRows.length ? inspectorRows.map(inspectorCard) : <p className="sa-inspector-empty">还没有工作。在左侧描述一个目标开始。</p>)}
-            </>}
-            {inspectorTab === 'timeline' && (threadTimeline.length
-              ? <ol className="sa-timeline">{threadTimeline.slice(-200).reverse().map((row, index) => <li key={`${row.id}-${index}`} data-kind={row.kind}>
-                  <span className="sa-timeline-dot" aria-hidden="true" />
-                  <div>
-                    <p className="sa-timeline-head"><span>{timelineKindLabel(row.kind)}</span>{row.at ? <time>{time(row.at)}</time> : null}</p>
-                    {row.title ? <p className="sa-timeline-title">{row.title}</p> : null}
-                    {row.text ? <p className="sa-timeline-text">{row.text}</p> : null}
-                  </div>
-                </li>)}</ol>
-              : <p className="sa-inspector-empty">这条会话还没有时间线。开启 thread 投影（LAGENT_THREAD_API=1）后，思考、工具、审批、计划和产物会按顺序出现在这里。</p>)}
-            {inspectorTab === 'changes' && (checkpoints.length
-              ? <div className="sa-changes">{checkpoints.map(item => <article className={`sa-card2 sa-changes-item ${checkpointOpenId === item.id ? 'is-open' : ''}`} key={item.id}>
-                <button type="button" className="sa-changes-head" aria-expanded={checkpointOpenId === item.id} onClick={() => void openCheckpoint(item.id)}>
-                  <span className="sa-card2-name">{time(item.createdAt)} · {item.files.length} 个文件</span>
-                  <ChevronRight size={12} />
-                </button>
-                {checkpointOpenId === item.id && checkpointPreview ? <>
-                  <ul className="sa-changes-files">
-                    {checkpointPreview.files.map(file => <li key={file.path}>
-                      <code>{file.path}</code>
-                      <span className="sa-changes-state" data-before={file.before}>{file.before === 'absent' ? '本次新增' : file.before === 'head' ? '取回原版' : file.before === 'unreadable' ? '太大跳过' : '恢复存档'}</span>
-                      {file.diff ? <details><summary>补丁</summary><pre className="sa-diff">{file.diff}</pre></details> : null}
-                    </li>)}
-                  </ul>
-                  <div className="sa-changes-actions">
-                    <button type="button" className={`sa-link ${checkpointConfirm ? 'is-danger' : ''}`} disabled={checkpointBusy} onClick={() => void restoreCheckpoint()}>
-                      {checkpointConfirm ? '确认回滚（覆盖这些文件当前内容）' : '回滚到这次之前'}
-                    </button>
-                    {checkpointConfirm ? <button type="button" className="sa-link" onClick={() => setCheckpointConfirm(false)}>取消</button> : null}
-                  </div>
-                </> : null}
-              </article>)}</div>
-              : <p className="sa-inspector-empty">没有可回滚的检查点。只有 Git 项目在「开始前已有未提交改动」时才会存档；执行器没有改动文件时也不会产生。</p>)}
-            {inspectorTab === 'artifacts' && (inspectorArtifacts.length
-              ? <div className="sa-inspector-artifacts">{inspectorArtifacts.map(item => <article className="sa-card2" key={`${item.name}-${item.at}`}>
-                <header className="sa-card2-head"><Database size={13} /><span className="sa-card2-name">{item.name}</span></header>
-                <p className="sa-card2-summary">{item.kind}{item.bytes ? ` · ${item.bytes} 字节` : ''} · {time(item.at)}</p>
-              </article>)}</div>
-              : <p className="sa-inspector-empty">这次运行还没有留下文件或报告。完成后产物会出现在这里。</p>)}
+            {inspectorTab === 'artifacts' && (artifactPath ? (
+              <div className="sa-inspector-preview">
+                <header className="sa-inspector-preview-head">
+                  <button type="button" className="sa-icon" aria-label="返回产物列表" title="返回产物列表" onClick={() => setArtifactPath(null)}><ArrowLeft size={15} /></button>
+                  <span className="sa-inspector-preview-name" title={artifactPath}>{artifactPath}</span>
+                  <button type="button" className="sa-icon" aria-label="关闭预览" title="关闭预览" onClick={() => setArtifactPath(null)}><X size={14} /></button>
+                </header>
+                <div className="sa-inspector-preview-body">
+                  {artifactLoading
+                    ? <p className="sa-inspector-empty">正在读取文件…</p>
+                    : artifactError
+                      ? <p className="sa-inspector-empty">{artifactError}</p>
+                      : artifactPreview
+                        ? <FilePreviewBody projectId={artifactProjectId} preview={artifactPreview} />
+                        : null}
+                </div>
+              </div>
+            ) : artifactFiles.length ? (
+              <div className="sa-inspector-artifacts">
+                <p className="sa-artifacts-hint">点开文件直接在这里预览，不必切到项目页。</p>
+                {artifactFiles.map(file => <button type="button" className="sa-artifact-row" key={file.path} title={`预览 ${file.path}`} onClick={() => setArtifactPath(file.path)}>
+                  <FileKindIcon kind={fileKindFromPath(file.path)} />
+                  <span className="sa-artifact-name">{file.path}</span>
+                  <time>{formatFileTime(file.at)}</time>
+                </button>)}
+              </div>
+            ) : <p className="sa-inspector-empty">{artifactProjectId ? '这次运行还没有留下文件。执行器改动文件后会出现在这里。' : '这个会话没有绑定项目文件夹，暂不能预览文件。'}</p>)}
           </div>
           <div className="sa-dock-foot"><span>{runtime.mode === 'cloud' ? '云端运行时' : '本地运行时'}</span><span>{tickets.length} 个工单</span></div>
         </aside>
