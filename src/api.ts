@@ -1,5 +1,5 @@
 import type { ModelUsageReport, Bootstrap, PublicReport, ModelCatalog, Runtime, Settings, User } from './types';
-import type { WorkAction, WorkAcceptance, WorkApproval, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkCheckpointRestore, WorkWorktree, WorkWorkflow, WorkWorkflowStep, WorkEval, WorkConversation, WorkConversationSummary, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveFrame, WorkLiveSession, WorkMcpServer, WorkMcpToken, WorkPlan, WorkPlanStep, WorkPlugins, WorkPolicy, WorkProfile, WorkProfilesActive, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectFileList, WorkProjectFilePreview, WorkProjectFileSearch, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkReportDetail, WorkReportList, WorkReview, WorkRoomMessage, WorkRosterEntry, WorkRoutine, WorkRun, WorkSkill, WorkSkillCatalogEntry, WorkSkillPreview, WorkSkillScope, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamRoom, WorkTeamTemplate, WorkThread, WorkThreadSummary, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
+import type { WorkAction, WorkAcceptance, WorkApproval, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkCheckpointRestore, WorkWorktree, WorkAgentBundle, WorkWorkflow, WorkWorkflowStep, WorkEval, WorkConversation, WorkConversationSummary, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveFrame, WorkLiveSession, WorkMcpServer, WorkMcpToken, WorkPlan, WorkPlanStep, WorkPlugins, WorkPolicy, WorkProfile, WorkProfilesActive, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectFileList, WorkProjectFilePreview, WorkProjectFileSearch, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkReportDetail, WorkReportList, WorkReview, WorkRoomMessage, WorkRosterEntry, WorkRoutine, WorkRun, WorkSkill, WorkSkillCatalogEntry, WorkSkillPreview, WorkSkillScope, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamRoom, WorkTeamTemplate, WorkThread, WorkThreadSummary, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
 
 const sessionExpiredListeners = new Set<() => void>();
 let sessionBoundary = 0;
@@ -63,6 +63,11 @@ export const api = {
   workProjectChanges: (id: string) => request<{ changes: WorkProjectChange[] }>(`/work/projects/${encodeURIComponent(id)}/changes`),
   // 隔离执行：项目开关 + 工作树列表 / 提交 / 清理。服务端默认关闭，未启用时返回 409。
   // P4：工作流模板与评测快照。
+  workAgentMarket: () => request<{ listings: WorkAgentBundle[] }>('/work/agent-market'),
+  workPublishAgentBundle: (input: { name: string; description?: string; executorId: string; permission: 'read' | 'workspace' | 'full'; instructions?: string[]; skills?: string[] }) =>
+    request<{ listing: WorkAgentBundle }>('/work/agent-market/publish', { method: 'POST', body: JSON.stringify(input) }),
+  workInstallAgentBundle: (id: string) => request<{ listing: WorkAgentBundle; profile: { id: string; name: string } }>(`/work/agent-market/${encodeURIComponent(id)}/install`, { method: 'POST', body: '{}' }),
+  workRemoveAgentBundle: (id: string) => request<{ id: string; removed: boolean }>(`/work/agent-market/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   workWorkflows: () => request<{ workflows: WorkWorkflow[] }>('/work/workflows'),
   workSaveWorkflow: (input: { id?: string; name: string; goal: string; steps: WorkWorkflowStep[]; projectId?: string }) => request<{ workflow: WorkWorkflow }>('/work/workflows', { method: 'POST', body: JSON.stringify(input) }),
   workDeleteWorkflow: (id: string) => request<{ id: string; removed: boolean }>(`/work/workflows/${encodeURIComponent(id)}`, { method: 'DELETE' }),

@@ -1,17 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Activity, BookOpen, Bot, GitBranch, MessageSquare, Play, RefreshCw, ShieldCheck, Sparkles, Square, Users } from 'lucide-react';
+import { Activity, BookOpen, Bot, GitBranch, MessageSquare, Package, Play, RefreshCw, ShieldCheck, Sparkles, Square, Users } from 'lucide-react';
 import { api } from '../api';
-import type { WorkEval, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveSession, WorkMcpServer, WorkProject, WorkRoutine, WorkRoutineKind, WorkRoutineSchedule, WorkTeamRoom, WorkWorkflow, WorkWorkflowStep } from '../superagent';
+import type { WorkAgentBundle, WorkEval, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveSession, WorkMcpServer, WorkProject, WorkRoutine, WorkRoutineKind, WorkRoutineSchedule, WorkTeamRoom, WorkWorkflow, WorkWorkflowStep } from '../superagent';
 import { Spinner } from './ui';
 import { STATUS_LABELS } from '../status';
 
-type Tab = 'library' | 'routines' | 'workflows' | 'evals' | 'mcp' | 'im' | 'rooms' | 'live';
+type Tab = 'library' | 'routines' | 'workflows' | 'evals' | 'market' | 'mcp' | 'im' | 'rooms' | 'live';
 type Notify = (message: string, error?: boolean) => void;
 
 const TABS: { id: Tab; label: string; icon: typeof BookOpen }[] = [
   { id: 'library', label: 'Library 同步', icon: BookOpen },
   { id: 'routines', label: '例行任务', icon: RefreshCw },
   { id: 'workflows', label: '工作流', icon: GitBranch },
+  { id: 'market', label: 'Agent 市场', icon: Package },
   { id: 'evals', label: '评测', icon: Activity },
   { id: 'mcp', label: 'MCP 客户端', icon: Bot },
   { id: 'im', label: 'IM 通知', icon: MessageSquare },
@@ -56,12 +57,72 @@ export function WorkOpsPanel({ projects, executors, windows, notify }: { project
       {tab === 'routines' && <RoutinesPanel projectId={projectId} projects={projects} executors={executors} notify={notify} />}
       {tab === 'workflows' && <WorkflowsPanel projectId={projectId} executors={executors} notify={notify} />}
       {tab === 'evals' && <EvalsPanel notify={notify} />}
+      {tab === 'market' && <MarketPanel executors={executors} notify={notify} />}
       {tab === 'mcp' && <McpPanel notify={notify} />}
       {tab === 'im' && <ImPanel notify={notify} />}
       {tab === 'rooms' && <RoomsPanel projectId={projectId} projects={projects} notify={notify} />}
       {tab === 'live' && <LivePanel windows={windows} notify={notify} />}
     </div>
   </article>;
+}
+
+function MarketPanel({ executors, notify }: { executors: string[]; notify: Notify }) {
+  const [rows, setRows] = useState<WorkAgentBundle[]>([]);
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [executorId, setExecutorId] = useState(executors[0] || 'model');
+  const [permission, setPermission] = useState<'read' | 'workspace' | 'full'>('workspace');
+  const [instructions, setInstructions] = useState('');
+  const [busy, setBusy] = useState('');
+  const load = async () => { const result = await attempt(notify, () => api.workAgentMarket()); if (result) setRows(result.listings); };
+  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const install = async (id: string) => {
+    setBusy(id);
+    const result = await attempt(notify, () => api.workInstallAgentBundle(id));
+    setBusy('');
+    if (!result) return;
+    notify(`已安装为配置档「${result.profile.name}」，可在模型设置里应用。`);
+    await load();
+  };
+  const publish = async () => {
+    setBusy('publish');
+    const result = await attempt(notify, () => api.workPublishAgentBundle({
+      name: name.trim(), description: description.trim(), executorId, permission,
+      instructions: instructions.split(/[\r\n]+/).map(line => line.trim()).filter(Boolean)
+    }));
+    setBusy('');
+    if (!result) return;
+    setOpen(false); setName(''); setDescription(''); setInstructions('');
+    notify('已发布到市场，随时可以安装。');
+    await load();
+  };
+  return <div className="sa-ops-section">
+    <div className="sa-ops-list">{rows.map(row => <div className="sa-ops-row" key={row.id}>
+      <div>
+        <strong>{row.name}{row.builtin ? <span className="sa-tag">内置</span> : null}</strong>
+        <span>{row.description || '没有说明'} · {row.executorId} · {row.permission === 'read' ? '只读' : row.permission === 'full' ? '完全放行' : '可写工作区'}{row.instructions.length ? ` · ${row.instructions.length} 条指令` : ''}</span>
+      </div>
+      <div className="sa-ops-row-actions">
+        {row.installed
+          ? <span className="sa-inline-note">已安装</span>
+          : <button type="button" className="sa-link" disabled={busy === row.id} onClick={() => void install(row.id)}>{busy === row.id ? '安装中…' : '安装'}</button>}
+        {!row.builtin && <button type="button" className="sa-link" onClick={() => void attempt(notify, async () => { await api.workRemoveAgentBundle(row.id); await load(); })}>删除</button>}
+      </div>
+    </div>)}</div>
+    {!rows.length && <p className="sa-inline-note">市场暂时没有配置。可以发布一套自己的。</p>}
+    {open ? <div className="sa-ops-form">
+      <label>名称<input value={name} onChange={event => setName(event.target.value)} placeholder="例如：夜间巡检" /></label>
+      <label>执行器<input list="sa-market-executors" value={executorId} onChange={event => setExecutorId(event.target.value)} /><datalist id="sa-market-executors">{executors.map(id => <option key={id} value={id} />)}</datalist></label>
+      <label>权限<select value={permission} onChange={event => setPermission(event.target.value as 'read' | 'workspace' | 'full')}><option value="read">只读</option><option value="workspace">可写工作区</option><option value="full">完全放行</option></select></label>
+      <label className="sa-ops-wide">说明<input value={description} onChange={event => setDescription(event.target.value)} placeholder="这套配置适合做什么" /></label>
+      <label className="sa-ops-wide">指令（每行一条，安装后写进配置档）<textarea rows={4} value={instructions} onChange={event => setInstructions(event.target.value)} placeholder="先读现有实现&#10;只改一处并说明原因" /></label>
+      <div className="sa-ops-form-actions">
+        <button type="button" className="sa-link" onClick={() => setOpen(false)}>取消</button>
+        <button type="button" className="sa-button" disabled={busy === 'publish' || !name.trim() || !executorId.trim()} onClick={() => void publish()}>{busy === 'publish' ? '发布中…' : '发布配置'}</button>
+      </div>
+    </div> : <button type="button" className="sa-link" onClick={() => setOpen(true)}>发布自己的配置</button>}
+  </div>;
 }
 
 function parseWorkflowSteps(textValue: string): WorkWorkflowStep[] {

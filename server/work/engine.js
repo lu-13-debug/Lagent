@@ -23,6 +23,7 @@ import { contractBrief, missingDeliverables, normalizeContract } from './contrac
 import { buildRoster } from './roster.js';
 import { teamTemplateService } from './team-templates.js';
 import { createWorkProfiles } from './profiles.js';
+import { createAgentMarket } from './agent-market.js';
 import { createLibrarySync } from './library-sync.js';
 import { createSkillService } from './skills/service.js';
 import { createPluginService } from './skills/plugins.js';
@@ -115,6 +116,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   const conversations = createConversationService(db);
   const reportCenter = createReportCenter({ store });
   const profiles = createWorkProfiles(db, { store });
+  // P4：Agent 市场。安装动作落地为配置档，不下载代码。
+  const agentMarket = createAgentMarket({ store, profiles, listExecutors: () => { try { return executors.list().map(item => item.id); } catch { return []; } } });
   const memory = createProjectMemory(db);
   const library = createLibrarySync(db, { projects, memory });
   const skillService = options.skills || createSkillService(db, { projects, home: options.home, env });
@@ -2641,6 +2644,10 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     listProjects(){return projects.listProjects();},
     // 配置档：保存、改名、删除、一键应用与恢复默认。
     listProfiles(){return profiles.list();},
+    agentMarket(){return {listings:agentMarket.list()};},
+    publishAgentBundle(input){return agentMarket.publish(input);},
+    removeAgentBundle(id){return agentMarket.remove(id);},
+    installAgentBundle(id){const result=agentMarket.install(id);audit(null,'market','market','allowed',`安装配置 ${result.listing?.name||''}`);return result;},
     profilesActive(projectId){return profiles.active(projectId||undefined);},
     saveProfile(input){const profile=profiles.save(input);audit(null,'profile','profile','allowed',`保存配置档 ${profile.name}`);return profile;},
     updateProfile(id,input){const profile=profiles.update(id,input);audit(null,'profile','profile','allowed',`更新配置档 ${profile.name}`);return profile;},

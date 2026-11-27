@@ -315,6 +315,12 @@ export interface WorkProject {
   /** worktree：任务在独立工作树里执行，主工作区不动；缺省为直接执行。 */
   isolation?: 'worktree';
 }
+/** Agent 市场：一套可安装的「执行器 + 权限 + 指令 + 技能」配置。 */
+export interface WorkAgentBundle {
+  id: string; name: string; description: string; executorId: string;
+  permission: 'read' | 'workspace' | 'full'; effort?: string;
+  instructions: string[]; skills: string[]; builtin: boolean; installed: boolean;
+}
 /** 工作流：可重复执行的多步计划模板。 */
 export interface WorkWorkflowStep { executorId: string; text: string; dependsOn?: number[]; }
 export interface WorkWorkflow {

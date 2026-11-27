@@ -404,6 +404,20 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.delete('/api/work/profiles/:id',(req,res)=>res.json(engine.deleteProfile(req.params.id)));
   app.post('/api/work/profiles/:id/apply',(req,res)=>res.json(engine.applyProfile(req.params.id,req.body)));
   app.post('/api/work/profiles/reset',(req,res)=>res.json(engine.resetProfile(req.body)));
+  // Agent 市场：安装为本地配置档，不下载代码；自定义配置可发布和删除。
+  app.get('/api/work/agent-market',(_req,res)=>res.json(engine.agentMarket()));
+  app.post('/api/work/agent-market/publish',(req,res)=>{
+    try{res.status(201).json({listing:engine.publishAgentBundle(req.body||{})});}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'发布配置失败'});}
+  });
+  app.post('/api/work/agent-market/:id/install',(req,res)=>{
+    try{res.status(201).json(engine.installAgentBundle(req.params.id));}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'安装配置失败'});}
+  });
+  app.delete('/api/work/agent-market/:id',(req,res)=>{
+    try{res.json(engine.removeAgentBundle(req.params.id));}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'删除配置失败'});}
+  });
   app.post('/api/work/plans',(req,res)=>res.status(201).json({plan:engine.plan(req.body)}));
   app.post('/api/work/plans/suggest',async(req,res)=>res.json(await engine.suggestPlan(req.body)));
   app.post('/api/work/commander',async(req,res)=>res.status(201).json(await engine.commander(req.body)));
