@@ -15,6 +15,8 @@ import { reportTextOf as reportText } from '../report-text';
 import { lagentOnlySuggestion } from '../agent-choice';
 import { SkillsPanel } from './SkillsPanel';
 import { WorkOpsPanel } from './WorkOpsPanel';
+import { ToolRegistryPanel } from './ToolRegistryPanel';
+import { VirtualRows, type VirtualRow } from './VirtualRows';
 import { AppearanceSettings } from './AppearanceSettings';
 import { AccountModal } from './AccountModal';
 import { SettingsModal } from './ModelSettings';
@@ -2028,7 +2030,9 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     } catch (cause) { notify((cause as Error).message, true); }
     finally { setSynthesizing(false); }
   };
-  const renderConversationTurn = (turn: WorkConversationTurn) => {
+  // 会话主区改用行模型：一轮拆成「提问 / 思考过程 / 各 Agent 结论 / 汇总 / 跨 Agent 提示」，
+  // 行列表直接交给 VirtualRows 做窗口化渲染，不再靠 content-visibility 整段跳过。
+  const buildConversationRows = (turn: WorkConversationTurn): VirtualRow[] => {
     const runs = turn.runs.map(run => {
       const ticket = ticketMap.get(run.ticketId) || null;
       const detail = conversationRunDetails[run.ticketId] || null;
@@ -2057,59 +2061,79 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           : runs.length > 1
             ? `同一个任务交给 ${runs.length} 个 Agent，各自作答后在同一会话里对比。`
             : 'Lagent 直接把任务交给这个 Agent，过程与结论都留在会话里。';
-    return <section className="sa-conv-turn" key={turn.id}>
-      <div className="sa-bubble-user is-prompt">{turn.prompt}</div>
-      <AgentThinkingPanel
-        dispatchNote={turn.mode === 'multi' ? 'Lagent 拆解分发 · 各自执行 · 交叉验收 · 最后汇总' : '并行执行 · 互不共享上下文'}
-        orchestrator={{
-          name: 'Lagent',
-          role: turn.mode === 'plan' ? '主控 · 计划拆解' : turn.mode === 'multi' ? '主控 · 拆解分发与汇总' : '主控 · 任务规划',
-          startedAt: turn.createdAt,
-          endedAt: pending ? undefined : (runs.at(-1)?.endedAt || turn.createdAt),
-          steps: [{ kind: 'thought', text: modeNote }],
-          dispatch: displayRuns.map(row => ({ id: row.run.ticketId, name: runName(row), brand: brandOf(row.run.agentId), status: row.status, startedAt: row.startedAt, endedAt: row.endedAt })),
-          summary: displayRuns.length > 1 && !pending
-            ? (turn.mode === 'multi'
-              ? '执行结果先过交叉验收，再由 Lagent 汇总；验收不通过的问题会写进结论。'
-              : '几路结论互相印证才留用；分歧之处回到原始数据再查一遍。')
-            : undefined
-        }}
-        agents={displayRuns.map(row => ({
-          id: row.run.ticketId,
-          name: runName(row),
-          brand: brandOf(row.run.agentId),
-          status: row.status,
-          startedAt: row.startedAt,
-          endedAt: row.endedAt,
-          steps: row.steps,
-          output: row.status === 'completed' ? row.output : ''
-        }))}
-        onPermission={decidePermission}
-      />
-      <AgentConclusionList
-        rows={displayRuns.map(row => ({
-          id: row.run.ticketId,
-          ticketId: row.run.ticketId,
-          name: runName(row),
-          brand: brandOf(row.run.agentId),
-          status: row.status,
-          summary: row.output.replace(/\s+/g, ' ').slice(0, 160)
-        }))}
-        onOpen={ticketId => void open(ticketId)}
-        onApprove={ticketId => void act(ticketId, 'approve')}
-      />
-      {turn.synthesisTicketId && <section className="sa-agent-run">
-        <header className="sa-agent-head"><span className="sa-agent-avatar"><Sparkles size={16} /></span><div className="sa-agent-name"><strong>{turn.mode === 'multi' ? 'Lagent 汇总' : '交叉验证汇总'}</strong><span>{agentLabel(turn.synthesisAgentId || 'lagent')}</span></div><Status status={runStatusOf(turn.synthesisTicketId)} /></header>
-        {synthesisText ? <div className="sa-result"><div className="sa-result-text">{synthesisText}</div></div> : <p className="sa-inline-note">汇总 Agent 正在比较各方结论…</p>}
-        <button type="button" className="sa-link" onClick={() => void open(turn.synthesisTicketId!)}>查看汇总工单</button>
-      </section>}
-      {displayRuns.length > 1 && !turn.synthesisTicketId && completed.length > 0 && <div className="sa-xc-summary">
-        <div><strong>{turn.mode === 'multi' ? '执行与验收完成' : '交叉验证完成'} {completed.length}/{displayRuns.length}</strong><span>{turn.mode === 'multi' ? '由 Lagent 汇总交付结果与验收问题。' : '由 Lagent 比较各结论并指出分歧。'}</span></div>
-        <p className="sa-inline-note">汇总者：Lagent · 主控</p>
-        <button type="button" className="sa-button sa-primary" disabled={synthesizing} onClick={() => void synthesizeTurn(turn)}>{synthesizing ? <RefreshCw size={14} className="sa-spin" /> : <Sparkles size={14} />}{synthesizing ? '汇总中…' : '汇总结论'}</button>
-      </div>}
-    </section>;
+    const rows: VirtualRow[] = [
+      { key: `${turn.id}:prompt`, className: 'sa-turn-start', node: <div className="sa-bubble-user is-prompt">{turn.prompt}</div> },
+      {
+        key: `${turn.id}:thinking`,
+        node: <AgentThinkingPanel
+          dispatchNote={turn.mode === 'multi' ? 'Lagent 拆解分发 · 各自执行 · 交叉验收 · 最后汇总' : '并行执行 · 互不共享上下文'}
+          orchestrator={{
+            name: 'Lagent',
+            role: turn.mode === 'plan' ? '主控 · 计划拆解' : turn.mode === 'multi' ? '主控 · 拆解分发与汇总' : '主控 · 任务规划',
+            startedAt: turn.createdAt,
+            endedAt: pending ? undefined : (runs.at(-1)?.endedAt || turn.createdAt),
+            steps: [{ kind: 'thought', text: modeNote }],
+            dispatch: displayRuns.map(row => ({ id: row.run.ticketId, name: runName(row), brand: brandOf(row.run.agentId), status: row.status, startedAt: row.startedAt, endedAt: row.endedAt })),
+            summary: displayRuns.length > 1 && !pending
+              ? (turn.mode === 'multi'
+                ? '执行结果先过交叉验收，再由 Lagent 汇总；验收不通过的问题会写进结论。'
+                : '几路结论互相印证才留用；分歧之处回到原始数据再查一遍。')
+              : undefined
+          }}
+          agents={displayRuns.map(row => ({
+            id: row.run.ticketId,
+            name: runName(row),
+            brand: brandOf(row.run.agentId),
+            status: row.status,
+            startedAt: row.startedAt,
+            endedAt: row.endedAt,
+            steps: row.steps,
+            output: row.status === 'completed' ? row.output : ''
+          }))}
+          onPermission={decidePermission}
+        />
+      }
+    ];
+    if (displayRuns.length) {
+      rows.push({
+        key: `${turn.id}:conclusions`,
+        node: <AgentConclusionList
+          rows={displayRuns.map(row => ({
+            id: row.run.ticketId,
+            ticketId: row.run.ticketId,
+            name: runName(row),
+            brand: brandOf(row.run.agentId),
+            status: row.status,
+            summary: row.output.replace(/\s+/g, ' ').slice(0, 160)
+          }))}
+          onOpen={ticketId => void open(ticketId)}
+          onApprove={ticketId => void act(ticketId, 'approve')}
+        />
+      });
+    }
+    if (turn.synthesisTicketId) {
+      rows.push({
+        key: `${turn.id}:synthesis`,
+        node: <section className="sa-agent-run">
+          <header className="sa-agent-head"><span className="sa-agent-avatar"><Sparkles size={16} /></span><div className="sa-agent-name"><strong>{turn.mode === 'multi' ? 'Lagent 汇总' : '交叉验证汇总'}</strong><span>{agentLabel(turn.synthesisAgentId || 'lagent')}</span></div><Status status={runStatusOf(turn.synthesisTicketId)} /></header>
+          {synthesisText ? <div className="sa-result"><div className="sa-result-text">{synthesisText}</div></div> : <p className="sa-inline-note">汇总 Agent 正在比较各方结论…</p>}
+          <button type="button" className="sa-link" onClick={() => void open(turn.synthesisTicketId!)}>查看汇总工单</button>
+        </section>
+      });
+    }
+    if (displayRuns.length > 1 && !turn.synthesisTicketId && completed.length > 0) {
+      rows.push({
+        key: `${turn.id}:summary`,
+        node: <div className="sa-xc-summary">
+          <div><strong>{turn.mode === 'multi' ? '执行与验收完成' : '交叉验证完成'} {completed.length}/{displayRuns.length}</strong><span>{turn.mode === 'multi' ? '由 Lagent 汇总交付结果与验收问题。' : '由 Lagent 比较各结论并指出分歧。'}</span></div>
+          <p className="sa-inline-note">汇总者：Lagent · 主控</p>
+          <button type="button" className="sa-button sa-primary" disabled={synthesizing} onClick={() => void synthesizeTurn(turn)}>{synthesizing ? <RefreshCw size={14} className="sa-spin" /> : <Sparkles size={14} />}{synthesizing ? '汇总中…' : '汇总结论'}</button>
+        </div>
+      });
+    }
+    return rows;
   };
+  const conversationRows = activeConversation ? activeConversation.turns.flatMap(buildConversationRows) : [];
 
   const conversationPage = <div className={`sa-workspace ${isLanding ? 'sa-workspace-landing' : ''}`}>
     {isLanding ? <div className="sa-landing sa-board" ref={landingRef}>
@@ -2183,7 +2207,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           </button>}
         </p>}
         <p className="sa-inline-note">一个任务一条会话；选中的 Agent 在下面分 tab 呈现思考过程，结论并列比较，不各自创建对话。</p>
-        {activeConversation.turns.map(renderConversationTurn)}
+        {activeConversation.turns.length > 0 && <VirtualRows rows={conversationRows} scrollRef={threadRef} resetKey={activeConversation.id} />}
         {!activeConversation.turns.length && <p className="sa-empty">还没有消息。在下面描述目标，Lagent 会在这个会话里派活。</p>}
       </div>
     </div> : projectChatId && !activeTicket ? <div className="sa-thread" ref={threadRef}>
@@ -2543,7 +2567,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       {tool.id === 'browser' && tool.status === 'needs_setup' && <p className="sa-inline-note">正在安装或缺少 Chromium。</p>}
       {tool.id === 'terminal' ? <span className="sa-tag-ok"><Check size={13} />内置可用</span> : <div className="sa-plan-actions-inline"><span className={`sa-tag ${enabled ? 'sa-tag-ok' : ''}`}>{enabled ? '已启用' : tool.status === 'needs_setup' ? '待配置' : '未启用'}</span><button className="sa-link" onClick={() => setView('settings')}>在策略中调整</button></div>}
     </article>;
-  })}{!tools.length && <p className="sa-empty">工具状态载入中。</p>}</div></section>;
+  })}{!tools.length && <p className="sa-empty">工具状态载入中。</p>}</div><ToolRegistryPanel notify={notify} /></section>;
 
   const settingsPage = <section className="sa-page"><header className="sa-page-head"><div><p className="sa-eyebrow">偏好</p><h1>设置</h1><p>主题、模型与执行权限。</p></div></header><div className="sa-settings-grid"><article className="sa-card"><h2>外观与模型</h2><p>主题与显示密度，以及 Agent 使用的默认模型和凭据。</p><div className="sa-settings-actions"><button className="sa-button" onClick={() => setAppearanceOpen(true)}><SunMoon size={15} />显示设置</button><button className="sa-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} />模型与 API</button></div></article>{runtime.mode === 'cloud' && <article className="sa-card"><h2><ShieldCheck size={16} />账号与安全</h2><p>修改密码、绑定手机号，或退出当前账号。</p><div className="sa-settings-actions"><button className="sa-button" onClick={() => setAccountOpen(true)}><ShieldCheck size={15} />账号与安全</button></div></article>}<article className="sa-card sa-policy-card"><h2>执行器与权限</h2><p>与「Agent」页的开关同步，勾选即时生效；这里还可设置权限模式、预算与额外目录。外部执行器还需 <code>LAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code>。</p>
     {work?.externalExecutors === false && <p className="sa-policy-alert"><AlertTriangle size={14} />服务未开启外部执行器总开关，下面勾选的 CLI/ACP Agent 不会生效。请设置 <code>LAGENT_ALLOW_EXTERNAL_EXECUTORS=1</code> 后重启服务；用「启动 Lagent.cmd」或 <code>npm run dev</code> 启动会自动开启。</p>}

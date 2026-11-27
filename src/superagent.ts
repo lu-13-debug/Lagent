@@ -320,6 +320,22 @@ export interface WorkAgentBundle {
   id: string; name: string; description: string; executorId: string;
   permission: 'read' | 'workspace' | 'full'; effort?: string;
   instructions: string[]; skills: string[]; builtin: boolean; installed: boolean;
+  /** 来自远程静态清单；安装仍生成本地配置档。 */
+  remote?: boolean; remoteId?: string;
+}
+export interface WorkMarketRemote {
+  configured: boolean; url: string; listings?: WorkAgentBundle[]; error?: string;
+}
+export interface WorkMarketCatalog { listings: WorkAgentBundle[]; remote: WorkMarketRemote }
+/** 工具注册表：执行器 / MCP / 技能 / 内置工具的统一清单。 */
+export interface WorkToolEntry {
+  id: string; name: string; source: 'builtin' | 'executor' | 'mcp' | 'skill' | string;
+  risk: 'low' | 'medium' | 'high'; description: string; enabled: boolean;
+  available?: boolean; detail?: Record<string, unknown>;
+}
+export interface WorkToolSummary {
+  total: number; enabled: number;
+  bySource: Record<string, number>; byRisk: Record<string, number>;
 }
 /** 工作流：可重复执行的多步计划模板。 */
 export interface WorkWorkflowStep { executorId: string; text: string; dependsOn?: number[]; }

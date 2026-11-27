@@ -1,5 +1,5 @@
 import type { ModelUsageReport, Bootstrap, PublicReport, ModelCatalog, Runtime, Settings, User } from './types';
-import type { WorkAction, WorkAcceptance, WorkApproval, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkCheckpointRestore, WorkWorktree, WorkAgentBundle, WorkWorkflow, WorkWorkflowStep, WorkEval, WorkConversation, WorkConversationSummary, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveFrame, WorkLiveSession, WorkMcpServer, WorkMcpToken, WorkPlan, WorkPlanStep, WorkPlugins, WorkPolicy, WorkProfile, WorkProfilesActive, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectFileList, WorkProjectFilePreview, WorkProjectFileSearch, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkReportDetail, WorkReportList, WorkReview, WorkRoomMessage, WorkRosterEntry, WorkRoutine, WorkRun, WorkSkill, WorkSkillCatalogEntry, WorkSkillPreview, WorkSkillScope, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamRoom, WorkTeamTemplate, WorkThread, WorkThreadSummary, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
+import type { WorkAction, WorkAcceptance, WorkApproval, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkCheckpointRestore, WorkWorktree, WorkAgentBundle, WorkMarketRemote, WorkToolEntry, WorkToolSummary, WorkWorkflow, WorkWorkflowStep, WorkEval, WorkConversation, WorkConversationSummary, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveFrame, WorkLiveSession, WorkMcpServer, WorkMcpToken, WorkPlan, WorkPlanStep, WorkPlugins, WorkPolicy, WorkProfile, WorkProfilesActive, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectFileList, WorkProjectFilePreview, WorkProjectFileSearch, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkReportDetail, WorkReportList, WorkReview, WorkRoomMessage, WorkRosterEntry, WorkRoutine, WorkRun, WorkSkill, WorkSkillCatalogEntry, WorkSkillPreview, WorkSkillScope, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamRoom, WorkTeamTemplate, WorkThread, WorkThreadSummary, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
 
 const sessionExpiredListeners = new Set<() => void>();
 let sessionBoundary = 0;
@@ -63,7 +63,16 @@ export const api = {
   workProjectChanges: (id: string) => request<{ changes: WorkProjectChange[] }>(`/work/projects/${encodeURIComponent(id)}/changes`),
   // 隔离执行：项目开关 + 工作树列表 / 提交 / 清理。服务端默认关闭，未启用时返回 409。
   // P4：工作流模板与评测快照。
-  workAgentMarket: () => request<{ listings: WorkAgentBundle[] }>('/work/agent-market'),
+  workAgentMarket: (source: 'local' | 'remote' | 'all' = 'all') => request<{ listings: WorkAgentBundle[]; remote: WorkMarketRemote }>(`/work/agent-market?source=${source}`),
+  workAgentMarketManifest: () => request<{ version: number; generatedAt: string; listings: WorkAgentBundle[] }>('/work/agent-market/manifest'),
+  workToolsRegistry: (options: { source?: string; enabled?: boolean } = {}) => {
+    const params = new URLSearchParams();
+    if (options.source) params.set('source', options.source);
+    if (options.enabled !== undefined) params.set('enabled', options.enabled ? '1' : '0');
+    return request<{ tools: WorkToolEntry[]; summary: WorkToolSummary; sources: string[] }>(`/work/tools/registry${params.size ? `?${params}` : ''}`);
+  },
+  workSetToolState: (id: string, input: { enabled?: boolean; risk?: 'low' | 'medium' | 'high' }) => request<{ tool: WorkToolEntry }>(`/work/tools/registry/${encodeURIComponent(id)}/state`, { method: 'POST', body: JSON.stringify(input) }),
+  workResetToolState: (id: string) => request<{ tool: WorkToolEntry }>(`/work/tools/registry/${encodeURIComponent(id)}/state`, { method: 'DELETE' }),
   workPublishAgentBundle: (input: { name: string; description?: string; executorId: string; permission: 'read' | 'workspace' | 'full'; instructions?: string[]; skills?: string[] }) =>
     request<{ listing: WorkAgentBundle }>('/work/agent-market/publish', { method: 'POST', body: JSON.stringify(input) }),
   workInstallAgentBundle: (id: string) => request<{ listing: WorkAgentBundle; profile: { id: string; name: string } }>(`/work/agent-market/${encodeURIComponent(id)}/install`, { method: 'POST', body: '{}' }),

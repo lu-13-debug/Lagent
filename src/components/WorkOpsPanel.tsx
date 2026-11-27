@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Activity, BookOpen, Bot, GitBranch, MessageSquare, Package, Play, RefreshCw, ShieldCheck, Sparkles, Square, Users } from 'lucide-react';
 import { api } from '../api';
-import type { WorkAgentBundle, WorkEval, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveSession, WorkMcpServer, WorkProject, WorkRoutine, WorkRoutineKind, WorkRoutineSchedule, WorkTeamRoom, WorkWorkflow, WorkWorkflowStep } from '../superagent';
+import type { WorkAgentBundle, WorkEval, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveSession, WorkMarketRemote, WorkMcpServer, WorkProject, WorkRoutine, WorkRoutineKind, WorkRoutineSchedule, WorkTeamRoom, WorkWorkflow, WorkWorkflowStep } from '../superagent';
 import { Spinner } from './ui';
 import { STATUS_LABELS } from '../status';
 
@@ -68,6 +68,7 @@ export function WorkOpsPanel({ projects, executors, windows, notify }: { project
 
 function MarketPanel({ executors, notify }: { executors: string[]; notify: Notify }) {
   const [rows, setRows] = useState<WorkAgentBundle[]>([]);
+  const [remote, setRemote] = useState<WorkMarketRemote | null>(null);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -75,7 +76,23 @@ function MarketPanel({ executors, notify }: { executors: string[]; notify: Notif
   const [permission, setPermission] = useState<'read' | 'workspace' | 'full'>('workspace');
   const [instructions, setInstructions] = useState('');
   const [busy, setBusy] = useState('');
-  const load = async () => { const result = await attempt(notify, () => api.workAgentMarket()); if (result) setRows(result.listings); };
+  const load = async () => {
+    const result = await attempt(notify, () => api.workAgentMarket('all'));
+    if (!result) return;
+    setRows(result.listings);
+    setRemote(result.remote || null);
+  };
+  // 导出静态清单：托管到任意 HTTPS 站点后，把 LAGENT_MARKET_URL 指过去即可共享。
+  const exportManifest = async () => {
+    const manifest = await attempt(notify, () => api.workAgentMarketManifest());
+    if (!manifest) return;
+    const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = 'lagent-market.json'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    notify(`已导出 ${manifest.listings.length} 套配置的市场清单。`);
+  };
   useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
   const install = async (id: string) => {
     setBusy(id);
@@ -98,9 +115,15 @@ function MarketPanel({ executors, notify }: { executors: string[]; notify: Notif
     await load();
   };
   return <div className="sa-ops-section">
+    {remote?.configured && <p className="sa-inline-note">
+      远程清单：<code>{remote.url}</code>{remote.error ? ` · ${remote.error}` : ` · ${remote.listings?.length || 0} 套`}
+      <button type="button" className="sa-link" onClick={() => void load()}>刷新</button>
+      <button type="button" className="sa-link" onClick={() => void exportManifest()}>导出我的清单</button>
+    </p>}
+    {!remote?.configured && <p className="sa-inline-note">未配置远程清单。设置 <code>LAGENT_MARKET_URL</code> 指向一份市场 JSON，就能在这里看到共享配置。<button type="button" className="sa-link" onClick={() => void exportManifest()}>导出我的清单</button></p>}
     <div className="sa-ops-list">{rows.map(row => <div className="sa-ops-row" key={row.id}>
       <div>
-        <strong>{row.name}{row.builtin ? <span className="sa-tag">内置</span> : null}</strong>
+        <strong>{row.name}{row.builtin ? <span className="sa-tag">内置</span> : null}{row.remote ? <span className="sa-tag">远程</span> : null}</strong>
         <span>{row.description || '没有说明'} · {row.executorId} · {row.permission === 'read' ? '只读' : row.permission === 'full' ? '完全放行' : '可写工作区'}{row.instructions.length ? ` · ${row.instructions.length} 条指令` : ''}</span>
       </div>
       <div className="sa-ops-row-actions">

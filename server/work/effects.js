@@ -8,6 +8,7 @@ export function workEvents({ store = null, log = null, heartbeatMs = 15000, repl
 
 export function legacyWorkEvents({ store = null, heartbeatMs = 15000 } = {}) {
   const clients = new Set();
+  const subscribers = new Set();
   return {
     publish(event) {
       const payload = JSON.stringify(event);
@@ -15,6 +16,14 @@ export function legacyWorkEvents({ store = null, heartbeatMs = 15000 } = {}) {
         try { res.write(`data: ${payload}\n\n`); }
         catch { /* 客户端已断开 */ }
       }
+      for (const subscriber of [...subscribers]) {
+        try { subscriber(event); } catch { subscribers.delete(subscriber); }
+      }
+    },
+    subscribe(listener) {
+      if (typeof listener !== 'function') return () => {};
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
     },
     connect(req, res, isSessionValid) {
       if (isSessionValid && !isSessionValid(req)) return res.status(401).json({ error: '登录已失效，请重新登录' });
@@ -37,6 +46,6 @@ export function legacyWorkEvents({ store = null, heartbeatMs = 15000 } = {}) {
       const timer=setInterval(()=>{if(isSessionValid&&!isSessionValid(req)){res.end();return;}res.write(': heartbeat\n\n');},heartbeatMs);timer.unref();
       res.on('close',()=>{clearInterval(timer);clients.delete(res);});
     },
-    close(){for(const res of clients)res.end();clients.clear();}
+    close(){subscribers.clear();for(const res of clients)res.end();clients.clear();}
   };
 }

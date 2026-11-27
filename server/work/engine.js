@@ -2645,9 +2645,17 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     // 配置档：保存、改名、删除、一键应用与恢复默认。
     listProfiles(){return profiles.list();},
     agentMarket(){return {listings:agentMarket.list()};},
+    // source=remote/all 时把远程清单一起返回；远程读取失败只降级，不影响本地市场。
+    async agentMarketCatalog({source='all'}={}){
+      const listings=agentMarket.list();
+      if(source==='local')return {listings,remote:{configured:agentMarket.remoteConfigured(),url:'',listings:[]}};
+      const remote=await agentMarket.remoteList();
+      return {listings:source==='remote'?remote.listings:[...listings,...remote.listings],remote};
+    },
+    marketManifest(){return agentMarket.manifest();},
     publishAgentBundle(input){return agentMarket.publish(input);},
     removeAgentBundle(id){return agentMarket.remove(id);},
-    installAgentBundle(id){const result=agentMarket.install(id);audit(null,'market','market','allowed',`安装配置 ${result.listing?.name||''}`);return result;},
+    async installAgentBundle(id){const result=await agentMarket.installAny(id);audit(null,'market','market','allowed',`安装配置 ${result.listing?.name||''}`);return result;},
     profilesActive(projectId){return profiles.active(projectId||undefined);},
     saveProfile(input){const profile=profiles.save(input);audit(null,'profile','profile','allowed',`保存配置档 ${profile.name}`);return profile;},
     updateProfile(id,input){const profile=profiles.update(id,input);audit(null,'profile','profile','allowed',`更新配置档 ${profile.name}`);return profile;},

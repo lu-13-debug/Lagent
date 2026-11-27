@@ -9114,12 +9114,13 @@ label.sa-team-toggle { cursor: pointer; }
   }
 }
 
-/* 长会话性能：屏外轮次跳过布局与绘制，滚动时按 240px 估算占位。
-   500 轮会话只渲染视口附近的内容，滚动不再整段重排。 */
-.sa-conv-turn {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 240px;
-}
+/* 长会话性能：会话主区按行窗口化，只保留视口附近的 DOM；
+   屏外行用占位高度撑住滚动条，行高由 ResizeObserver 实测回填。 */
+.sa-thread-rows { display: flex; flex-direction: column; width: 100%; }
+.sa-thread-row { padding-bottom: 8px; }
+.sa-thread-row.sa-turn-start { padding-top: 14px; border-top: 1px solid var(--sa-line); }
+.sa-thread-row.sa-turn-start:first-child { padding-top: 0; border-top: 0; }
+.sa-thread-spacer { flex: none; width: 100%; }
 
 /* 会话顶部的交接链路：一行小字，点一下跳到对应线程。 */
 .sa-lineage {
@@ -9207,4 +9208,18 @@ label.sa-team-toggle { cursor: pointer; }
 @media (max-width: 720px) {
   .sa-eval-rows li { grid-template-columns: 1fr 1fr; }
   .sa-eval-rows li span:nth-child(n+5) { display: none; }
+}
+
+/* 工具注册表：按来源分组，行内调整风险级别与启停。 */
+.sa-tool-registry { margin-top: 18px; }
+.sa-tool-group { margin-top: 14px; }
+.sa-tool-group h3 {
+  display: flex; align-items: baseline; gap: 8px; margin: 0 0 6px;
+  font-size: 13px; font-weight: 600; color: var(--sa-text);
+}
+.sa-tool-group h3 span { font-size: 12px; font-weight: 400; color: var(--sa-text-3); font-variant-numeric: tabular-nums; }
+.sa-tool-registry .sa-ops-row select {
+  min-width: 92px; padding: 4px 6px; font-size: 12px;
+  background: var(--sa-surface); color: var(--sa-text);
+  border: 1px solid var(--sa-line); border-radius: var(--sa-r-sm);
 }

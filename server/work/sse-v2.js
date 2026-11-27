@@ -41,6 +41,8 @@ export function createRunEventStream({
 } = {}) {
   if (!log) throw new TypeError('SSE v2 需要 run-event 日志');
   const clients = new Set();
+  // WebSocket 等其它传输层通过 subscribe 接同一份事件；SSE 仍是默认通道。
+  const subscribers = new Set();
   const visible = event => !ownerId || !event?.ownerId || event.ownerId === ownerId;
 
   function send(client, event) {
@@ -76,6 +78,17 @@ export function createRunEventStream({
   return {
     publish(event) {
       for (const client of [...clients]) send(client, event);
+      for (const subscriber of [...subscribers]) {
+        if (!visible(event)) continue;
+        try { subscriber(event); } catch { subscribers.delete(subscriber); }
+      }
+    },
+
+    // 订阅原始事件（已按 ownerId 过滤），返回取消函数。补发与 reset 由订阅方自己处理。
+    subscribe(listener) {
+      if (typeof listener !== 'function') return () => {};
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
     },
 
     connect(req, res, isSessionValid) {
@@ -136,6 +149,7 @@ export function createRunEventStream({
     },
 
     close() {
+      subscribers.clear();
       for (const client of [...clients]) {
         drop(client);
         try { client.res.end(); } catch { /* 已断开 */ }

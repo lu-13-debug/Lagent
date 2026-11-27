@@ -12,6 +12,13 @@ import { createCheckpointService } from './checkpoints.js';
 import { createWorktreeService } from './worktrees.js';
 import { createWorkflowService } from './workflows.js';
 import { createEvalService } from './evals.js';
+import { createToolRegistry } from './tool-registry.js';
+import { attachWorkEventSocket } from './event-socket.js';
+import {
+  RunStartBody, RunApproveBody, ApprovalDecisionBody, IsolateBody,
+  CheckpointRestoreBody, WorkflowSaveBody, WorkflowRunBody, EvalCreateBody,
+  AgentBundleBody, ToolRegistryBody, ThreadQuery, parseBody, parseQuery
+} from './schemas.js';
 import { mergeRuns, planToRun, taggedRun } from './run-projection.js';
 import { registerMobileWorkRoutes } from '../mobile-gateway.js';
 import { registerMcpRoutes } from './mcp.js';
@@ -62,6 +69,8 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   const events=workEvents({ store, log:sseV2?runEvents:null, replayLimit:500, ownerId:null });
   const stopRunEvents=runEvents?runEvents.startMaintenance():null;
   app.locals.runEvents=runEvents;
+  // 独立服务进程可以在 listen 之后调用它挂 WebSocket 事件流；SSE 保持原样。
+  app.locals.attachWorkEventSocket=server=>attachWorkEventSocket(server,{events,log:runEvents,isSessionValid,ownerId});
   let imNotifier=null;
   const publish=event=>{
     let recorded=null;
@@ -184,8 +193,9 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   // 隔离执行：项目级开关 + 工作树查询/提交/清理。未开启 LAGENT_WORKTREE=1 时写入会被拒绝。
   app.post('/api/work/projects/:id/isolation',(req,res)=>{
     try{
+      const body=parseBody(IsolateBody,req.body,'隔离模式');
       if(!worktrees.enabled) throw Object.assign(new Error('隔离执行未启用（LAGENT_WORKTREE=1）'),{status:409,code:'WORKTREE_DISABLED'});
-      res.json({project:engine.setProjectIsolation(req.params.id, req.body?.mode)});
+      res.json({project:engine.setProjectIsolation(req.params.id, body.mode)});
     }catch(error){res.status(error?.status||500).json({error:error?.message||'设置隔离模式失败',...(error?.code?{code:error.code}:{})});}
   });
   app.get('/api/work/projects/:id/worktrees',(req,res)=>{
@@ -272,7 +282,7 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   // 工作流：保存多步计划模板并重复执行；每次运行返回新的计划。
   app.get('/api/work/workflows',(_req,res)=>res.json({workflows:workflows.list()}));
   app.post('/api/work/workflows',(req,res)=>{
-    try{res.status(201).json({workflow:workflows.save(req.body||{})});}
+    try{res.status(201).json({workflow:workflows.save(parseBody(WorkflowSaveBody,req.body,'工作流'))});}
     catch(error){res.status(error?.status||500).json({error:error?.message||'保存工作流失败'});}
   });
   app.delete('/api/work/workflows/:id',(req,res)=>{
@@ -280,7 +290,10 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     catch(error){res.status(error?.status||500).json({error:error?.message||'删除工作流失败'});}
   });
   app.post('/api/work/workflows/:id/run',(req,res)=>{
-    try{res.status(201).json(workflows.run(req.params.id,{autoRun:req.body?.autoRun===true,clientRequestId:req.body?.clientRequestId}));}
+    try{
+      const body=parseBody(WorkflowRunBody,req.body,'运行参数');
+      res.status(201).json(workflows.run(req.params.id,{autoRun:body.autoRun===true,clientRequestId:body.clientRequestId}));
+    }
     catch(error){res.status(error?.status||500).json({error:error?.message||'运行工作流失败'});}
   });
   // 评测：把真实工单汇总成对比表并留存快照；不执行任务、不重新打分。
@@ -290,7 +303,10 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     catch(error){res.status(error?.status||500).json({error:error?.message||'读取评测失败'});}
   });
   app.post('/api/work/evals',(req,res)=>{
-    try{res.status(201).json({eval:evals.evaluate({ticketIds:req.body?.ticketIds,name:req.body?.name,limit:Number(req.body?.limit)||20})});}
+    try{
+      const body=parseBody(EvalCreateBody,req.body,'评测参数');
+      res.status(201).json({eval:evals.evaluate({ticketIds:body.ticketIds,name:body.name,limit:body.limit||20})});
+    }
     catch(error){res.status(error?.status||500).json({error:error?.message||'评测失败'});}
   });
   app.get('/api/work/reports',(req,res)=>res.json(engine.listReports(req.query||{})));
@@ -391,6 +407,34 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     try{const result=await bridge.connect();res.json({ok:result.health.every(row=>row.ok),servers:result.health,tools:result.tools,schemas:bridge.schemas().map(row=>row.function.name)});}
     finally{await bridge.close().catch(()=>{});}
   });
+  // 工具注册表：执行器、MCP 工具、技能与内置工具的统一清单；启停只写注册表，不改执行器。
+  const toolRegistry=createToolRegistry({
+    store,
+    listExecutors:()=>{try{return executor.list();}catch{return [];}},
+    listSkills:()=>{try{return engine.listSkills().skills||[];}catch{return [];}},
+    listMcpServers:()=>mcpRows()
+  });
+  app.get('/api/work/tools/registry',(req,res)=>{
+    try{
+      const source=typeof req.query?.source==='string'&&req.query.source?req.query.source:'';
+      const enabled=req.query?.enabled==='1'?true:req.query?.enabled==='0'?false:undefined;
+      res.json({tools:toolRegistry.list({source,enabled}),summary:toolRegistry.summary(),sources:toolRegistry.sources});
+    }catch(error){res.status(error?.status||500).json({error:error?.message||'读取工具清单失败'});}
+  });
+  app.get('/api/work/tools/registry/:id',(req,res)=>{
+    try{res.json({tool:toolRegistry.find(req.params.id)});}
+    catch(error){res.status(error?.status||404).json({error:error?.message||'工具不存在'});}
+  });
+  app.post('/api/work/tools/registry/:id/state',(req,res)=>{
+    try{
+      const body=parseBody(ToolRegistryBody,req.body,'工具状态');
+      res.json({tool:toolRegistry.setState(req.params.id,body)});
+    }catch(error){res.status(error?.status||500).json({error:error?.message||'更新工具状态失败'});}
+  });
+  app.delete('/api/work/tools/registry/:id/state',(req,res)=>{
+    try{res.json({tool:toolRegistry.removeState(req.params.id)});}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'恢复工具默认状态失败'});}
+  });
   app.get('/api/work/policy',(_req,res)=>res.json({policy:engine.policy()}));
   app.get('/api/work/agents/roster',(_req,res)=>res.json({agents:engine.agentRoster()}));
   app.get('/api/work/team-templates',(req,res)=>res.json({templates:engine.listTeamTemplates(req.query?.projectId)}));
@@ -405,13 +449,27 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/profiles/:id/apply',(req,res)=>res.json(engine.applyProfile(req.params.id,req.body)));
   app.post('/api/work/profiles/reset',(req,res)=>res.json(engine.resetProfile(req.body)));
   // Agent 市场：安装为本地配置档，不下载代码；自定义配置可发布和删除。
-  app.get('/api/work/agent-market',(_req,res)=>res.json(engine.agentMarket()));
+  app.get('/api/work/agent-market',async(req,res)=>{
+    try{
+      const source=['local','remote','all'].includes(req.query?.source)?req.query.source:'all';
+      res.json(await engine.agentMarketCatalog({source}));
+    }catch(error){res.status(error?.status||500).json({error:error?.message||'读取市场失败'});}
+  });
+  // 导出静态清单：托管到任意 HTTPS 静态站点后，把 LAGENT_MARKET_URL 指向它即可共享。
+  app.get('/api/work/agent-market/manifest',(req,res)=>{
+    const manifest=engine.marketManifest();
+    if(req.query?.download==='1')res.setHeader('Content-Disposition','attachment; filename="lagent-market.json"');
+    res.json(manifest);
+  });
   app.post('/api/work/agent-market/publish',(req,res)=>{
-    try{res.status(201).json({listing:engine.publishAgentBundle(req.body||{})});}
+    try{
+      const body=parseBody(AgentBundleBody,req.body,'配置内容');
+      res.status(201).json({listing:engine.publishAgentBundle(body)});
+    }
     catch(error){res.status(error?.status||500).json({error:error?.message||'发布配置失败'});}
   });
-  app.post('/api/work/agent-market/:id/install',(req,res)=>{
-    try{res.status(201).json(engine.installAgentBundle(req.params.id));}
+  app.post('/api/work/agent-market/:id/install',async(req,res)=>{
+    try{res.status(201).json(await engine.installAgentBundle(req.params.id));}
     catch(error){res.status(error?.status||500).json({error:error?.message||'安装配置失败'});}
   });
   app.delete('/api/work/agent-market/:id',(req,res)=>{
@@ -481,19 +539,14 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   }));
   app.post('/api/work/runs', runRoute(async req => {
     const started = await orchestrator();
-    const goal = typeof req.body?.goal === 'string' ? req.body.goal.trim() : '';
     // 派单前的任务书可能比一句话长得多（三份版本里最细的那份常常上千字），
     // 这里放宽到与对话消息一致的上限，否则选完版本反而发不出去。
-    if (!goal || goal.length > 4000) {
-      const error = new Error('目标须为 1–4000 字');
-      error.status = 400;
-      throw error;
-    }
+    const body = parseBody(RunStartBody, req.body, '运行参数');
     return { run: await started.start({
-      goal,
-      projectId: req.body?.projectId || null,
-      chatId: req.body?.chatId || null,
-      templateId: typeof req.body?.templateId === 'string' && req.body.templateId ? req.body.templateId : null
+      goal: body.goal,
+      projectId: body.projectId || null,
+      chatId: body.chatId || null,
+      templateId: body.templateId || null
     }) };
   }));
   app.get('/api/work/runs/:id', runRoute(async req => {
@@ -504,7 +557,8 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     return { run: taggedRun(started.get(req.params.id)) };
   }));
   app.post('/api/work/runs/:id/approve', runRoute(async req => {
-    const decision = req.body?.decision === 'reject' ? 'reject' : 'approve';
+    const body = parseBody(RunApproveBody, req.body, '审批参数');
+    const decision = body.decision === 'reject' ? 'reject' : 'approve';
     // P0.2：旧入口同样结束 run 级审批，避免审批收件箱与运行状态不一致。
     if(approvals){
       const pending=approvals.list({runId:req.params.id,status:'pending',limit:10}).find(item=>item.kind==='run');
@@ -556,7 +610,8 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   });
   app.post('/api/work/approvals/:id/decision',async(req,res)=>{
     try{
-      res.json(await decideApproval(req.params.id,req.body?.decision,{by:req.body?.by==='im'?'im':'desktop'}));
+      const body=parseBody(ApprovalDecisionBody,req.body,'审批决议');
+      res.json(await decideApproval(req.params.id,body.decision,{by:body.by==='im'?'im':'desktop'}));
     }catch(error){
       res.status(error?.status||500).json({error:error?.message||'审批处理失败',code:error?.code});
     }
@@ -571,11 +626,17 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
       catch(error){res.status(error?.status||500).json({error:error?.message||'会话投影失败'});}
     });
     app.get('/api/work/threads/:id',(req,res)=>{
-      try{res.json({thread:threads.get(req.params.id,{afterSeq:seqParam(req.query?.after_seq),timelineLimit:limitParam(req.query?.limit,500,2000)})});}
+      try{
+        const query=parseQuery(ThreadQuery,req.query,{});
+        res.json({thread:threads.get(req.params.id,{afterSeq:query.after_seq??seqParam(req.query?.after_seq),timelineLimit:query.limit??limitParam(req.query?.limit,500,2000)})});
+      }
       catch(error){res.status(error?.status||500).json({error:error?.message||'会话投影失败'});}
     });
     app.get('/api/work/threads/:id/events',(req,res)=>{
-      try{res.json(threads.listEvents(req.params.id,{afterSeq:seqParam(req.query?.after_seq),limit:limitParam(req.query?.limit,500,2000)}));}
+      try{
+        const query=parseQuery(ThreadQuery,req.query,{});
+        res.json(threads.listEvents(req.params.id,{afterSeq:query.after_seq??seqParam(req.query?.after_seq),limit:query.limit??limitParam(req.query?.limit,500,2000)}));
+      }
       catch(error){res.status(error?.status||500).json({error:error?.message||'会话事件读取失败'});}
     });
   }
@@ -592,7 +653,10 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
       catch(error){checkpointError(error,res);}
     });
     app.post('/api/work/checkpoints/restore',(req,res)=>{
-      try{res.json({restore:checkpoints.restore({threadId:req.body?.threadId||'',scope:req.body?.scope||'session',paths:req.body?.paths,token:req.body?.token,confirm:req.body?.confirm===true})});}
+      try{
+        const body=parseBody(CheckpointRestoreBody,req.body,'回滚参数');
+        res.json({restore:checkpoints.restore({threadId:body.threadId||'',scope:body.scope||'session',paths:body.paths,token:body.token,confirm:body.confirm===true})});
+      }
       catch(error){checkpointError(error,res);}
     });
     app.get('/api/work/checkpoints/:id',(req,res)=>{
@@ -604,7 +668,10 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
       catch(error){checkpointError(error,res);}
     });
     app.post('/api/work/checkpoints/:id/restore',(req,res)=>{
-      try{res.json({restore:checkpoints.restore({checkpointId:req.params.id,scope:req.body?.scope||'workspace',path:req.body?.path||'',paths:req.body?.paths,token:req.body?.token,confirm:req.body?.confirm===true})});}
+      try{
+        const body=parseBody(CheckpointRestoreBody,req.body,'回滚参数');
+        res.json({restore:checkpoints.restore({checkpointId:req.params.id,scope:body.scope||'workspace',path:body.path||'',paths:body.paths,token:body.token,confirm:body.confirm===true})});
+      }
       catch(error){checkpointError(error,res);}
     });
     app.delete('/api/work/checkpoints/:id',(req,res)=>{
