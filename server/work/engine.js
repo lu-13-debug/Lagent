@@ -77,6 +77,8 @@ const normalizeCommandSettings = value => {
 
 export function createWorkEngine(store, executor, publish = () => {}, options = {}) {
   const db = workStore(store, publish, { runEvents: options.runEvents || null });
+  // 检查点：执行前给项目工作区拍一张可回滚的存档，未注入时整段跳过。
+  const checkpoints = options.checkpoints || null;
   // P0.2：审批中心按开关注入。没有注入时所有审批逻辑整段跳过，旧路径完全不变。
   const approvals = options.approvals || null;
   const requestApproval = input => {
@@ -511,10 +513,21 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     };
   };
   // 执行前给项目工单拍一张 git 快照，执行完成后据此算出「本次真正改动的文件」。
-  const takeGitSnapshot = (ticketId, projectPath) => {
+  const takeGitSnapshot = (ticketId, projectPath, projectId = '') => {
     try {
       db.put('git-snapshot', { id: ticketId, files: projects.gitChangedFilesSync(projectPath), at: now() });
     } catch { /* 快照失败不影响工单创建。 */ }
+    if (!checkpoints) return null;
+    try {
+      const ticket = db.get('work-ticket', ticketId);
+      return checkpoints.capture({
+        projectPath,
+        projectId,
+        threadId: ticket?.conversationId || ticket?.projectChatId || '',
+        ticketId,
+        reason: 'ticket'
+      });
+    } catch { return null; /* 检查点失败同样不影响工单。 */ }
   };
   const changedSinceSnapshot = (ticketId, projectPath) => {
     try {
@@ -3284,7 +3297,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       // write() 返回的是 publicTicket（会剥掉 executorInput），直接执行必须用原始记录，否则会写回一份空的执行输入。
       const created=write(record);
       if(project)touchProjectChat(project.chat,{lastTicketId:created.id});
-      if(project)takeGitSnapshot(created.id,project.project.path);
+      if(project)takeGitSnapshot(created.id,project.project.path,project.project.id);
       // 直接执行：start() 会把工单推进到 working 并调用执行器；失败时保留现场让用户能看到原因。
       if(auto)try{return start(record);}catch(error){return get(created.id);}
       return created;
@@ -3357,7 +3370,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       }
       const created=write(record);
       touchProjectChat(project.chat,{lastTicketId:created.id});
-      takeGitSnapshot(created.id,project.project.path);
+      takeGitSnapshot(created.id,project.project.path,project.project.id);
       audit(created.id,'routine-suggest',activeId,'created',clientRequestId||'');
       return created;
     },

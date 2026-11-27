@@ -8,6 +8,7 @@ import { createRunEventLog, RUN_EVENT_LIMITS } from './run-events.js';
 import { createJsonlArchive } from './run-events-archive.js';
 import { createApprovalService } from './approvals.js';
 import { createThreadProjection } from './thread-projection.js';
+import { createCheckpointService } from './checkpoints.js';
 import { mergeRuns, planToRun, taggedRun } from './run-projection.js';
 import { registerMobileWorkRoutes } from '../mobile-gateway.js';
 import { registerMcpRoutes } from './mcp.js';
@@ -124,7 +125,11 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     }
   };
   app.locals.decideApproval=decideApproval;
-  const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain,runEvents,approvals,outboxEnabled:process.env.LAGENT_WORK_OUTBOX==='1'});
+  // 检查点：执行前存档、结束后可按单文件 / 工作区 / 整条会话回滚。默认开启，LAGENT_CHECKPOINTS=0 关闭。
+  const checkpoints = (process.env.LAGENT_CHECKPOINTS || '1') === '0' ? null : createCheckpointService(store, {
+    dataDir: path.dirname(store.dbPath)
+  });
+  const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain,runEvents,approvals,checkpoints,outboxEnabled:process.env.LAGENT_WORK_OUTBOX==='1'});
   // P0.3：只读 thread 投影，默认 1 秒缓存；开关关闭时路由不存在，旧客户端不受影响。
   const threadApiOn=(process.env.LAGENT_THREAD_API||'').trim()==='1';
   const threads=threadApiOn?createThreadProjection({
@@ -493,6 +498,39 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     app.get('/api/work/threads/:id/events',(req,res)=>{
       try{res.json(threads.listEvents(req.params.id,{afterSeq:seqParam(req.query?.after_seq),limit:limitParam(req.query?.limit,500,2000)}));}
       catch(error){res.status(error?.status||500).json({error:error?.message||'会话事件读取失败'});}
+    });
+  }
+  // 检查点：列表 / 预览（只读） / 回滚（必须带预览令牌 + confirm）。关闭时整组路由不存在。
+  if(checkpoints){
+    const checkpointError=(error,res)=>res.status(error?.status||500).json({error:error?.message||'检查点操作失败'});
+    app.get('/api/work/checkpoints',(req,res)=>{
+      try{res.json({checkpoints:checkpoints.list({projectId:req.query?.projectId||'',threadId:req.query?.threadId||'',limit:limitParam(req.query?.limit,30,100)})});}
+      catch(error){checkpointError(error,res);}
+    });
+    // 会话范围没有具体检查点 id，走 query；这里先注册，避免被 /:id/preview 吃掉。
+    app.get('/api/work/checkpoints/preview',(req,res)=>{
+      try{res.json({preview:checkpoints.preview({threadId:req.query?.threadId||'',scope:req.query?.scope||'session',paths:typeof req.query?.paths==='string'?req.query.paths.split(','):[]})});}
+      catch(error){checkpointError(error,res);}
+    });
+    app.post('/api/work/checkpoints/restore',(req,res)=>{
+      try{res.json({restore:checkpoints.restore({threadId:req.body?.threadId||'',scope:req.body?.scope||'session',paths:req.body?.paths,token:req.body?.token,confirm:req.body?.confirm===true})});}
+      catch(error){checkpointError(error,res);}
+    });
+    app.get('/api/work/checkpoints/:id',(req,res)=>{
+      try{res.json({checkpoint:checkpoints.get(req.params.id)});}
+      catch(error){checkpointError(error,res);}
+    });
+    app.get('/api/work/checkpoints/:id/preview',(req,res)=>{
+      try{res.json({preview:checkpoints.preview({checkpointId:req.params.id,scope:req.query?.scope||'workspace',path:req.query?.path||'',paths:typeof req.query?.paths==='string'?req.query.paths.split(','):[]})});}
+      catch(error){checkpointError(error,res);}
+    });
+    app.post('/api/work/checkpoints/:id/restore',(req,res)=>{
+      try{res.json({restore:checkpoints.restore({checkpointId:req.params.id,scope:req.body?.scope||'workspace',path:req.body?.path||'',paths:req.body?.paths,token:req.body?.token,confirm:req.body?.confirm===true})});}
+      catch(error){checkpointError(error,res);}
+    });
+    app.delete('/api/work/checkpoints/:id',(req,res)=>{
+      try{res.json(checkpoints.remove(req.params.id));}
+      catch(error){checkpointError(error,res);}
     });
   }
   app.post('/api/work/tickets/:id/verify',async(req,res)=>{
