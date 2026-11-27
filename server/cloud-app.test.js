@@ -61,8 +61,26 @@ test('云端移动文件接口进入鉴权而不是被路由白名单拦成 404'
   const token = await anon.api('/api/mobile/files/bad-token');
   assert.equal(token.status, 401);
   assert.match(token.error, /下载链接已过期或无效/);
+  // 1.2.3 / 1.2.4 新增的手机接口同样要先进入鉴权，不能被白名单拦成 404。
+  for (const [route, method] of [
+    ['/api/mobile/models', 'GET'],
+    ['/api/mobile/conversations', 'GET'],
+    ['/api/mobile/conversations', 'POST'],
+    ['/api/mobile/conversations/demo', 'GET'],
+    ['/api/mobile/conversations/demo', 'PATCH'],
+    ['/api/mobile/conversations/demo', 'DELETE'],
+    ['/api/mobile/conversations/demo/messages', 'POST'],
+    ['/api/mobile/reports/demo/text', 'GET'],
+    ['/api/mobile/tickets/demo/permissions/req-1', 'POST'],
+    ['/api/mobile/approvals', 'GET'],
+    ['/api/mobile/approvals/demo/decision', 'POST'],
+    ['/api/mobile/capabilities', 'GET'],
+    ['/api/mobile/tools/builtin%3Aterminal/state', 'POST'],
+    ['/api/mobile/market/sample/install', 'POST']
+  ]) assert.equal((await anon.api(route, method, method === 'GET' || method === 'DELETE' ? undefined : {})).status, 401, `${method} ${route}`);
   // 未登记的手机接口仍然保持 404，避免把 /api/mobile 变成任意路由入口。
   assert.equal((await anon.api('/api/mobile/unknown')).status, 404);
+  assert.equal((await anon.api('/api/mobile/tools/x/unknown', 'POST', {})).status, 404);
 });
 
 async function setup(t, options = {}) {

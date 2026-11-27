@@ -320,12 +320,16 @@ export function createCloudApp(options = {}) {
   app.post('/api/public/shares/read', (req, res) => { const share = publicShare(req); res.json({ report: JSON.parse(share.snapshot) }); });
   app.post('/api/public/shares/visit', (req, res) => { const share = publicShare(req); accounts.visitShare(share, req.body?.visitorToken); res.json({ ok:true }); });
   // 只保留早起分享链接的只读查看；新建、列出与撤销入口随 DataAgent 一并下线。
+  // 手机端可用的 Work 接口白名单：新增路由必须同时登记在这里，
+  // 否则云端会把它拦成 404；未登记路径仍保持 404，避免把 /api/mobile 变成任意路由入口。
   const mobileWorkRoute = req => {
-    if (req.method === 'GET' && ['/api/mobile/bootstrap', '/api/mobile/policy', '/api/mobile/events', '/api/mobile/notifications'].includes(req.path)) return true;
-    if (req.method === 'GET' && /^\/api\/mobile\/tickets\/[^/]+$/.test(req.path)) return true;
+    const { method, path: route } = req;
+    if (method === 'GET' && ['/api/mobile/bootstrap', '/api/mobile/policy', '/api/mobile/events', '/api/mobile/notifications', '/api/mobile/models', '/api/mobile/conversations', '/api/mobile/approvals', '/api/mobile/capabilities'].includes(route)) return true;
+    if (method === 'GET' && (/^\/api\/mobile\/conversations\/[^/]+$/.test(route) || /^\/api\/mobile\/tickets\/[^/]+$/.test(route) || /^\/api\/mobile\/reports\/[^/]+\/text$/.test(route))) return true;
     // 工单产物列表、预览与签名下载；下载地址自带令牌，仍由路由自身校验。
-    if (req.method === 'GET' && (/^\/api\/mobile\/tickets\/[^/]+\/files$/.test(req.path) || /^\/api\/mobile\/tickets\/[^/]+\/file\/preview$/.test(req.path) || /^\/api\/mobile\/files\/[^/]+$/.test(req.path))) return true;
-    return req.method === 'POST' && (req.path === '/api/mobile/command' || req.path === '/api/mcp' || req.path === '/api/mobile/notifications/read-all' || /^\/api\/mobile\/tickets\/[^/]+\/file\/link$/.test(req.path) || /^\/api\/mobile\/tickets\/[^/]+\/actions$/.test(req.path) || /^\/api\/mobile\/notifications\/[^/]+\/read$/.test(req.path));
+    if (method === 'GET' && (/^\/api\/mobile\/tickets\/[^/]+\/files$/.test(route) || /^\/api\/mobile\/tickets\/[^/]+\/file\/preview$/.test(route) || /^\/api\/mobile\/files\/[^/]+$/.test(route))) return true;
+    if ((method === 'PATCH' || method === 'DELETE') && /^\/api\/mobile\/conversations\/[^/]+$/.test(route)) return true;
+    return method === 'POST' && (route === '/api/mobile/command' || route === '/api/mcp' || route === '/api/mobile/notifications/read-all' || route === '/api/mobile/conversations' || /^\/api\/mobile\/conversations\/[^/]+\/messages$/.test(route) || /^\/api\/mobile\/tickets\/[^/]+\/file\/link$/.test(route) || /^\/api\/mobile\/tickets\/[^/]+\/actions$/.test(route) || /^\/api\/mobile\/tickets\/[^/]+\/permissions\/[^/]+$/.test(route) || /^\/api\/mobile\/notifications\/[^/]+\/read$/.test(route) || /^\/api\/mobile\/approvals\/[^/]+\/decision$/.test(route) || /^\/api\/mobile\/tools\/[^/]+\/state$/.test(route) || /^\/api\/mobile\/market\/[^/]+\/install$/.test(route));
   };
   app.use((req, res, next) => {
     if (!req.path.toLowerCase().startsWith('/api/')) return next();
