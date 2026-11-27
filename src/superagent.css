@@ -9113,3 +9113,21 @@ label.sa-team-toggle { cursor: pointer; }
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* 长会话性能：屏外轮次跳过布局与绘制，滚动时按 240px 估算占位。
+   500 轮会话只渲染视口附近的内容，滚动不再整段重排。 */
+.sa-conv-turn {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
+}
+
+/* 会话顶部的交接链路：一行小字，点一下跳到对应线程。 */
+.sa-lineage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 2px 0 10px;
+  font-size: 12px;
+  color: var(--sa-text-2);
+}
+.sa-lineage .sa-link { font-size: 12px; }

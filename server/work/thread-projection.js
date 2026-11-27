@@ -211,8 +211,45 @@ export function createThreadProjection({
     return { chatIds, threadTickets, ticketIds, threadRuns, threadApprovals };
   }
 
-  function eventsOf(threadId, { afterSeq = 0, limit = 500, ticketIds = new Set() } = {}) {
-    if (runEvents) {
+  // 交接（handoff）把工单串成链条：父工单所在线程与子工单所在线程互相可见。
+  // 审批仍走全局收件箱，这里只补线程间关系，供检查器显示「从哪来 / 接下来在哪」。
+  function lineageOf(threadId, ticketIds) {
+    const all = tickets();
+    const chatThread = new Map(chats().map(chat => [chat.id, chat.conversationId || chat.id]));
+    const threadOf = ticket => ticket.conversationId
+      || (ticket.projectChatId ? (chatThread.get(ticket.projectChatId) || ticket.projectChatId) : ticket.id);
+    let parent = null;
+    for (const ticket of all) {
+      if (!ticketIds.has(ticket.id) || !ticket.parentTicketId) continue;
+      const parentTicket = all.find(item => item.id === ticket.parentTicketId);
+      if (!parentTicket) continue;
+      parent = {
+        ticketId: parentTicket.id,
+        threadId: threadOf(parentTicket),
+        title: text(parentTicket.title, 120) || '',
+        ...(text(parentTicket.status, 30) ? { status: text(parentTicket.status, 30) } : {})
+      };
+      break;
+    }
+    const children = [];
+    const seen = new Set();
+    for (const ticket of all) {
+      if (!ticket.parentTicketId || !ticketIds.has(ticket.parentTicketId)) continue;
+      const childThreadId = threadOf(ticket);
+      if (!childThreadId || childThreadId === threadId || seen.has(childThreadId)) continue;
+      seen.add(childThreadId);
+      children.push({
+        ticketId: ticket.id,
+        threadId: childThreadId,
+        title: text(ticket.title, 120) || '',
+        status: text(ticket.status, 30) || 'unknown',
+        depth: Number.isSafeInteger(ticket.handoffDepth) ? ticket.handoffDepth : 1
+      });
+    }
+    return { parent, children };
+  }
+
+  function eventsOf(threadId, { afterSeq = 0, limit = 500, ticketIds = new Set() } = {}) {    if (runEvents) {
       const stored = runEvents.listThread(threadId, { afterSeq, limit });
       if (stored.length || afterSeq > 0) return stored.map(event => ({ ...event, eventType: event.type }));
     }
@@ -256,6 +293,7 @@ export function createThreadProjection({
       ...(text(conversation?.id, 100) ? { conversationId: conversation.id } : {}),
       runs: threadRuns.map(runSummary),
       tickets: threadTickets.map(ticketSummary),
+      lineage: lineageOf(threadId, ticketIds),
       approvals: threadApprovals.map(approvalSummary).filter(Boolean),
       timeline,
       inspector: {

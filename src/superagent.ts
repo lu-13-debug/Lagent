@@ -139,6 +139,11 @@ export interface WorkThread {
   id: string; title: string; status: string; conversationId?: string; projectId?: string;
   runs: WorkThreadRunSummary[];
   tickets: WorkThreadTicketSummary[];
+  /** 交接链路：本线程从哪条线程接手、又交给过哪些线程。 */
+  lineage?: {
+    parent: { threadId: string; ticketId: string; title: string; status?: string } | null;
+    children: { threadId: string; ticketId: string; title: string; status: string; depth: number }[];
+  };
   approvals: WorkApproval[];
   timeline: WorkThreadTimelineRow[];
   inspector: {

@@ -5,7 +5,7 @@ import { Activity, AlertTriangle, AppWindow, Bot, Brain, Check, ChevronRight, Cl
 import { api } from '../api';
 import { useAppearance } from '../appearance-context';
 import type { Settings, User } from '../types';
-import type { WorkAction, WorkBootstrap, WorkConversation, WorkConversationRun, WorkConversationSummary, WorkConversationTurn, WorkInboxItem, WorkMcpToken, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTeamTemplate, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
+import type { WorkAction, WorkBootstrap, WorkConversation, WorkConversationRun, WorkConversationSummary, WorkConversationTurn, WorkInboxItem, WorkMcpToken, WorkPlan, WorkPolicy, WorkProject, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTeamTemplate, WorkThread, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
 import { MemoryPanel } from './MemoryPanel';
 import { AgentConclusionList, AgentThinkingPanel } from './AgentThinkingPanel';
 import { ChatModelPicker, CliModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
@@ -314,6 +314,16 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
   const [conversations, setConversations] = useState<WorkConversationSummary[]>(() => []);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('conv'));
   const [activeConversation, setActiveConversation] = useState<WorkConversation | null>(null);
+  // 交接链路（thread 投影的可选字段）：开关关闭或接口 404 时保持空，不影响会话。
+  const [threadLineage, setThreadLineage] = useState<WorkThread['lineage'] | null>(null);
+  useEffect(() => {
+    if (!activeConversationId) { setThreadLineage(null); return; }
+    let alive = true;
+    api.workThread(activeConversationId)
+      .then(result => { if (alive) setThreadLineage(result.thread.lineage || null); })
+      .catch(() => { if (alive) setThreadLineage(null); });
+    return () => { alive = false; };
+  }, [activeConversationId]);
   // 会话切换时可能有多个请求在飞；只允许最新一次写回状态，避免旧响应盖掉新会话。
   const conversationRequest = useRef(0);
   const activeConversationIdRef = useRef(activeConversationId);
@@ -2110,6 +2120,10 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
       <div className="sa-thread-inner">
         <div className="sa-chat-meta"><span>{activeConversation.projectId ? (folderState.projects.find(item => item.id === activeConversation.projectId)?.name || '工作文件夹') : 'Lagent'}</span><Status status={activeConversation.status || 'waiting'} /><span>{activeConversation.turns.length} 轮 · {activeConversation.participants.map(id => agentLabel(id)).join(' / ')}</span><time>{time(activeConversation.updatedAt)}</time>{activeConversation.ticketIds.length > 0 && <button type="button" className="sa-link" onClick={() => void open(activeConversation.ticketIds[activeConversation.ticketIds.length - 1])}>最新执行详情</button>}</div>
         <h1 className="sa-projectchat-title">{activeConversation.title}</h1>
+        {threadLineage && (threadLineage.parent || threadLineage.children.length > 0) && <p className="sa-lineage">
+          {threadLineage.parent && <button type="button" className="sa-link" onClick={() => openConversation(threadLineage.parent!.threadId)}>接手自「{threadLineage.parent.title || threadLineage.parent.ticketId}」</button>}
+          {threadLineage.children.map(child => <button type="button" key={child.threadId} className="sa-link" onClick={() => openConversation(child.threadId)}>已交给「{child.title || child.ticketId}」</button>)}
+        </p>}
         <p className="sa-inline-note">一个任务一条会话；选中的 Agent 在下面分 tab 呈现思考过程，结论并列比较，不各自创建对话。</p>
         {activeConversation.turns.map(renderConversationTurn)}
         {!activeConversation.turns.length && <p className="sa-empty">还没有消息。在下面描述目标，Lagent 会在这个会话里派活。</p>}

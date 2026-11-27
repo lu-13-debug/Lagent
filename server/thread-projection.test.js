@@ -162,3 +162,30 @@ test('thread 状态聚合：待审批优先于运行，失败优先于已结算'
   assert.equal(threadStatusOf([{ status: 'completed' }], [], []), 'settled');
   assert.equal(threadStatusOf([], [], [{ status: 'paused' }]), 'paused');
 });
+
+test('交接工单让父子线程互相可见（lineage）', t => {
+  const { store, projection } = fixture(t);
+  store.put('conversation', {
+    id: 'conv-2', title: '接力任务', goal: '继续整理', agentIds: ['model'], turns: [], status: 'working',
+    createdAt: '2026-11-26T00:10:00.000Z', updatedAt: '2026-11-26T00:10:00.000Z'
+  });
+  store.put('work-ticket', {
+    id: 't3', title: '接力整理', status: 'working', executor: 'model', summary: '接力中',
+    conversationId: 'conv-2', parentTicketId: 't2', handoffDepth: 1,
+    createdAt: '2026-11-26T00:10:01.000Z', updatedAt: '2026-11-26T00:10:02.000Z'
+  });
+
+  const parent = projection.get('conv-1');
+  assert.equal(parent.lineage.children.length, 1);
+  assert.equal(parent.lineage.children[0].threadId, 'conv-2');
+  assert.equal(parent.lineage.children[0].ticketId, 't3');
+  assert.equal(parent.lineage.children[0].depth, 1);
+
+  const child = projection.get('conv-2');
+  assert.equal(child.lineage.parent.threadId, 'conv-1');
+  assert.equal(child.lineage.parent.ticketId, 't2');
+  assert.equal(child.lineage.children.length, 0);
+
+  const lonely = projection.get('conv-1').lineage.parent;
+  assert.equal(lonely, null, '没有上一棒时 parent 为空');
+});
