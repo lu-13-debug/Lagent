@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, ChevronDown, ShieldCheck, Sparkles, Terminal, Wrench } from 'lucide-react';
 import { STATUS_LABELS } from '../status';
+import { ResultMarkdown } from './ResultMarkdown';
 
 // 一轮对话里「谁在想什么」的呈现：主控先规划 → 分发 → 各路并行 → 完成后成结论。
 // 数据全部由调用方传入，标签行按数组 map，多一个 Agent 就多一个 chip，布局不用改。
@@ -241,23 +242,36 @@ export function AgentThinkingPanel({ orchestrator, agents, defaultOpen = true, d
 
 // 各 Agent 的结论清单：一行一个，动作按钮留在行尾，Agent 再多也只是多几行。
 export function AgentConclusionList({ rows, onOpen, onApprove }: {
-  rows: { id: string; name: string; brand?: ThinkingBrand; status: string; summary: string; ticketId: string }[];
+  rows: { id: string; name: string; brand?: ThinkingBrand; status: string; text: string; ticketId: string }[];
   onOpen: (ticketId: string) => void;
   onApprove: (ticketId: string) => void;
 }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   if (!rows.length) return null;
   const done = rows.filter(row => row.status === 'completed').length;
   return <div className="sa-tp-res">
     <div className="sa-tp-res-head"><strong>各 Agent 结论</strong><span>{done}/{rows.length} 已返回{done === rows.length ? '，可在上方回看思考过程' : '，其余仍在思考'}</span></div>
-    {rows.map(row => <div className={`sa-tp-res-row${row.status === 'completed' ? ' is-done' : ''}`} key={row.id}>
-      <BrandGlyph brand={row.brand} size={18} />
-      <span className="sa-tp-res-name">{row.name}</span>
-      <span className="sa-tp-res-text">{row.summary || '—'}</span>
-      <StatusGlyph status={row.status} />
-      <span className="sa-tp-res-actions">
-        {row.status === 'awaiting_review' && <button type="button" className="sa-tp-link" onClick={() => onApprove(row.ticketId)}>确认执行</button>}
-        <button type="button" className="sa-tp-link" onClick={() => onOpen(row.ticketId)}>详情</button>
-      </span>
-    </div>)}
+    {rows.map(row => {
+      const text = row.text.trim() || '—';
+      // 短结论直接展开；长结论先收成几行，需要时再读全文。
+      const open = expanded[row.id] ?? text.length < 420;
+      return <article className={`sa-tp-res-row${row.status === 'completed' ? ' is-done' : ''}`} key={row.id}>
+        <header className="sa-tp-res-top">
+          <BrandGlyph brand={row.brand} size={18} />
+          <span className="sa-tp-res-name">{row.name}</span>
+          <StatusGlyph status={row.status} />
+          <span className="sa-tp-res-actions">
+            {row.status === 'awaiting_review' && <button type="button" className="sa-tp-link" onClick={() => onApprove(row.ticketId)}>确认执行</button>}
+            <button type="button" className="sa-tp-link" onClick={() => onOpen(row.ticketId)}>详情</button>
+          </span>
+        </header>
+        <div className={`sa-tp-res-body${open ? ' is-open' : ''}`}>
+          <ResultMarkdown text={text} />
+        </div>
+        {text.length >= 420 && <button type="button" className="sa-tp-res-toggle" aria-expanded={open} onClick={() => setExpanded(previous => ({ ...previous, [row.id]: !open }))}>
+          {open ? '收起结论' : '展开全文'}
+        </button>}
+      </article>;
+    })}
   </div>;
 }

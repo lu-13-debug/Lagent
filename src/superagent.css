@@ -6654,12 +6654,17 @@ label.sa-team-toggle { cursor: pointer; }
 .sa-tp-res-head { display: flex; align-items: baseline; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--sa-line); background: var(--sa-surface-2); }
 .sa-tp-res-head strong { font-size: 13px; color: var(--sa-text); }
 .sa-tp-res-head span { font-size: 12px; color: var(--sa-text-3); }
-.sa-tp-res-row { display: grid; grid-template-columns: 18px 84px 1fr auto auto; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--sa-line); }
+.sa-tp-res-row { padding: 10px 12px; border-top: 1px solid var(--sa-line); }
 .sa-tp-res-row:first-of-type { border-top: 0; }
-.sa-tp-res-name { font-size: 13px; font-weight: 600; color: var(--sa-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sa-tp-res-text { min-width: 0; font-size: 11.5px; color: var(--sa-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sa-tp-res-row:not(.is-done) .sa-tp-res-text { color: var(--sa-text-3); }
-.sa-tp-res-actions { display: flex; align-items: center; gap: 8px; }
+.sa-tp-res-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.sa-tp-res-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--sa-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sa-tp-res-row:not(.is-done) .sa-tp-res-body { color: var(--sa-text-3); }
+.sa-tp-res-body { position: relative; max-height: 7.6em; overflow: hidden; }
+.sa-tp-res-body.is-open { max-height: none; overflow: visible; }
+.sa-tp-res-body:not(.is-open)::after { content: ""; position: absolute; right: 0; bottom: 0; left: 0; height: 2.4em; background: linear-gradient(to bottom, transparent, var(--sa-surface)); pointer-events: none; }
+.sa-tp-res-toggle { margin-top: 6px; padding: 0; border: 0; background: none; color: var(--sa-text-3); font-family: inherit; font-size: 12px; cursor: pointer; }
+.sa-tp-res-toggle:hover { color: var(--sa-accent); text-decoration: underline; }
+.sa-tp-res-actions { display: flex; flex: none; align-items: center; gap: 8px; }
 .sa-tp-link { padding: 0; border: 0; background: none; color: var(--sa-text-3); font-family: inherit; font-size: 12px; cursor: pointer; }
 .sa-tp-link:hover { color: var(--sa-accent); text-decoration: underline; }
 
@@ -6668,8 +6673,6 @@ label.sa-team-toggle { cursor: pointer; }
 
 @media (max-width: 720px) {
   .sa-tp-dispatch-rows { grid-template-columns: 1fr; }
-  .sa-tp-res-row { grid-template-columns: 18px 1fr auto; row-gap: 4px; }
-  .sa-tp-res-text { grid-column: 2 / -1; }
   .sa-tp-res-actions { opacity: 1; }
   .sa-tp-orch-body { padding-left: 14px; }
 }
@@ -8193,4 +8196,139 @@ label.sa-team-toggle { cursor: pointer; }
     padding-left: 16px;
     padding-right: 16px;
   }
+}
+
+/* ==========================================================================
+   23. 结论正文 · Markdown 排版
+   段落留白、列表缩进、表格与代码块统一，避免整段文字挤在一起。
+   ========================================================================== */
+
+.sa-md {
+  color: var(--sa-text-2);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.sa-md > :first-child { margin-top: 0; }
+.sa-md > :last-child { margin-bottom: 0; }
+
+.sa-md p {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+}
+
+.sa-md h1,
+.sa-md h2,
+.sa-md h3,
+.sa-md h4 {
+  margin: 18px 0 8px;
+  color: var(--sa-text);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.005em;
+}
+
+.sa-md h1 { font-size: 18px; }
+.sa-md h2 { font-size: 16px; }
+.sa-md h3 { font-size: 14px; }
+.sa-md h4 { font-size: 13px; }
+
+.sa-md ul,
+.sa-md ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.sa-md li { margin: 3px 0; white-space: pre-wrap; }
+.sa-md li > p { margin: 0 0 6px; }
+
+.sa-md strong { color: var(--sa-text); font-weight: 600; }
+
+.sa-md blockquote {
+  margin: 10px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--sa-line-strong);
+  color: var(--sa-text-3);
+}
+
+.sa-md code {
+  padding: 1px 4px;
+  border: 1px solid var(--sa-line);
+  border-radius: var(--sa-r-xs);
+  background: var(--sa-surface-2);
+  font-family: var(--sa-font-mono);
+  font-size: 12px;
+}
+
+.sa-md pre {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--sa-line);
+  background: var(--sa-surface-2);
+  overflow: auto;
+}
+
+.sa-md pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+}
+
+.sa-md a {
+  color: var(--sa-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.sa-md hr {
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid var(--sa-line);
+}
+
+.sa-md-table {
+  margin: 0 0 12px;
+  overflow-x: auto;
+  border: 1px solid var(--sa-line);
+}
+
+.sa-md-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.sa-md-table th,
+.sa-md-table td {
+  padding: 6px 9px;
+  border-right: 1px solid var(--sa-line);
+  border-bottom: 1px solid var(--sa-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.sa-md-table th {
+  background: var(--sa-surface-2);
+  color: var(--sa-text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sa-md-table tr:last-child td { border-bottom: 0; }
+.sa-md-table th:last-child,
+.sa-md-table td:last-child { border-right: 0; }
+
+/* 结果区沿用统一排版，但保持正文原有字号与段落。 */
+.sa-md.sa-result-text {
+  font-size: var(--sa-fs-base);
+  color: var(--sa-text);
+}
+
+.sa-tp-res-body .sa-md {
+  font-size: 12.5px;
+  color: var(--sa-text-2);
 }

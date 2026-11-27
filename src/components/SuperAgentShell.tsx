@@ -8,6 +8,7 @@ import type { Settings, User } from '../types';
 import type { WorkAction, WorkApproval, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkConversation, WorkConversationRun, WorkConversationSummary, WorkConversationTurn, WorkInboxItem, WorkMcpToken, WorkPlan, WorkPolicy, WorkProject, WorkProjectChange, WorkProjectChat, WorkReport, WorkRosterEntry, WorkRun, WorkTeamTemplate, WorkThread, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport } from '../superagent';
 import { MemoryPanel } from './MemoryPanel';
 import { AgentConclusionList, AgentThinkingPanel } from './AgentThinkingPanel';
+import { ResultMarkdown } from './ResultMarkdown';
 import { ChatModelPicker, CliModelPicker, readChatModel, writeChatModel, type ChatModelChoice } from './ChatModelPicker';
 import { ProjectsPanel } from './ProjectsPanel';
 import { FileKindIcon, FilePreviewBody, fileKindFromPath, formatFileTime, useProjectFilePreview } from './ProjectFilePreview';
@@ -2127,7 +2128,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
             name: runName(row),
             brand: brandOf(row.run.agentId),
             status: row.status,
-            summary: row.output.replace(/\s+/g, ' ').slice(0, 160)
+            text: row.output
           }))}
           onOpen={ticketId => void open(ticketId)}
           onApprove={ticketId => void act(ticketId, 'approve')}
@@ -2139,7 +2140,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
         key: `${turn.id}:synthesis`,
         node: <section className="sa-agent-run">
           <header className="sa-agent-head"><span className="sa-agent-avatar"><Sparkles size={16} /></span><div className="sa-agent-name"><strong>{turn.mode === 'multi' ? 'Lagent 汇总' : '交叉验证汇总'}</strong><span>{agentLabel(turn.synthesisAgentId || 'lagent')}</span></div><Status status={runStatusOf(turn.synthesisTicketId)} /></header>
-          {synthesisText ? <div className="sa-result"><div className="sa-result-text">{synthesisText}</div></div> : <p className="sa-inline-note">汇总 Agent 正在比较各方结论…</p>}
+          {synthesisText ? <div className="sa-result"><ResultMarkdown text={synthesisText} className="sa-result-text" /></div> : <p className="sa-inline-note">汇总 Agent 正在比较各方结论…</p>}
           <button type="button" className="sa-link" onClick={() => void open(turn.synthesisTicketId!)}>查看汇总工单</button>
         </section>
       });
@@ -2337,7 +2338,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
               name: agentLabel(row.id),
               brand: brandOf(row.id),
               status: row.status,
-              summary: row.output.replace(/\s+/g, ' ').slice(0, 160)
+              text: row.output
             }))}
             onOpen={ticketId => void open(ticketId)}
             onApprove={ticketId => void act(ticketId, 'approve')}
@@ -2353,7 +2354,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
           </div>}
           {synthesisDetail && <section className="sa-agent-run">
             <header className="sa-agent-head"><span className="sa-agent-avatar"><Sparkles size={16} /></span><div className="sa-agent-name"><strong>交叉验证汇总</strong><span>{executorNames[activeGroup.synthesisAgentId || ''] || activeGroup.synthesisAgentId}</span></div><Status status={synthesisDetail.ticket.status} /></header>
-            {reportText(synthesisDetail) ? <div className="sa-result"><div className="sa-result-text">{reportText(synthesisDetail)}</div></div> : <p className="sa-inline-note">汇总 Agent 正在比较各方结论…</p>}
+            {reportText(synthesisDetail) ? <div className="sa-result"><ResultMarkdown text={reportText(synthesisDetail)} className="sa-result-text" /></div> : <p className="sa-inline-note">汇总 Agent 正在比较各方结论…</p>}
             <button type="button" className="sa-link" onClick={() => void open(synthesisDetail.ticket.id)}>查看汇总工单</button>
           </section>}
         </> : activeTicket ? <>
@@ -2388,7 +2389,7 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
               </li>;
             })}</ol>}
             {!terminalStatuses.includes(activeTicket.status) && !['awaiting_review', 'blocked', 'waiting'].includes(activeTicket.status) && liveSteps.length === 0 && <div className="sa-thinking"><span className="sa-thinking-dot" /><span className="sa-thinking-dot" /><span className="sa-thinking-dot" /><span>Agent 正在工作，完成后结果会出现在这里</span></div>}
-            {activeResult && <div className="sa-result"><h3><Check size={14} />结果</h3><div className="sa-result-text">{activeResult.slice(0, 12000)}</div></div>}
+            {activeResult && <div className="sa-result"><h3><Check size={14} />结果</h3><ResultMarkdown text={activeResult.slice(0, 12000)} className="sa-result-text" /></div>}
             <div className="sa-run-actions">
               {activeTicket.status === 'awaiting_review' && <button className="sa-button sa-primary" onClick={() => void act(activeTicket.id, 'approve')}><Check size={15} />确认继续</button>}
               {activeTicket.status === 'awaiting_review' && <button className="sa-button" onClick={() => void act(activeTicket.id, 'reject')}>要求修改</button>}
