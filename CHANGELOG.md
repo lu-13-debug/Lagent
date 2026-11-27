@@ -12,6 +12,12 @@
 - 首帧主题色跟随明暗切换（`#0b0d0c` / `#f3f1ea`），不再有深色启动闪白。
 - 新增 P0 验收脚本 `npm run p0:acceptance`：覆盖默认关闭、四开关全开、同一数据回滚三种模式，共 17 项断言。
 - 版本号与手机外壳同步到 1.2.4（Android `versionCode 10204`）。
+- 桌面端默认「关闭窗口时留在托盘」，本机执行节点与界面脱钩常驻，任务不会因关窗中断；托盘菜单可改回关闭即退出，`LAGENT_NODE_PERSIST=0` 恢复旧行为。
+- run-event 保留策略可配置（`LAGENT_RUN_EVENT_PER_THREAD`、`LAGENT_RUN_EVENT_MAX_AGE_DAYS`），裁剪前按天归档到 `data/run-events-archive/YYYY-MM-DD.jsonl`，归档失败则保留数据。
+- thread 投影补充交接链路：会话头部显示「接手自 / 已交给」，点击跳到对应线程；审批仍在全局收件箱。
+- 手机端支持深链：`?tab=` 与 `?ticket=` 写回地址栏，电脑上复制的工单链接手机可直接打开。
+- 多步计划编辑器改为按执行器能力（窗口、提示词、ACP、可写项目）筛选，不再按执行器 id 特判。
+- 长会话每轮使用 `content-visibility: auto`，屏外轮次跳过布局与绘制，500 轮会话滚动不再整段重排。
 
 ## 1.2.3 — 2026-11-25
 
