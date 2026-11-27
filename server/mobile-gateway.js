@@ -997,7 +997,7 @@ export function registerMobilePairingRoutes(app, gateway, { desktopOwner } = {})
   });
 }
 
-export function registerMobileWorkRoutes(app, gateway, { engine, executors, ownerId, onConnect, runEvents = null, approvals = null, decideApproval = null } = {}) {
+export function registerMobileWorkRoutes(app, gateway, { engine, executors, ownerId, onConnect, runEvents = null, approvals = null, decideApproval = null, toolRegistry = null } = {}) {
   if (!gateway || !engine) throw new TypeError('移动 Work 路由需要 gateway 与 engine');
   const auth = req => {
     if (req.mobileAuthenticated === true && req.mobileDevice) {
@@ -1184,6 +1184,63 @@ export function registerMobileWorkRoutes(app, gateway, { engine, executors, owne
     res.json({ ticket: sanitizeMobileTicket(result?.ticket) });
   });
   app.get('/api/mobile/policy', (req, res) => { auth(req); res.json({ policy: sanitizeMobilePolicy(engine.policy()) }); });
+  // 工具与配置市场：与电脑端共用同一份注册表和配置档，只下发展示所需字段。
+  const mobileTool = tool => ({
+    id: String(tool.id),
+    name: String(tool.name || tool.id).slice(0, 80),
+    source: String(tool.source || 'builtin'),
+    risk: ['low', 'medium', 'high'].includes(tool.risk) ? tool.risk : 'medium',
+    description: String(tool.description || '').slice(0, 200),
+    enabled: tool.enabled !== false,
+    available: tool.available !== false
+  });
+  const mobileBundle = row => ({
+    id: String(row.id),
+    name: String(row.name || row.id).slice(0, 80),
+    description: String(row.description || '').slice(0, 240),
+    executorId: String(row.executorId || ''),
+    permission: ['read', 'workspace', 'full'].includes(row.permission) ? row.permission : 'workspace',
+    instructions: Array.isArray(row.instructions) ? row.instructions.length : 0,
+    skills: Array.isArray(row.skills) ? row.skills.length : 0,
+    builtin: row.builtin === true,
+    remote: row.remote === true,
+    installed: row.installed === true
+  });
+  app.get('/api/mobile/capabilities', async (req, res) => {
+    auth(req);
+    const tools = toolRegistry ? toolRegistry.list() : [];
+    let market = { listings: [], remote: { configured: false, url: '' } };
+    try { market = await engine.agentMarketCatalog({ source: 'all' }); }
+    catch (error) { market = { listings: [], remote: { configured: false, url: '', error: error?.message || '市场读取失败' } }; }
+    res.json({
+      tools: tools.map(mobileTool),
+      summary: toolRegistry?.summary?.() || { total: tools.length, enabled: tools.filter(tool => tool.enabled).length },
+      market: {
+        listings: (market.listings || []).slice(0, 50).map(mobileBundle),
+        remote: {
+          configured: market.remote?.configured === true,
+          url: String(market.remote?.url || '').slice(0, 300),
+          ...(market.remote?.error ? { error: String(market.remote.error).slice(0, 200) } : {})
+        }
+      }
+    });
+  });
+  app.post('/api/mobile/tools/:id/state', (req, res) => {
+    auth(req);
+    if (!toolRegistry) throw mobileError('工具注册表不可用', 404);
+    if (typeof req.body?.enabled !== 'boolean') throw mobileError('enabled 必须是布尔值', 400);
+    try { res.json({ tool: mobileTool(toolRegistry.setState(req.params.id, { enabled: req.body.enabled })) }); }
+    catch (error) { res.status(error?.status || 500).json({ error: error?.message || '更新工具状态失败' }); }
+  });
+  app.post('/api/mobile/market/:id/install', async (req, res) => {
+    auth(req);
+    try {
+      const result = await engine.installAgentBundle(req.params.id);
+      res.status(201).json({ profile: { id: result.profile.id, name: result.profile.name } });
+    } catch (error) {
+      res.status(error?.status || 500).json({ error: error?.message || '安装配置失败' });
+    }
+  });
   app.get('/api/mobile/notifications', (req, res) => {
     const device = auth(req);
     let limit = MOBILE_NOTIFICATION_DEFAULT_LIMIT;

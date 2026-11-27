@@ -31,6 +31,25 @@ export type MobileFilePreview = {
 };
 export type MobileFileLink = { url: string; name: string; mime?: string; size?: number; expiresAt?: string };
 export type MobileAgent = { id: string; name: string; kind?: string; status?: string; capabilities?: string[] };
+/** 工具注册表与 Agent 市场：手机只下发展示所需字段。 */
+export type MobileTool = {
+  id: string; name: string; source: string; risk: 'low' | 'medium' | 'high';
+  description: string; enabled: boolean; available: boolean;
+};
+export type MobileMarketBundle = {
+  id: string; name: string; description: string; executorId: string;
+  permission: 'read' | 'workspace' | 'full';
+  instructions: number; skills: number;
+  builtin: boolean; remote: boolean; installed: boolean;
+};
+export type MobileCapabilities = {
+  tools: MobileTool[];
+  summary: { total: number; enabled: number };
+  market: {
+    listings: MobileMarketBundle[];
+    remote: { configured: boolean; url: string; error?: string };
+  };
+};
 export type MobileProject = { id: string; name: string; path?: string; gitBranch?: string };
 export type MobileNotification = { id: string; ticketId?: string; title: string; status: string; summary: string; createdAt: string; unread: boolean };
 export type MobileConversationStatus = 'waiting' | 'working' | 'awaiting_review' | 'completed' | 'failed' | 'cancelled';

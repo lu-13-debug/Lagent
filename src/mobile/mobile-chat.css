@@ -88,3 +88,6 @@
 .mob-sheet-full .mob-sheet-body { padding: 0; background: var(--surface-0); }
 .mob-load-more { align-self: center; border: 1px solid var(--line); background: var(--surface-1); color: var(--text-2); font: inherit; border-radius: 999px; padding: 5px 14px; font-size: 12px; cursor: pointer; }
 .mob-load-more:disabled { opacity: .5; }
+
+/* 长会话：已加载但屏外的轮次跳过布局与绘制；手机按需「加载更早」，DOM 数量有限。 */
+.mob-turn { content-visibility: auto; contain-intrinsic-size: auto 180px; }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Check, ChevronRight, Inbox, ListChecks, MessageSquare, Moon, RefreshCw, Settings2, ShieldCheck, Sun, Unplug } from 'lucide-react';
 import { mobileApi, mobileRequest, MobileApiError } from './mobile-api';
 import { MobileChat } from './MobileChat';
+import { MobileCapabilities } from './MobileCapabilities';
 import { TicketDetail } from './MobileTickets';
 import { statusNames, time } from './display';
 import type { MobileBootstrap, MobileDevice, MobileDetail, MobileEvent, MobileNotification, MobileTicket } from './types';
@@ -313,7 +314,7 @@ function MobileHome({ device, onSignOut }: { device: MobileDevice; onSignOut: ()
         />
           : tab === 'inbox' ? <InboxView attention={attention} tickets={tickets} notifications={notifications} unread={unread} onOpen={setDetailId} onAct={act} onReadAll={markAllNotificationsRead} onOpenNotification={id => { void markNotificationRead(id); setDetailId(id); }} />
             : tab === 'tickets' ? <TicketsView tickets={tickets} plans={bootstrap?.plans || []} loading={loading} onOpen={setDetailId} />
-              : <SettingsView device={device} theme={theme} onTheme={toggle} onSignOut={onSignOut} />}
+              : <SettingsView device={device} theme={theme} onTheme={toggle} onSignOut={onSignOut} token={device.deviceToken} onToast={setNotice} />}
       {tab === 'chat' && error && !bootstrap && <p className="mob-error" role="alert">{error}</p>}
     </main>
 
@@ -373,7 +374,7 @@ function TicketsView({ tickets, plans, loading, onOpen }: { tickets: MobileTicke
   </section>;
 }
 
-function SettingsView({ device, theme, onTheme, onSignOut }: { device: MobileDevice; theme: string; onTheme: () => void; onSignOut: () => void }) {
+function SettingsView({ device, theme, onTheme, onSignOut, token, onToast }: { device: MobileDevice; theme: string; onTheme: () => void; onSignOut: () => void; token: string; onToast: (message: string, error?: boolean) => void }) {
   const [busy, setBusy] = useState(false);
   const revoke = async () => {
     if (busy) return;
@@ -389,6 +390,7 @@ function SettingsView({ device, theme, onTheme, onSignOut }: { device: MobileDev
       <p className="mob-hint">凭证有效期至 {time(device.expiresAt)}</p>
       <button type="button" className="mob-secondary" onClick={onTheme}>{theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}{theme === 'dark' ? '切换到浅色' : '切换到深色'}</button>
     </div>
+    <MobileCapabilities token={token} onToast={onToast} />
     <div className="mob-settings-card">
       <h2>撤销这台设备</h2>
       <p>撤销后手机立即失去访问权限，需在电脑端重新生成配对码。</p>

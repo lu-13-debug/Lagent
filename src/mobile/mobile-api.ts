@@ -1,5 +1,5 @@
 import type {
-  MobileBootstrap, MobileChatSettings, MobileConversation, MobileConversationSummary, MobileDetail,
+  MobileBootstrap, MobileCapabilities, MobileChatSettings, MobileConversation, MobileConversationSummary, MobileDetail,
   MobileEfforts, MobileModelProfile, MobileTicket, MobileTurn
 } from './types';
 
@@ -43,6 +43,11 @@ export const mobileApi = {
   }) => mobileRequest<{ conversation: MobileConversationSummary; turn: MobileTurn; tickets: MobileTicket[] }>(
     `/conversations/${encodeURIComponent(id)}/messages`, token, { method: 'POST', body: JSON.stringify(input) }, 60000
   ),
+  capabilities: (token: string) => mobileRequest<MobileCapabilities>('/capabilities', token),
+  setToolState: (token: string, id: string, enabled: boolean) =>
+    mobileRequest<{ tool: MobileCapabilities['tools'][number] }>(`/tools/${encodeURIComponent(id)}/state`, token, { method: 'POST', body: JSON.stringify({ enabled }) }),
+  installBundle: (token: string, id: string) =>
+    mobileRequest<{ profile: { id: string; name: string } }>(`/market/${encodeURIComponent(id)}/install`, token, { method: 'POST', body: '{}' }, 60000),
   ticket: (token: string, id: string) => mobileRequest<MobileDetail>(`/tickets/${encodeURIComponent(id)}`, token),
   reportText: (token: string, id: string) => mobileRequest<{ text: string; truncated: boolean }>(`/reports/${encodeURIComponent(id)}/text`, token),
   permission: (token: string, ticketId: string, requestId: string, decision: 'allow' | 'deny') =>

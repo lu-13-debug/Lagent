@@ -225,3 +225,23 @@
   .mob-sheet { border-radius: 18px; margin-bottom: 24px; max-height: 86dvh; }
   .mob-sheet-layer { justify-content: center; }
 }
+
+/* 工具注册表与 Agent 市场：设置页里的紧凑列表。 */
+.mob-settings-card h2 { display: flex; align-items: center; gap: 6px; }
+.mob-settings-card h3 { display: flex; align-items: center; gap: 6px; margin: 18px 0 4px; font-size: 14px; font-weight: 500; }
+.mob-cap-list { display: grid; gap: 6px; margin: 8px 0 10px; }
+.mob-cap-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface-0); font-size: 13px;
+}
+.mob-cap-row > div { display: grid; gap: 2px; min-width: 0; }
+.mob-cap-row strong { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; }
+.mob-cap-row span { color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
+.mob-cap-tag {
+  font-style: normal; font-size: 12px; font-weight: 400; color: var(--text-2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0 6px;
+}
+.mob-tiny.is-solid {
+  color: var(--surface-0); background: var(--text-1); border-color: var(--text-1);
+}
