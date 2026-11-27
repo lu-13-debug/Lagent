@@ -4,6 +4,9 @@ import { createWorkEngine } from './engine.js';
 import { createBackupService } from './backup.js';
 import { scanHistoricalUsage } from './session-usage.js';
 import { workEvents } from './effects.js';
+import { createRunEventLog } from './run-events.js';
+import { createApprovalService } from './approvals.js';
+import { createThreadProjection } from './thread-projection.js';
 import { mergeRuns, planToRun, taggedRun } from './run-projection.js';
 import { registerMobileWorkRoutes } from '../mobile-gateway.js';
 import { registerMcpRoutes } from './mcp.js';
@@ -35,14 +38,88 @@ export function projectStateOf(workspace) {
 }
 
 export function registerWork(app,store,executor,{isSessionValid,onConnect,mobileGateway,mobileOwnerId,onMobileEventConnect,planner,windowBridge,providerRegistry,workspace,brain,ownerId='local',allowFilesystemBrowser=false,mcpTokenIndex=null}={}) {
-  const events=workEvents({ store });
+  // P0.1：开关打开后双写 run-event，并让 SSE 带上 id/after_seq。默认关闭，便于灰度与回滚。
+  const runEventsOn=(process.env.LAGENT_RUN_EVENTS||'').trim()==='1';
+  const runEvents=runEventsOn?createRunEventLog(store,{ownerId,lookupRun:id=>store.get('work-run',id)}):null;
+  const sseV2=Boolean(runEvents)&&(process.env.LAGENT_SSE_V2||'').trim()!=='0';
+  const events=workEvents({ store, log:sseV2?runEvents:null, replayLimit:500, ownerId:null });
+  const stopRunEvents=runEvents?runEvents.startMaintenance():null;
+  app.locals.runEvents=runEvents;
   let imNotifier=null;
   const publish=event=>{
-    events.publish(event);
-    if(mobileGateway)mobileGateway.publish(mobileOwnerId,event);
+    let recorded=null;
+    if(runEvents){
+      try{recorded=runEvents.record(event);}
+      catch(error){console.error('[run-events] 记录失败',error?.message||error);}
+    }
+    events.publish(sseV2&&recorded?recorded:event);
+    // 手机仍按 work 事件形状做通知；seq 只用于续传，不改变通知判定。
+    if(mobileGateway)mobileGateway.publish(mobileOwnerId,event,sseV2&&recorded?{seq:recorded.seq,eventType:recorded.type,threadId:recorded.threadId}:null);
     if(imNotifier&&(event.type==='ticket'||event.type==='usage-alert'))imNotifier.onEvent(event).catch(()=>{});
+    if(approvals&&event.type==='run')syncRunApproval(event);
   };
-  const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain,outboxEnabled:process.env.LAGENT_WORK_OUTBOX==='1'});
+  // P0.2：审批中心与运行事件共用同一个 publish，审批事件会自动进 SSE 和手机补发。
+  const approvalsOn=(process.env.LAGENT_APPROVALS||'').trim()==='1';
+  let approvals=null;
+  let stopApprovals=null;
+  // 编排器进入 awaiting_approval 时生成 run 级审批；状态继续后取消残余 pending。
+  const syncRunApproval=event=>{
+    const runId=typeof event.runId==='string'?event.runId:'';
+    if(!runId)return;
+    const status=typeof event.payload?.status==='string'?event.payload.status:'';
+    const run=store.get('work-run',runId);
+    if(status==='awaiting_approval'){
+      approvals.request({
+        threadId:(typeof run?.chatId==='string'&&run.chatId)||runId,
+        runId,
+        kind:'run',
+        title:'计划待批准',
+        summary:typeof run?.goal==='string'?run.goal.slice(0,600):'',
+        options:['allow_once','deny'],
+        risk:'medium',
+        input:{goal:run?.goal||'',steps:(run?.steps||[]).map(step=>({index:step.index,role:step.role,executorId:step.executorId}))}
+      });
+    } else if(['running','verifying','repairing','completed','failed','cancelled'].includes(status)){
+      approvals.cancelForRun(runId,'运行已继续');
+    }
+  };
+  if(approvalsOn){
+    approvals=createApprovalService(store,{ownerId,publish:event=>publish(event)});
+    stopApprovals=approvals.startMaintenance();
+    app.locals.approvals=approvals;
+  }
+  /**
+   * 审批决议的执行入口：先落决议，再执行副作用。
+   * 副作用失败（执行器重启/任务已结束）时把审批改回 expired，不假装批准成功。
+   */
+  const decideApproval=async(id,decision,{by='desktop'}={})=>{
+    if(!approvals)throw Object.assign(new Error('审批中心未启用（LAGENT_APPROVALS=1）'),{status:404,code:'APPROVALS_DISABLED'});
+    const settled=approvals.resolve(id,decision,{by});
+    try{
+      if(settled.kind==='run'){
+        const started=await orchestrator();
+        await started.approve(settled.runId,settled.decision==='deny'?'reject':'approve');
+      } else if(settled.requestId&&settled.ticketId&&settled.kind==='tool'){
+        engine.permissionDecision(settled.ticketId,settled.requestId,settled.decision==='deny'?'deny':'allow');
+      } else if(settled.ticketId){
+        engine.action(settled.ticketId,settled.decision==='deny'?'reject':'approve');
+      }
+      return {approval:approvals.detail(id)};
+    }catch(error){
+      approvals.expire(id,error?.message||'审批执行失败');
+      throw error;
+    }
+  };
+  app.locals.decideApproval=decideApproval;
+  const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain,runEvents,approvals,outboxEnabled:process.env.LAGENT_WORK_OUTBOX==='1'});
+  // P0.3：只读 thread 投影，默认 1 秒缓存；开关关闭时路由不存在，旧客户端不受影响。
+  const threadApiOn=(process.env.LAGENT_THREAD_API||'').trim()==='1';
+  const threads=threadApiOn?createThreadProjection({
+    store,
+    runEvents,
+    budgetTokens:engine.policy()?.budgets?.maxTokensPerTicket
+  }):null;
+  if(threads)app.locals.threads=threads;
   // cloud-app 的空闲回收要靠它判断「这个 workspace 里还有没有活」，否则长任务会被当成空闲关掉。
   app.locals.workBusy = () => engine.hasActiveWork();
   // 本机执行节点要在连上来时把动态执行器加进策略白名单，因此需要拿到引擎。
@@ -330,8 +407,16 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     return { run: taggedRun(started.get(req.params.id)) };
   }));
   app.post('/api/work/runs/:id/approve', runRoute(async req => {
-    const started = await orchestrator();
     const decision = req.body?.decision === 'reject' ? 'reject' : 'approve';
+    // P0.2：旧入口同样结束 run 级审批，避免审批收件箱与运行状态不一致。
+    if(approvals){
+      const pending=approvals.list({runId:req.params.id,status:'pending',limit:10}).find(item=>item.kind==='run');
+      if(pending){
+        try{approvals.resolve(pending.id,decision==='reject'?'deny':'allow_once',{by:'desktop'});}
+        catch{/* 已被另一端处理；编排器调用本身是幂等的。 */}
+      }
+    }
+    const started = await orchestrator();
     return { run: await started.approve(req.params.id, decision) };
   }));
   app.post('/api/work/runs/:id/cancel', runRoute(async req => {
@@ -342,7 +427,11 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     const started = await orchestrator();
     return { run: await started.resume(req.params.id) };
   }));
-  app.post('/api/work/tickets/:id/permissions/:requestId',(req,res)=>res.json({ticket:engine.permissionDecision(req.params.id,req.params.requestId,req.body?.decision)}));
+  app.post('/api/work/tickets/:id/permissions/:requestId',(req,res)=>{
+    const result=engine.permissionDecision(req.params.id,req.params.requestId,req.body?.decision);
+    // 旧客户端只认 ticket；新客户端可选读 approval，字段集合只增不减。
+    res.json({ticket:result?.ticket,...(result?.approval?{approval:result.approval}:{})});
+  });
   app.post('/api/work/tickets/:id/actions',(req,res)=>{
     if(req.body?.action==='handoff'){
       const result=engine.handoff(req.params.id,req.body?.input);
@@ -350,6 +439,49 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     }
     return res.json({ticket:engine.action(req.params.id,req.body?.action,req.body?.input)});
   });
+  // P0.2：统一审批接口。列表默认只给 pending；detail 才带脱敏前的 input。
+  app.get('/api/work/approvals',(req,res)=>{
+    if(!approvals)return res.status(404).json({error:'审批中心未启用（LAGENT_APPROVALS=1）',code:'APPROVALS_DISABLED'});
+    const limit=Number(req.query?.limit);
+    const status=typeof req.query?.status==='string'&&req.query.status?req.query.status:'pending';
+    res.json({approvals:approvals.list({
+      status:status==='all'?null:status,
+      threadId:req.query?.threadId,
+      runId:req.query?.runId,
+      ticketId:req.query?.ticketId,
+      limit:Number.isSafeInteger(limit)&&limit>0?limit:100
+    })});
+  });
+  app.get('/api/work/approvals/:id',(req,res)=>{
+    if(!approvals)return res.status(404).json({error:'审批中心未启用（LAGENT_APPROVALS=1）',code:'APPROVALS_DISABLED'});
+    try{res.json({approval:approvals.detail(req.params.id)});}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'审批不存在',code:error?.code});}
+  });
+  app.post('/api/work/approvals/:id/decision',async(req,res)=>{
+    try{
+      res.json(await decideApproval(req.params.id,req.body?.decision,{by:req.body?.by==='im'?'im':'desktop'}));
+    }catch(error){
+      res.status(error?.status||500).json({error:error?.message||'审批处理失败',code:error?.code});
+    }
+  });
+  // P0.3：thread 读投影。threadId 可以是 conversationId / ticketId / runId / approvalId，
+  // 内部统一解析成会话 id，深链刷新与分享拿到的是同一份时间线。
+  const seqParam=value=>{const seq=Number(value);return Number.isSafeInteger(seq)&&seq>0?seq:0;};
+  const limitParam=(value,fallback,max)=>{const limit=Number(value);return Number.isSafeInteger(limit)&&limit>0?Math.min(limit,max):fallback;};
+  if(threads){
+    app.get('/api/work/threads',(req,res)=>{
+      try{res.json({threads:threads.list({limit:limitParam(req.query?.limit,50,200)})});}
+      catch(error){res.status(error?.status||500).json({error:error?.message||'会话投影失败'});}
+    });
+    app.get('/api/work/threads/:id',(req,res)=>{
+      try{res.json({thread:threads.get(req.params.id,{afterSeq:seqParam(req.query?.after_seq),timelineLimit:limitParam(req.query?.limit,500,2000)})});}
+      catch(error){res.status(error?.status||500).json({error:error?.message||'会话投影失败'});}
+    });
+    app.get('/api/work/threads/:id/events',(req,res)=>{
+      try{res.json(threads.listEvents(req.params.id,{afterSeq:seqParam(req.query?.after_seq),limit:limitParam(req.query?.limit,500,2000)}));}
+      catch(error){res.status(error?.status||500).json({error:error?.message||'会话事件读取失败'});}
+    });
+  }
   app.post('/api/work/tickets/:id/verify',async(req,res)=>{
     try{res.json(await engine.verifyTicket(req.params.id));}
     catch(error){res.status(error?.status||500).json({error:error?.message||'验收失败'});}
@@ -427,11 +559,11 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
       res.json(result);
     });
   }
-  if(mobileGateway)registerMobileWorkRoutes(app,mobileGateway,{engine,executors:executor,ownerId:mobileOwnerId,onConnect:onMobileEventConnect});
+  if(mobileGateway)registerMobileWorkRoutes(app,mobileGateway,{engine,executors:executor,ownerId:mobileOwnerId,onConnect:onMobileEventConnect,runEvents:sseV2?runEvents:null,approvals,decideApproval});
   if(mobileGateway){
     const mcpTokens=createMcpTokenService({store,engine,onIssue:mcpTokenIndex?.onIssue,onRevoke:mcpTokenIndex?.onRevoke});
     registerMcpRoutes(app,{engine,gateway:mobileGateway,ownerId:mobileOwnerId,windowBridge,mcpTokens});
   }
   engine.recover();
-  return ()=>{live.close();stopRoutines();stopBackups();engine.close();events.close();enginesByWorkspace.delete(typeof workspace==='string'?workspace:'');};
+  return ()=>{live.close();stopRoutines();stopBackups();stopRunEvents?.();runEvents?.close();stopApprovals?.();approvals?.close();engine.close();events.close();enginesByWorkspace.delete(typeof workspace==='string'?workspace:'');};
 }

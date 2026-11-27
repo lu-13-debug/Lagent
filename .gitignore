@@ -9,6 +9,9 @@ data/
 coverage/
 artifacts/
 release/
+# 本地版本归档：开发版与按版本解包的发布版
+lagent-develop/
+lagent1.*/
 .cache/
 .agents/
 .codex/
@@ -43,3 +46,6 @@ prototype/
 tmp-claude.jsonl
 # 设计稿原始截图（约 79MB），只保留本地，不进入仓库
 docs/ui-schemes/
+# 本机目录约定（开发版启动器与说明），不进入仓库
+/DEVELOP.md
+/start-dev.cmd

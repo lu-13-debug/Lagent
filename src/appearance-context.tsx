@@ -34,7 +34,7 @@ export function AppearanceProvider({ children, userId }: { children: ReactNode; 
     const root = document.documentElement;
     root.dataset.theme = current.resolvedTheme; root.dataset.view = current.view;
     if (current.theme === 'system') delete root.dataset.themeFix; else root.dataset.themeFix = '';
-    document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute('content', current.resolvedTheme === 'dark' ? '#0d1110' : '#f2f4f3');
+    document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute('content', current.resolvedTheme === 'dark' ? '#0b0d0c' : '#f3f1ea');
     root.dataset.appearanceReady = '';
     try { saveAppearance(localStorage, origin, userId, preference); localStorage.setItem('lagent:appearance:boot:v1', JSON.stringify(preference)); } catch { /* 存储不可用时仍可切换。 */ }
     try { window.lagentDesktop?.setTheme?.(current.theme); } catch { /* 旧客户端仍使用页面主题。 */ }

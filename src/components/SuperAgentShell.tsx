@@ -497,6 +497,8 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
     };
     try {
       source = new EventSource('/api/work/events');
+      // 服务端游标超出保留窗口时会发 reset；此时增量已不完整，直接重拉整份快照。
+      source.addEventListener('reset', () => void load(true));
       source.onmessage = event => {
         let skipRefresh = false;
         try {

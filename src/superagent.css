@@ -41,11 +41,12 @@
   --sa-9: 56px;
 
   /* radius — 黑白方案整屏方角，圆只留给头像与状态点 */
-  --sa-r-xs: 0px;
-  --sa-r-sm: 0px;
-  --sa-r-md: 0px;
-  --sa-r-lg: 2px;
-  --sa-r-xl: 2px;
+  /* radius — A 控制室：2/4/6，圆只给状态点与头像 */
+  --sa-r-xs: 2px;
+  --sa-r-sm: 2px;
+  --sa-r-md: 4px;
+  --sa-r-lg: 6px;
+  --sa-r-xl: 6px;
   --sa-r-full: 999px;
 
   /* motion */
@@ -53,72 +54,74 @@
   --sa-fast: 120ms var(--sa-ease);
   --sa-base: 180ms var(--sa-ease);
 
-  /* palette — light：近白纸面 + 纯黑强调，层级靠发丝线与灰阶 */
-  --sa-canvas: #fbfaf8;
+  /* palette — light：A 的结构 + B 的暖纸/陶土色板 */
+  --sa-canvas: #f3f1ea;
   --sa-surface: #ffffff;
-  --sa-surface-2: #f2f1ee;
-  --sa-surface-3: #e7e5e0;
-  --sa-line: #d6d3cc;
-  --sa-line-strong: #a8a49b;
-  --sa-text: #111111;
-  --sa-text-2: #4a4842;
-  --sa-text-3: #5c5952;
-  --sa-accent: #111111;
-  --sa-accent-hover: #333333;
-  /* 黑白方案只有一个主色：墨黑。 */
-  --sa-accent-ink: #111111;
-  --sa-accent-soft: #efefef;
-  --sa-accent-line: #cfcbc2;
+  --sa-surface-2: #f7f5ef;
+  --sa-surface-3: #ece8de;
+  --sa-line: #e3dfd4;
+  --sa-line-strong: #c9c3b5;
+  --sa-text: #1c1a16;
+  --sa-text-2: #5a554b;
+  --sa-text-3: #6b655a;
+  --sa-accent: #a8492b;
+  --sa-accent-hover: #c2653f;
+  /* 白天只有一个主色：陶土。 */
+  --sa-accent-ink: #a8492b;
+  --sa-accent-soft: #f7e9e2;
+  --sa-accent-line: #d9b3a4;
   --sa-on-accent: #ffffff;
 
-  --sa-success: #2f6b4f;
-  --sa-success-soft: #e9efeb;
-  --sa-warning: #7a5518;
-  --sa-warning-soft: #f3ecdf;
-  --sa-danger: #9c332c;
-  --sa-danger-soft: #f5e7e5;
-  --sa-neutral-soft: #efefef;
+  --sa-success: #36704b;
+  --sa-success-soft: #e7f0e9;
+  --sa-warning: #7f5616;
+  --sa-warning-soft: #f6edda;
+  --sa-danger: #a53d33;
+  --sa-danger-soft: #f8e7e4;
+  --sa-on-danger: #ffffff;
+  --sa-neutral-soft: #f7f5ef;
 
-  --sa-shadow-sm: 0 1px 0 rgb(0 0 0 / .03);
-  --sa-shadow-md: 0 10px 30px -22px rgb(0 0 0 / .35);
-  --sa-shadow-lg: 0 24px 60px -32px rgb(0 0 0 / .45);
+  --sa-shadow-sm: 0 1px 2px rgb(30 26 20 / .05);
+  --sa-shadow-md: 0 18px 44px -28px rgb(30 26 20 / .35);
+  --sa-shadow-lg: 0 24px 60px -36px rgb(30 26 20 / .35);
 
-  --sa-sidebar: 238px;
-  --sa-topbar: 48px;
+  --sa-sidebar: 244px;
+  --sa-topbar: 46px;
   --sa-side-edge: 48px;
-  --sa-rail: 308px;
-  --sa-gutter: clamp(20px, 4vw, 44px);
-  --sa-colgap: 44px;
+  --sa-rail: 340px;
+  --sa-gutter: 24px;
+  --sa-colgap: 32px;
   --sa-ring: 0 0 0 3px color-mix(in srgb, var(--sa-accent) 22%, transparent);
 }
 
 html[data-theme="dark"] .sa-shell {
-  --sa-canvas: #101010;
-  --sa-surface: #161616;
-  --sa-surface-2: #1e1e1e;
-  --sa-surface-3: #282828;
-  --sa-line: #2e2e2e;
-  --sa-line-strong: #4a4a4a;
-  --sa-text: #f2f2f2;
-  --sa-text-2: #b8b8b8;
-  --sa-text-3: #9a9a9a;
-  --sa-accent: #f2f2f2;
-  --sa-accent-hover: #ffffff;
-  --sa-accent-ink: #f2f2f2;
-  --sa-accent-soft: #222222;
-  --sa-accent-line: #4a4a4a;
-  --sa-on-accent: #111111;
+  --sa-canvas: #0b0d0c;
+  --sa-surface: #121513;
+  --sa-surface-2: #181c19;
+  --sa-surface-3: #20251f;
+  --sa-line: #2a302b;
+  --sa-line-strong: #414a42;
+  --sa-text: #e8ebe4;
+  --sa-text-2: #a5aca1;
+  --sa-text-3: #8a9287;
+  --sa-accent: #d9a441;
+  --sa-accent-hover: #f0c877;
+  --sa-accent-ink: #d9a441;
+  --sa-accent-soft: #2a2316;
+  --sa-accent-line: #5a4a2a;
+  --sa-on-accent: #141008;
 
-  --sa-success: #86b79e;
-  --sa-success-soft: #1b231f;
-  --sa-warning: #d0a661;
-  --sa-warning-soft: #272118;
-  --sa-danger: #e08a82;
-  --sa-danger-soft: #2a1d1b;
-  --sa-neutral-soft: #222222;
+  --sa-success: #7fae83;
+  --sa-success-soft: #1a241c;
+  --sa-warning: #d9a441;
+  --sa-warning-soft: #2a2316;
+  --sa-danger: #d97b6c;
+  --sa-danger-soft: #2a1a18;
+  --sa-on-danger: #141008;
+  --sa-neutral-soft: #181c19;
 
   --sa-shadow-sm: 0 1px 0 rgb(0 0 0 / .3);
-  --sa-shadow-md: 0 10px 30px -22px rgb(0 0 0 / .8);
+  --sa-shadow-md: 0 24px 60px -36px rgb(0 0 0 / .85);
   --sa-shadow-lg: 0 24px 64px -32px rgb(0 0 0 / .9);
 }
 
@@ -4695,7 +4698,7 @@ html[data-theme="dark"] .sa-newchat kbd {
 .sa-button.sa-danger {
   border-color: transparent;
   background: var(--sa-danger);
-  color: #fff;
+  color: var(--sa-on-danger, #fff);
 }
 
 .sa-button.sa-danger:hover {
@@ -6003,7 +6006,7 @@ html[data-theme="dark"] .sa-brand-mono {
 /* 右侧工作详情 */
 .sa-inspector {
   flex: none;
-  width: 320px;
+  width: var(--sa-rail);
   border-left: 1px solid var(--sa-line);
   background: var(--sa-surface);
   display: flex;
@@ -6757,7 +6760,7 @@ label.sa-team-toggle { cursor: pointer; }
   padding: 0 5px;
   border-radius: var(--sa-r-full);
   background: var(--sa-accent);
-  color: #fff;
+  color: var(--sa-on-accent);
   font-size: var(--sa-fs-xs);
   font-variant-numeric: tabular-nums;
   line-height: 18px;
@@ -8016,7 +8019,7 @@ label.sa-team-toggle { cursor: pointer; }
 /* —— 骨架 —— */
 .sa-shell {
   display: grid;
-  grid-template-columns: var(--sa-side-edge) var(--sa-sidebar) minmax(0, 1fr) 304px;
+  grid-template-columns: var(--sa-side-edge) var(--sa-sidebar) minmax(0, 1fr) var(--sa-rail);
   grid-template-rows: minmax(0, 1fr) 26px;
   grid-template-areas:
     "sidebar sidebar main inspector"
@@ -8027,7 +8030,7 @@ label.sa-team-toggle { cursor: pointer; }
 }
 
 .sa-shell.sa-inspector-open {
-  grid-template-columns: var(--sa-side-edge) var(--sa-sidebar) minmax(0, 1fr) 304px;
+  grid-template-columns: var(--sa-side-edge) var(--sa-sidebar) minmax(0, 1fr) var(--sa-rail);
 }
 
 .sa-shell:not(.sa-inspector-open) {
@@ -8171,7 +8174,7 @@ label.sa-team-toggle { cursor: pointer; }
   left: calc(100% + 6px);
   right: auto;
   min-width: 148px;
-  border-radius: 0;
+  border-radius: var(--sa-r-md);
   box-shadow: var(--sa-shadow-md);
 }
 
@@ -8245,7 +8248,7 @@ label.sa-team-toggle { cursor: pointer; }
   flex: none;
   height: 32px;
   margin: 2px 0 4px;
-  border-radius: 0;
+  border-radius: var(--sa-r-sm);
   background: var(--sa-accent);
   color: var(--sa-on-accent);
   font-size: 13px;
@@ -8292,7 +8295,7 @@ label.sa-team-toggle { cursor: pointer; }
 
 /* 折叠后只留图标轨 */
 .sa-shell.sa-rail-collapsed {
-  grid-template-columns: var(--sa-side-edge) 0 minmax(0, 1fr) 304px;
+  grid-template-columns: var(--sa-side-edge) 0 minmax(0, 1fr) var(--sa-rail);
 }
 
 .sa-shell.sa-rail-collapsed:not(.sa-inspector-open) {
@@ -8826,23 +8829,29 @@ label.sa-team-toggle { cursor: pointer; }
   white-space: nowrap;
 }
 
-/* —— 黑白组件细节 —— */
+/* —— 控制室组件细节：2/4/6 圆角，不再一刀切直角 —— */
 .sa-shell .sa-button,
 .sa-shell .sa-icon,
 .sa-shell .sa-pick,
 .sa-shell .sa-agent-pick,
-.sa-shell .sa-chip,
 .sa-shell .sa-compose-modes button,
+.sa-shell .sa-status,
+.sa-shell input,
+.sa-shell select,
+.sa-shell textarea {
+  border-radius: var(--sa-r-sm);
+}
+
+.sa-shell .sa-chip {
+  border-radius: var(--sa-r-full);
+}
+
 .sa-shell .sa-card,
 .sa-shell .sa-card2,
 .sa-shell .sa-attention,
 .sa-shell .sa-composer,
-.sa-shell .sa-status,
-.sa-shell .sa-starter,
-.sa-shell input,
-.sa-shell select,
-.sa-shell textarea {
-  border-radius: 0;
+.sa-shell .sa-starter {
+  border-radius: var(--sa-r-md);
 }
 
 .sa-status {
@@ -8954,7 +8963,7 @@ label.sa-team-toggle { cursor: pointer; }
 
 .sa-modal,
 .sa-shell .modal {
-  border-radius: 0;
+  border-radius: var(--sa-r-lg);
 }
 
 /* —— 响应式 —— */

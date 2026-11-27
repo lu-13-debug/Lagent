@@ -6,6 +6,7 @@ export type MobileTicket = {
   executor?: string; createdAt?: string; updatedAt?: string; attention?: MobileAttention;
   parentTicketId?: string | null; handoffDepth?: number; handoffSummary?: string; handoffChildId?: string | null;
   planId?: string | null; planStep?: number | null; planTotal?: number | null;
+  approvalId?: string | null;
 };
 export type MobileReport = { id: string; ticketId?: string; assignmentId?: string; kind?: string; summary?: string; text?: string; truncated?: boolean; createdAt?: string };
 export type MobileActivityStep = { kind: 'thought' | 'tool' | 'observation' | 'error' | 'permission'; text?: string; detail?: string; at?: string; requestId?: string; decided?: boolean };
@@ -48,6 +49,8 @@ export type MobileLagent = { name: string; executorId: string; ready: boolean; c
 export type MobileBootstrap = {
   tickets: MobileTicket[];
   attention: { ticketId: string; title?: string; question?: string; createdAt?: string; options?: MobileOption[] }[];
+  /** P0.2：统一审批收件箱（不含原始输入）。 */
+  approvals?: MobileApproval[];
   agents: MobileAgent[];
   projects?: MobileProject[];
   conversations?: MobileConversationSummary[];
@@ -57,7 +60,18 @@ export type MobileBootstrap = {
   plans?: { id: string; goal: string; status: string; currentStep: number; totalSteps: number; updatedAt?: string }[];
 };
 export type MobileModelProfile = { id: string; name: string; model: string; available: boolean; efforts: string[] };
+/** P0.2 审批：手机只拿决定所需字段，原始输入与结构化路径不下发。 */
+export type MobileApproval = {
+  id: string; threadId?: string; ticketId?: string; runId?: string;
+  kind: 'ticket' | 'run' | 'tool' | 'command' | 'write' | 'network' | 'secret' | 'access' | string;
+  title: string; summary: string;
+  options: ('allow_once' | 'allow_session' | 'allow_always' | 'deny' | string)[];
+  risk: 'low' | 'medium' | 'high';
+  status: 'pending' | 'resolved' | 'expired' | 'cancelled';
+  decision?: 'allow_once' | 'deny'; decidedBy?: string;
+  createdAt?: string; expiresAt?: number; resolvedAt?: string;
+};
 export type MobileChatSettings = { profileId?: string; effort?: string };
 export type MobileEfforts = Record<string, string>;
-export type MobileEvent = { type: string; ticketId: string | null; payload: { status?: string; reportId?: string; activity?: MobileActivityStep[] } };
+export type MobileEvent = { type: string; ticketId: string | null; payload: { status?: string; reportId?: string; approvalId?: string; activity?: MobileActivityStep[] }; seq?: number; eventType?: string };
 export type MobileTicketState = { ticket: MobileTicket; activity: MobileThinkingStep[]; reports: MobileReport[] };

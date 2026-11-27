@@ -1,4 +1,12 @@
-export function workEvents({ store = null, heartbeatMs = 15000 } = {}) {
+import { createRunEventStream } from './sse-v2.js';
+
+// 有 run-event 日志时走 v2（id + after_seq 补发）；没有时保持旧的按时间戳补发。
+export function workEvents({ store = null, log = null, heartbeatMs = 15000, replayLimit = 500, retryMs = 3000, ownerId = null } = {}) {
+  if (log) return createRunEventStream({ log, heartbeatMs, replayLimit, retryMs, ownerId });
+  return legacyWorkEvents({ store, heartbeatMs });
+}
+
+export function legacyWorkEvents({ store = null, heartbeatMs = 15000 } = {}) {
   const clients = new Set();
   return {
     publish(event) {

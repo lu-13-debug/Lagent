@@ -31,7 +31,7 @@ function useTheme() {
     document.documentElement.dataset.theme = next;
     document.documentElement.dataset.themeFix = '';
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', next === 'dark' ? '#0d1110' : '#f2f4f3');
+    if (meta) meta.setAttribute('content', next === 'dark' ? '#0b0d0c' : '#f3f1ea');
     try { localStorage.setItem(BOOT_APPEARANCE_KEY, JSON.stringify({ theme: next, view: 'concise' })); } catch { /* 忽略。 */ }
     setTheme(next);
   };
@@ -46,11 +46,14 @@ function useServerEvents(token: string, onEvent: (event: MobileEvent | null) => 
   useEffect(() => {
     let stopped = false;
     const controller = new AbortController();
+    // 断线重连带 after_seq：服务端按 run-event 序号补发；游标过期会收到 reset。
+    const lastSeq = { current: 0 };
     const run = async () => {
       let delay = 1000;
       while (!stopped) {
         try {
-          const response = await fetch('/api/mobile/events', { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal, cache: 'no-store' });
+          const suffix = lastSeq.current > 0 ? `?after_seq=${lastSeq.current}` : '';
+          const response = await fetch(`/api/mobile/events${suffix}`, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal, cache: 'no-store' });
           if (response.status === 401) { unauthorized.current(); return; }
           if (!response.ok || !response.body) throw new Error('events unavailable');
           setOnline(true); delay = 1000;
@@ -64,10 +67,18 @@ function useServerEvents(token: string, onEvent: (event: MobileEvent | null) => 
             let split = buffer.indexOf('\n\n');
             while (split >= 0) {
               const chunk = buffer.slice(0, split); buffer = buffer.slice(split + 2);
+              const eventName = chunk.split('\n').find(line => line.startsWith('event:'))?.slice(6).trim();
               const data = chunk.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
-              if (data) {
+              if (eventName === 'reset') {
+                // 服务端已裁掉游标之前的日志；记下最新序号，重连时从 reset 之后继续补发。
+                let latestSeq = 0;
+                try { latestSeq = Number(JSON.parse(data)?.latestSeq) || 0; } catch { /* 保留 0，下次全量重拉。 */ }
+                lastSeq.current = Number.isSafeInteger(latestSeq) && latestSeq > 0 ? latestSeq : 0;
+                handler.current({ type: 'reset', ticketId: null, payload: {} });
+              } else if (data) {
                 let parsed: MobileEvent | null = null;
                 try { parsed = JSON.parse(data) as MobileEvent; } catch { /* 通知与心跳不是 Work 事件。 */ }
+                if (parsed && Number.isSafeInteger(parsed.seq)) lastSeq.current = parsed.seq as number;
                 handler.current(parsed);
               }
               split = buffer.indexOf('\n\n');
@@ -165,7 +176,8 @@ function MobileHome({ device, onSignOut }: { device: MobileDevice; onSignOut: ()
   const onEvent = useCallback((event: MobileEvent | null) => {
     if (!event) return;
     setLastEvent(event);
-    if (event.type === 'ticket' || event.type === 'report') {
+    if (event.type === 'reset') { reload(); return; }
+    if (event.type === 'ticket' || event.type === 'report' || event.type === 'approval') {
       if (reloadTimer.current !== null) return;
       reloadTimer.current = window.setTimeout(() => { reloadTimer.current = null; reload(); }, 1500);
     }

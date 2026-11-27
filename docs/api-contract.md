@@ -300,6 +300,29 @@ outbox 默认关闭；`LAGENT_WORK_OUTBOX=1` 时启用，工单启动先入队�
 - `GET /api/work/usage?projectId=&executorId=&from=&to=&days=30|all` → `{range,totals,byRole,coordination,execution,budget,byExecutor,byDay,byTicket}`。每行包含 `{calls,tokensIn,tokensOut,totalTokens,durationMs,costEstimate,role}`；`role` 为 `execution|coordination`，`coordination.share` 是协调 token 占比。`costEstimate` 只在执行器/供应商返回金额时非零，不是账单。`budget` 含 `maxTokensPerTicket`、`warningRatio:0.8` 与 `warnings:[{ticketId,used,ratio}]`；`byTicket` 行在配置预算后附带 `ratio/warning`。
 - Token 硬闸：`policy.budgets.maxTokensPerTicket` 按工单累计，执行前检查，超限返回 failed 并在摘要写明「Token 预算已用尽（已用 X / 上限 Y）」；`maxCallsPerTicket` 与 `maxRuntimeMs` 保持原行为。
 - SSE `/api/work/events` 支持标准 `Last-Event-ID` 请求头：断线重连时按事件 `createdAt` 补发其后的 `work-event`（最多 200 条），事件体包含 `{type,ticketId,payload,createdAt}`。
+- SSE v2（`LAGENT_RUN_EVENTS=1` 且 `LAGENT_SSE_V2≠0`）：帧带 `id: <seq>`，支持 `?after_seq=<seq>`；优先按 `seq` 从 `run-event` 补发（桌面 500 条、手机 200 条）。事件体在旧字段基础上增加 `seq/threadId/eventType`，`type` 保持 `ticket|activity|report|...` 以兼容旧客户端。游标早于保留窗口、缺口超过上限或游标超前时，先发 `event: reset`（`{reason,oldestSeq,latestSeq}`），客户端应重拉投影而不是拼接。手机用 `GET /api/mobile/events?after_seq=` 续传，只返回该 owner 可见的事件。
+
+### 审批中心（P0.2，`LAGENT_APPROVALS=1`）
+
+`approval` 是一等实体，桌面与手机读同一份待办；旧的 `ticket.attention` 仍继续写，旧 UI 不会失效。
+
+- `GET /api/work/approvals?status=pending|all&threadId=&kind=&limit=` → `{approvals:[...]}`。默认只返回 `pending`；`status=all` 时不过滤。单条包含 `{id,kind,title,summary,status,options,risk,threadId,ticketId,runId,requestId,createdAt,expiresAt,decidedBy,decidedAt}`；`input` 只在详情里返回，列表默认剥离。
+- `GET /api/work/approvals/:id` → `{approval}`，包含 `input` 与决议信息。不存在返回 404 `APPROVAL_NOT_FOUND`。
+- `POST /api/work/approvals/:id/decision` `{decision:'allow_once'|'deny',by?}` → `{approval}`。P0 只开放这两个选项；`allow_session` / `allow_always` 固定返回 409 `GRANT_NOT_ENABLED`，不会假装已授权。重复决议、已过期或已取消返回 409。
+- 生命周期：先落决议再执行副作用；执行器已重启、任务已结束等导致副作用失败时改标 `expired` 并写原因，不保留假批准。执行器交互授权 5 分钟过期，工单/运行审批 24 小时过期；启动与定时任务会清理残留。
+- 生成时机：非自动工单命令、建议转工单、handoff、运行级 `awaiting_approval`、执行器权限请求、需要访问确认的 `awaiting_review`。同一 `threadId + fingerprint + requestId/ticketId` 去重 pending。
+- 兼容入口：`/api/work/runs/:id/approve`、`/api/work/tickets/:id/permissions/:requestId`、`/api/work/tickets/:id/actions` 保留，内部转调审批服务；旧响应形状不变，额外带 `approval` 时可选读取。
+- 手机：`GET /api/mobile/approvals` 与 `POST /api/mobile/approvals/:id/decision`，字段与桌面一致但剥离 `input/scope/requestId`；bootstrap 的 `approvals` 同样脱敏。
+
+### thread 投影（P0.3，`LAGENT_THREAD_API=1`）
+
+只读聚合，不新建表；按请求拼装 conversation / work-ticket / work-run / approval / run-event / work-report / work-usage，带 1 秒内存缓存。
+
+- `GET /api/work/threads?limit=` → `{threads:[{id,title,status,projectId?,conversationId?,updatedAt,counts}]}`，按更新时间倒序。
+- `GET /api/work/threads/:id?after_seq=&limit=` → `{thread}`。`thread = {id,title,status,projectId?,conversationId?,runs,tickets,approvals,timeline,inspector,cursor}`；`cursor.lastSeq` 用于下次续传。`after_seq` 存在时绕过缓存，只返回该游标之后的事件。
+- `GET /api/work/threads/:id/events?after_seq=&limit=` → 分页事件（非 SSE，便于回放与测试）；没有 `run-event` 时回退到 `work-event`。
+- `:id` 接受 `conversationId` / `ticketId` / `runId` / `approvalId` / 项目对话 id / 裸 threadId，内部统一解析；无法解析返回 404。
+- `timeline` 行 `{seq,at,kind,...}` 的 `kind` 为 `text|thinking|tool|command|approval|plan|artifact|subagent|fold|error`；`inspector` 返回预算、执行器、产物与验收摘要。状态由待审批 > 运行中 > 排队 > 已完成/失败推导，空会话回退 conversation.status。
 
 ### 任务契约与自动验收
 

@@ -77,6 +77,77 @@ export interface WorkTicket {
   handoff?: WorkHandoff | null;
   /** 详情接口在长时间无心跳时返回；列表投影不带。 */
   stalled?: boolean;
+  /** P0.2：该工单当前挂着的审批 id，用于从工单深链到审批中心。 */
+  approvalId?: string | null;
+}
+/** P0.2 审批：等待确认不再只存在于工单 attention，而是一条独立实体。 */
+export interface WorkApproval {
+  id: string;
+  threadId: string;
+  runId?: string;
+  ticketId?: string;
+  requestId?: string;
+  kind: 'ticket' | 'run' | 'tool' | 'command' | 'write' | 'network' | 'secret' | 'access' | string;
+  executor?: string;
+  title: string;
+  summary: string;
+  options: ('allow_once' | 'allow_session' | 'allow_always' | 'deny' | string)[];
+  risk: 'low' | 'medium' | 'high';
+  scope?: { threadId?: string; tool?: string; path?: string; host?: string };
+  fingerprint?: string;
+  status: 'pending' | 'resolved' | 'expired' | 'cancelled';
+  decision?: 'allow_once' | 'deny';
+  decidedBy?: string;
+  resolutionNote?: string;
+  createdAt: string;
+  expiresAt: number;
+  resolvedAt?: string;
+  /** 只有 detail 接口带原始输入；列表与 bootstrap 不带。 */
+  input?: unknown;
+}
+/** P0.3：thread 时间线行。P0 先给读模型，UI 行组件按 kind 分派。 */
+export interface WorkThreadTimelineRow {
+  id: string;
+  kind: 'text' | 'thinking' | 'tool' | 'command' | 'approval' | 'plan' | 'artifact' | 'subagent' | 'fold' | 'error' | string;
+  at?: string | null;
+  title?: string;
+  text?: string;
+  status?: string;
+  ticketId?: string;
+  runId?: string;
+  seq?: number;
+  eventType?: string;
+  approvalId?: string;
+  artifactId?: string;
+}
+export interface WorkThreadTicketSummary {
+  id: string; title: string; status: string; executor?: string; summary: string;
+  createdAt: string | null; updatedAt: string | null;
+  conversationId?: string; turnId?: string; approvalId?: string;
+}
+export interface WorkThreadRunSummary {
+  id: string; goal: string; status: string; chatId?: string; projectId?: string;
+  currentStep?: number; totalSteps: number; doneSteps: number;
+  createdAt: string | null; updatedAt: string | null;
+}
+export interface WorkThreadSummary {
+  id: string; title: string; status: string; conversationId?: string; projectId?: string;
+  ticketCount: number; runCount: number; pendingApprovals: number;
+  cursor: { lastSeq: number; updatedAt: string | null };
+}
+export interface WorkThread {
+  id: string; title: string; status: string; conversationId?: string; projectId?: string;
+  runs: WorkThreadRunSummary[];
+  tickets: WorkThreadTicketSummary[];
+  approvals: WorkApproval[];
+  timeline: WorkThreadTimelineRow[];
+  inspector: {
+    pendingApprovals: WorkApproval[];
+    running: WorkThreadRunSummary[];
+    artifacts: { id: string; ticketId: string; kind: string; summary: string; createdAt: string | null }[];
+    usage: { tokens: number; cost: number; calls: number; budget?: number };
+  };
+  cursor: { lastSeq: number; updatedAt: string | null };
 }
 export interface WorkAgent { id: string; name: string; kind: 'model' | 'claude-code' | 'codex' | 'browser' | 'terminal' | 'window' | string; status: string; capabilities: string[] }
 /** Agent 档案：能力、权限、成本、可靠性与最近使用，用于路由解释。 */
@@ -306,6 +377,8 @@ export interface WorkBootstrap {
   workspace?: string | null;
   /** 内置主控的就绪状态：未配置模型时前端禁用发送，外部 Agent 不能绕过。 */
   lagent?: WorkLagentState;
+  /** P0.2：统一审批收件箱；旧 attention 保留，两者指向同一事实。 */
+  approvals?: WorkApproval[];
 }
 export interface WorkLagentState {
   ready: boolean;

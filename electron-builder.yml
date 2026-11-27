@@ -4,7 +4,8 @@ copyright: Copyright © 2026 Lagent
 asar: true
 npmRebuild: false
 directories:
-  output: release
+  # 安装包统一输出到上层 D:\lagent\release（与解包版归档同级）
+  output: ../release
   buildResources: build
 files:
   - dist/**/*

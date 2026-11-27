@@ -1,5 +1,18 @@
 # 更新记录
 
+## 1.2.4 — 2026-11-27
+
+- 新增 append-only 的 run-event 日志：每次运行事件带自增 `seq` 与时间戳，先落库再广播；桌面与手机都按序号对齐，解决刷新/重连后状态接不上、两端看到的事件顺序不一致的问题。
+- SSE 升级到 v2：事件带 `id`，客户端可用 `after_seq` 或 `Last-Event-ID` 补发；服务端裁剪过游标时返回 `reset` 并给出 `latestSeq`，客户端据此重拉，不再静默丢一段。
+- 新增审批中心：审批请求成为一等对象，带 `allow_once` / `deny` 两个决定、TTL 过期、按指纹去重，先落库再执行；未启用时返回 `409 GRANT_NOT_ENABLED`，旧接口仍兼容。
+- 手机端新增审批收件箱：只下发 id、状态、标题与决定所需字段，原始输入与结构化路径不下发；事件流新增 `approval` 类型，审批事件只透出 id 与状态，客户端据此刷新。
+- 新增 thread 只读投影：把 conversation / ticket / run / approval 聚合成统一线程视图，返回 `cursor.lastSeq`，带 1 秒缓存；新增 `GET /api/work/threads/:id` 与 `/events?after_seq=` 接口。
+- 服务端开关默认关闭，可逐项启用与回滚：`LAGENT_RUN_EVENTS`、`LAGENT_SSE_V2`、`LAGENT_APPROVALS`、`LAGENT_THREAD_API`。
+- 界面落实 A 控制室双主题：夜间石墨底配琥珀强调，白天暖纸底配陶土强调，结构与组件完全一致，只切换 token；统一 2/4/6px 圆角、点阵底纹与 244/340/46 三档宽度，检查器宽度改用 `--sa-rail`（340px），修掉写死 304px 的问题。
+- 首帧主题色跟随明暗切换（`#0b0d0c` / `#f3f1ea`），不再有深色启动闪白。
+- 新增 P0 验收脚本 `npm run p0:acceptance`：覆盖默认关闭、四开关全开、同一数据回滚三种模式，共 17 项断言。
+- 版本号与手机外壳同步到 1.2.4（Android `versionCode 10204`）。
+
 ## 1.2.3 — 2026-11-25
 
 - 手机端 `/m` 改为对话式指挥台：打开即进入对话，可新建/切换/重命名/删除会话，消息流按轮次展示用户提问、各 Agent 思考过程（thought/tool/observation/error/权限确认）与 Lagent 汇总的结论；原「指挥」页移入会话抽屉的「工具指令」。

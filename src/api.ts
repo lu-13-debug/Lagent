@@ -1,5 +1,5 @@
 import type { ModelUsageReport, Bootstrap, PublicReport, ModelCatalog, Runtime, Settings, User } from './types';
-import type { WorkAction, WorkAcceptance, WorkBootstrap, WorkConversation, WorkConversationSummary, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveFrame, WorkLiveSession, WorkMcpServer, WorkMcpToken, WorkPlan, WorkPlanStep, WorkPlugins, WorkPolicy, WorkProfile, WorkProfilesActive, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectFileList, WorkProjectFilePreview, WorkProjectFileSearch, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkReportDetail, WorkReportList, WorkReview, WorkRoomMessage, WorkRosterEntry, WorkRoutine, WorkRun, WorkSkill, WorkSkillCatalogEntry, WorkSkillPreview, WorkSkillScope, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamRoom, WorkTeamTemplate, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
+import type { WorkAction, WorkAcceptance, WorkApproval, WorkBootstrap, WorkConversation, WorkConversationSummary, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveFrame, WorkLiveSession, WorkMcpServer, WorkMcpToken, WorkPlan, WorkPlanStep, WorkPlugins, WorkPolicy, WorkProfile, WorkProfilesActive, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectFileList, WorkProjectFilePreview, WorkProjectFileSearch, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkReportDetail, WorkReportList, WorkReview, WorkRoomMessage, WorkRosterEntry, WorkRoutine, WorkRun, WorkSkill, WorkSkillCatalogEntry, WorkSkillPreview, WorkSkillScope, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamRoom, WorkTeamTemplate, WorkThread, WorkThreadSummary, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
 
 const sessionExpiredListeners = new Set<() => void>();
 let sessionBoundary = 0;
@@ -87,7 +87,23 @@ export const api = {
   workChatPermission: (id: string, permission: '' | 'read' | 'workspace' | 'full') => request<{ chat: WorkProjectChat }>(`/work/chats/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ permission }) }),
   workProjectChatMessage: (id: string, text: string, clientRequestId?: string, options?: { profileId?: string; model?: string; effort?: string; executorId?: string; executorIds?: string[] }) => request<{ ticket: WorkTicket; tickets?: WorkTicket[]; conversationId?: string }>(`/work/chats/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(clientRequestId ? { clientRequestId } : {}), ...(options?.executorIds?.length ? { executorIds: options.executorIds } : options?.executorId ? { executorId: options.executorId } : {}), ...(options?.profileId ? { profileId: options.profileId } : {}), ...(options?.model ? { model: options.model } : {}), ...(options?.effort ? { effort: options.effort } : {}) }) }),
   workAction: (id: string, action: WorkAction, input?: Record<string, unknown>) => request<{ ticket: WorkTicket }>(`/work/tickets/${encodeURIComponent(id)}/actions`, { method: 'POST', body: JSON.stringify({ action, ...(input ? { input } : {}) }) }),
-  workPermissionDecision: (id: string, requestId: string, decision: 'allow' | 'deny') => request<{ ticket: WorkTicket }>(`/work/tickets/${encodeURIComponent(id)}/permissions/${encodeURIComponent(requestId)}`, { method: 'POST', body: JSON.stringify({ decision }) }),
+  workPermissionDecision: (id: string, requestId: string, decision: 'allow' | 'deny') => request<{ ticket: WorkTicket; approval?: WorkApproval }>(`/work/tickets/${encodeURIComponent(id)}/permissions/${encodeURIComponent(requestId)}`, { method: 'POST', body: JSON.stringify({ decision }) }),
+  // P0.2 审批中心：列表默认 pending；detail 才带原始输入。
+  workApprovals: (options?: { status?: 'pending' | 'resolved' | 'expired' | 'cancelled' | 'all'; threadId?: string; ticketId?: string; runId?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (options?.status) params.set('status', options.status);
+    if (options?.threadId) params.set('threadId', options.threadId);
+    if (options?.ticketId) params.set('ticketId', options.ticketId);
+    if (options?.runId) params.set('runId', options.runId);
+    if (options?.limit) params.set('limit', String(options.limit));
+    return request<{ approvals: WorkApproval[] }>(`/work/approvals${params.size ? `?${params}` : ''}`);
+  },
+  workApproval: (id: string) => request<{ approval: WorkApproval }>(`/work/approvals/${encodeURIComponent(id)}`),
+  workApprovalDecision: (id: string, decision: 'allow_once' | 'deny') => request<{ approval: WorkApproval }>(`/work/approvals/${encodeURIComponent(id)}/decision`, { method: 'POST', body: JSON.stringify({ decision }) }),
+  // P0.3 thread 读投影：id 可以是 conversationId / ticketId / runId / approvalId。
+  workThreads: (limit = 50) => request<{ threads: WorkThreadSummary[] }>(`/work/threads?limit=${limit}`),
+  workThread: (id: string, afterSeq = 0) => request<{ thread: WorkThread }>(`/work/threads/${encodeURIComponent(id)}${afterSeq ? `?after_seq=${afterSeq}` : ''}`),
+  workThreadEvents: (id: string, afterSeq = 0, limit = 500) => request<{ threadId: string; afterSeq: number; latestSeq: number; events: (WorkThreadTimelineRow & { seq: number; payload?: unknown; createdAt?: string })[] }>(`/work/threads/${encodeURIComponent(id)}/events?after_seq=${afterSeq}&limit=${limit}`),
   workDeleteTicket: (id: string) => request<{ id: string; removed: number; ids: string[]; planRemoved: boolean }>(`/work/tickets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   // 编排器：一次运行 = 分析 → 拆解 → 批准 → 分发 → 验证（可返工）→ 汇总
   workRuns: (limit = 20, includePlans = false) => request<{ runs: WorkRun[] }>(`/work/runs?limit=${limit}${includePlans ? '&include=plans' : ''}`),

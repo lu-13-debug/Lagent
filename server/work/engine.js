@@ -76,7 +76,14 @@ const normalizeCommandSettings = value => {
 };
 
 export function createWorkEngine(store, executor, publish = () => {}, options = {}) {
-  const db = workStore(store, publish);
+  const db = workStore(store, publish, { runEvents: options.runEvents || null });
+  // P0.2：审批中心按开关注入。没有注入时所有审批逻辑整段跳过，旧路径完全不变。
+  const approvals = options.approvals || null;
+  const requestApproval = input => {
+    if (!approvals) return null;
+    try { return approvals.request(input); }
+    catch { return null; }
+  };
   const executors = executorRegistry(executor);
   const savedPolicy = store.get('work-policy', WORK_POLICY_ID);
   const savedPolicyBody = savedPolicy ? Object.fromEntries(Object.entries(savedPolicy).filter(([key]) => key !== 'id')) : null;
@@ -898,6 +905,24 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     if(!active)return;
     const team=projectTeamTask(task);
     if(team)announceTeam(ticket.id, task, team);
+    // P0.2：执行器在 running 中挂起的文件授权（ACP）也要进审批收件箱；
+    // 这里每轮 sync 都会走，approvals.request 按 fingerprint 去重。
+    if(approvals&&Array.isArray(task.activity)){
+      for(const row of task.activity.filter(item=>item.kind==='permission'&&item.requestId&&!item.decided).slice(-3)){
+        requestApproval({
+          threadId:ticket.conversationId||ticket.id,
+          ticketId:ticket.id,
+          requestId:String(row.requestId).slice(0,120),
+          kind:'tool',
+          executor:activeId,
+          title:ticket.title,
+          summary:String(row.text||'等待授权').slice(0,600),
+          options:['allow_once','deny'],
+          risk:'medium',
+          input:{text:String(row.text||'').slice(0,600),detail:String(row.detail||'').slice(0,600)}
+        });
+      }
+    }
     if(!['working','awaiting_review'].includes(ticket.status))return;
     // 只要执行器还在被轮询到，就记一次心跳；节流避免每次 store 变更都写盘。
     if (assignment && assignment.status === 'working' && ['running', 'awaiting_approval'].includes(task.status)) {
@@ -952,8 +977,27 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       completed:activeId==='window'?(typeof task.report?.summary==='string'&&task.report.summary.trim()?task.report.summary.trim():'窗口指令已发送'):tool?toolSummary:terminal?'终端命令执行完成':activeId==='model'?(typeof task.artifacts?.cli?.summary==='string'&&task.artifacts.cli.summary.trim()?task.artifacts.cli.summary.trim().slice(0,200):'模型 Agent 执行完成'):cli?(typeof task.artifacts?.cli?.summary==='string'&&task.artifacts.cli.summary.trim()?task.artifacts.cli.summary.trim().slice(0,300):typeof task.report?.summary==='string'&&task.report.summary.trim()?task.report.summary.trim().slice(0,300):`${label}执行完成`):'分析报告已生成',
       cancelled:`${label}已停止`
     }[status];
+    // P0.2：工单停在任何等待确认的节点，都对应一条审批；越权访问带 requestId，
+    // 旧按钮仍可走 permissionDecision / action，审批只是同一事实的另一个入口。
+    let approvalId=ticket.approvalId;
+    if(approvals&&status==='awaiting_review'){
+      const access=task.accessRequest;
+      const created=requestApproval({
+        threadId:ticket.conversationId||ticket.id,
+        ticketId:ticket.id,
+        kind:access?'access':'ticket',
+        ...(access?.id?{requestId:String(access.id).slice(0,120)}:{}),
+        executor:activeId,
+        title:ticket.title,
+        summary,
+        options:['allow_once','deny'],
+        risk:'medium',
+        ...(access?{input:{path:String(access.path||'').slice(0,300),mode:access.mode},scope:{path:String(access.path||'').slice(0,300)}}:{})
+      });
+      if(created?.id)approvalId=created.id;
+    }
     const finished=['completed','failed','cancelled'].includes(status);
-    const next={...ticket,status,stage:status==='awaiting_review'?(task.steps?.[task.currentStep]?.id||(terminal||cli||tool?'approval':'plan')):finished?'result':terminal?'terminal':cli?'cli':tool?'tool':'terminal',summary,updatedAt:now(),approvalSnapshot,attention:status==='awaiting_review'?(task.accessRequest?accessReview(task.accessRequest):review(summary)):undefined};
+    const next={...ticket,status,...(approvalId?{approvalId}:{}),stage:status==='awaiting_review'?(task.steps?.[task.currentStep]?.id||(terminal||cli||tool?'approval':'plan')):finished?'result':terminal?'terminal':cli?'cli':tool?'tool':'terminal',summary,updatedAt:now(),approvalSnapshot,attention:status==='awaiting_review'?(task.accessRequest?accessReview(task.accessRequest):review(summary)):undefined};
     const run={...assignment,status,sessionId:task.id,...(status==='working'?{heartbeatAt:now()}:{}),...(finished?{endedAt:now()}: {})};
     const kind={awaiting_review:'waiting',completed:'ready',failed:'failed',cancelled:'dropped'}[status];
     const artifacts={taskId:task.id,...(status==='completed'&&task.report?{report:task.report}:{}),...(terminal&&task.artifacts?.terminal?{terminal:task.artifacts.terminal}:{}),...(cli&&task.artifacts?.cli?{cli:task.artifacts.cli}:{}),...(tool&&task.artifacts?.[activeId]?{[activeId]:task.artifacts[activeId]}:{})};
@@ -2538,7 +2582,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         activeProfile:profiles.active(),
         plans:db.list('plan').filter(plan=>!plan.projectId||Boolean(db.get('project',plan.projectId))).sort((left,right)=>String(right.updatedAt).localeCompare(String(left.updatedAt))).slice(0,20).map(plan=>({id:plan.id,goal:plan.goal,status:plan.status,autoRun:plan.autoRun===true,currentStep:plan.currentStep,totalSteps:plan.steps.length,projectChatId:typeof plan.projectChatId==='string'?plan.projectChatId:null,updatedAt:plan.updatedAt})),
         // 会话列表：侧栏「最近的对话」只认这个，不再按 Agent 拆成多条。
-        conversations:listConversationSummaries(60)
+        conversations:listConversationSummaries(60),
+        // P0.2：统一审批收件箱；旧 attention 字段保留，旧客户端继续可用。
+        ...(approvals?{approvals:approvals.list({status:'pending',limit:100})}:{})
       };
     },
     policy(){return JSON.parse(JSON.stringify(policy));},
@@ -2717,6 +2763,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         for(const row of store.list('work-event').filter(item=>item.ticketId===ticketId))store.delete('work-event',row.id);
         try{store.delete('work-control',ticketId);}catch{/* 控制记录可能已不存在。 */}
         try{store.delete('git-snapshot',ticketId);}catch{/* 快照可能已不存在。 */}
+        approvals?.cancelForTicket(ticketId,'工单已删除');
         db.delete('ticket',ticketId);
       }
       if(planRemoved)db.delete('plan',ticket.planId);
@@ -3218,6 +3265,22 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const agentId=typeof input?.agentId==='string'&&input.agentId.trim()?input.agentId.trim().slice(0,60):activeId;
       const role=['synthesis','step','verify'].includes(input?.role)?input.role:'answer';
       const record={id:randomUUID(),title:(typeof input?.title==='string'&&input.title.trim()?input.title.trim():headline).slice(0,60),status:auto?'queued':'awaiting_review',stage:auto?'launch':'approval',source:'manual',executor:activeId,summary:auto?(activeId==='model'?modelCopy:activeId==='terminal'?'终端命令执行中':cli?'CLI 执行中':'执行中'):confirmCopy,attention:auto?undefined:review(preview.risk==='high'?previewQuestion(active.name,preview):reviewQuestion(activeId,project?((projectChatView?.executorId||project.chat.executorId)==='window'?'window':'write'):undefined)),createdAt:stamp,updatedAt:stamp,command:trigger.text,clientRequestId:trigger.clientRequestId,origin,executorInput,preview,...(verify?{verify}:{}),...(contract?{contract}:{}),...(project?{projectChatId:project.chat.id}:{}),...(conversationId?{conversationId,turnId:turnId||null,agentId,role}:{})};
+      // P0.2：需要人工确认的工单同时生成审批记录；失败不影响工单本身。
+      if(!auto){
+        const approval=requestApproval({
+          threadId:conversationId||record.id,
+          ticketId:record.id,
+          kind:'ticket',
+          executor:activeId,
+          title:record.title,
+          summary:record.summary,
+          options:['allow_once','deny'],
+          risk:preview.risk,
+          input:{command:trigger.text,executor:activeId,preview},
+          ...(project?.project?.path?{scope:{path:project.project.path}}:{})
+        });
+        if(approval?.id)record.approvalId=approval.id;
+      }
       // write() 返回的是 publicTicket（会剥掉 executorInput），直接执行必须用原始记录，否则会写回一份空的执行输入。
       const created=write(record);
       if(project)touchProjectChat(project.chat,{lastTicketId:created.id});
@@ -3277,6 +3340,21 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         projectChatId:project.chat.id,
         ...(typeof body.routineId==='string'&&body.routineId?{routineId:body.routineId.slice(0,100)}:{})
       };
+      if(approvals){
+        const approval=requestApproval({
+          threadId:(typeof project.chat.conversationId==='string'&&project.chat.conversationId)||record.id,
+          ticketId:record.id,
+          kind:'ticket',
+          executor:activeId,
+          title:record.title,
+          summary:question,
+          options:['allow_once','deny'],
+          risk:preview.risk,
+          input:{command:text,executor:activeId,preview,routineId:body.routineId},
+          ...(project.project.path?{scope:{path:project.project.path}}:{})
+        });
+        if(approval?.id)record.approvalId=approval.id;
+      }
       const created=write(record);
       touchProjectChat(project.chat,{lastTicketId:created.id});
       takeGitSnapshot(created.id,project.project.path);
@@ -3643,9 +3721,15 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       const task=active.get?.(assignment.sessionId)||taskFor(ticket.id);
       if(!task)throw workError('执行任务已经结束',409);
       const resolved=active.resolvePermission(task,String(requestId||''),decision);
-      if(!resolved)throw workError('授权请求已过期',409);
+      if(!resolved){
+        // P0.2：底层请求已经失效（执行器重启/超时）时，审批也不能停在 pending 假装可处理。
+        const pending=approvals?.findByRequest({ticketId:ticket.id,requestId});
+        if(pending)approvals.expire(pending.id,'执行器已重启或授权请求已超时');
+        throw workError('授权请求已过期',409);
+      }
+      const approval=approvals?.resolveByRequest({ticketId:ticket.id,requestId,decision:decision==='allow'?'allow_once':'deny',by:'desktop'})||null;
       audit(ticket.id,'permission',ticket.executor,decision,String(requestId||'').slice(0,120));
-      return {ticket:get(ticket.id)};
+      return {ticket:get(ticket.id),...(approval?{approval}:{})};
     },
     detail(id){
       const ticket=get(id);
@@ -3728,7 +3812,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         return input.text.trim().slice(0,100);
       };
       titleFor(source);
-      return db.transaction(transaction=>{
+      const result=db.transaction(transaction=>{
         const storedSource=transaction.get('ticket',sourceId);
         if(!storedSource)throw workError('工单不存在',404);
         const storedControl=transaction.get('control',sourceId);
@@ -3780,6 +3864,21 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         audit(child.id,'handoff',targetId,'created',`来源 ${current.id}`);
         return {created:true,ticket:child};
       });
+      if(result.created&&approvals){
+        const chat=result.ticket.projectChatId?db.get('project-chat',result.ticket.projectChatId):null;
+        requestApproval({
+          threadId:chat?.conversationId||result.ticket.id,
+          ticketId:result.ticket.id,
+          kind:'ticket',
+          executor:targetId,
+          title:result.ticket.title,
+          summary:result.ticket.summary,
+          options:['allow_once','deny'],
+          risk:result.ticket.preview?.risk,
+          input:{command:result.ticket.title,executor:targetId,preview:result.ticket.preview}
+        });
+      }
+      return result;
     },
     action(id,action,input){
       const ticket=privateTicket(id),assignment=latest(id);
@@ -3831,7 +3930,12 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       }
       if(action==='retry'&&ticket.planId)revivePlan(ticket.planId,ticket.planStep);
       if((action==='approve'&&!task)||action==='retry'){
-        try{return start(next,input);}catch(error){
+        try{
+          const result=start(next,input);
+          // 旧入口点了批准：同一工单上的待审批一并结束，避免审批收件箱留下僵尸项。
+          if(action==='approve')approvals?.resolveForTicket(ticket.id,'allow_once','desktop');
+          return result;
+        }catch(error){
           // 400 是调用参数/状态错误，继续抛出让调用方知道错了；其它错误（预算、执行器失败）落盘为 failed。
           if(error?.status===400)throw error;
           const failed={...next,status:'failed',summary:String(error?.message||'重试失败').slice(0,400),updatedAt:now(),attention:review(String(error?.message||'重试失败').slice(0,200))};
@@ -3843,8 +3947,14 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         if(typeof active.approve!=='function')throw workError('该执行器不支持继续审批',409);
         // 执行器返回 false 表示挂起的确认已经失效（服务重启或任务已结束），
         // 这时不能再把工单写成 working，否则会永远卡在那里。
-        if(active.approve(task,input,ticket.approvalSnapshot)===false)throw workError('审批请求已失效，请先停止并重试这个工单',409);
-        return write({...next,status:'working',stage:activeId==='terminal'?'terminal':['cli','model'].includes(active.kind)?'cli':['tool','window'].includes(active.kind)?'tool':'terminal',approvalSnapshot:undefined,attention:undefined,summary:activeId==='terminal'?'终端命令执行中':activeId==='model'?'Lagent 已继续':active.kind==='cli'?'只读 CLI 执行中':['tool','window'].includes(active.kind)?(activeId==='browser'?'浏览器执行中':activeId==='github'?'GitHub 查询中' :`${active.name}执行中`):'已继续'});
+        if(active.approve(task,input,ticket.approvalSnapshot)===false){
+          const pending=approvals?.findByRequest({ticketId:ticket.id,requestId:ticket.approvalSnapshot?.requestId});
+          if(pending)approvals.expire(pending.id,'执行器已重启，审批请求已失效');
+          throw workError('审批请求已失效，请先停止并重试这个工单',409);
+        }
+        const continued=write({...next,status:'working',stage:activeId==='terminal'?'terminal':['cli','model'].includes(active.kind)?'cli':['tool','window'].includes(active.kind)?'tool':'terminal',approvalSnapshot:undefined,attention:undefined,summary:activeId==='terminal'?'终端命令执行中':activeId==='model'?'Lagent 已继续':active.kind==='cli'?'只读 CLI 执行中':['tool','window'].includes(active.kind)?(activeId==='browser'?'浏览器执行中':activeId==='github'?'GitHub 查询中' :`${active.name}执行中`):'已继续'});
+        approvals?.resolveForTicket(ticket.id,'allow_once','desktop');
+        return continued;
       }
       if(action==='stop'){
         if(outboxEnabled)cancelTicketEffects(store,id,{now:Date.now()});
@@ -3867,6 +3977,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           ...(task.artifacts?.[activeId]?{[activeId]:task.artifacts[activeId]}:{})
         }:{ interrupted:true };
         const result=write(stopped,...(run?[['assignment',run],['report',makeReport(stopped,run,'dropped',summary,artifacts)]]:[]));
+        approvals?.cancelForTicket(id,'工单已停止');
         audit(id,'stop',activeId,'cancelled',reason||'用户中断');
         if (stopped.planId && Number.isSafeInteger(stopped.planStep)) advancePlan(stopped.planId);
         return result;
@@ -3875,7 +3986,9 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
         if(task&&typeof active.reject==='function')active.reject(task);
         // 越权访问被拒绝时任务仍在跑：带着「被拒绝」的结论继续，而不是把工单打回等待。
         const denied=Boolean(task?.accessRequest);
-        return write({...next,status:denied?'working':'waiting',attention:undefined,summary:typeof input?.reason==='string'?input.reason.slice(0,400):denied?'已拒绝这次访问':'已退回，等待新指令'},...(assignment&&!denied?[['assignment',{...assignment,status:'waiting'}]]:[]));
+        const rejected=write({...next,status:denied?'working':'waiting',attention:undefined,summary:typeof input?.reason==='string'?input.reason.slice(0,400):denied?'已拒绝这次访问':'已退回，等待新指令'},...(assignment&&!denied?[['assignment',{...assignment,status:'waiting'}]]:[]));
+        approvals?.resolveForTicket(ticket.id,'deny','desktop');
+        return rejected;
       }
       return write({...next,status:'awaiting_review',attention:review(reviewQuestion(activeId))});
     },

@@ -1,6 +1,6 @@
 {
   "name": "lagent",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "private": true,
   "type": "module",
   "main": "desktop/main.cjs",
@@ -16,6 +16,7 @@
     "cloud:dev": "node --watch server/cloud-index.js",
     "test": "node --test server/*.test.js server/eval/*.test.js desktop/*.test.cjs src/*.test.mjs src/mobile/*.test.mjs",
     "lint:arch": "node scripts/check-architecture.mjs",
+    "p0:acceptance": "node scripts/p0-acceptance.mjs",
     "bench:dataset": "node scripts/bench-dataset.mjs",
     "desktop:dev": "npm run build && electron .",
     "desktop:pack": "npm run build && electron-builder --dir --win --x64 --publish never",

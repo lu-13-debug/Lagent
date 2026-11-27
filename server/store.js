@@ -14,7 +14,12 @@ const SCHEMA = `PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
       CREATE UNIQUE INDEX IF NOT EXISTS unique_task_transaction ON transactions(task_id,type) WHERE task_id IS NOT NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS unique_task_request ON entities(json_extract(body,'$.clientRequestId'))
         WHERE kind='task' AND json_extract(body,'$.clientRequestId') IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS task_status ON entities(kind,json_extract(body,'$.status'));`;
+      CREATE INDEX IF NOT EXISTS task_status ON entities(kind,json_extract(body,'$.status'));
+      CREATE TABLE IF NOT EXISTS event_seq (id INTEGER PRIMARY KEY CHECK(id=1), value INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS run_event_seq ON entities(json_extract(body,'$.seq')) WHERE kind='run-event';
+      CREATE INDEX IF NOT EXISTS run_event_thread ON entities(json_extract(body,'$.threadId'),json_extract(body,'$.seq')) WHERE kind='run-event';
+      CREATE INDEX IF NOT EXISTS run_event_owner ON entities(json_extract(body,'$.ownerId'),json_extract(body,'$.seq')) WHERE kind='run-event';
+      INSERT OR IGNORE INTO event_seq VALUES(1,(SELECT COALESCE(MAX(json_extract(body,'$.seq')),0) FROM entities WHERE kind='run-event'));`;
 
 export function assertId(id) {
   if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(id)) {

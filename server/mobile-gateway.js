@@ -6,6 +6,7 @@ import { tokenHash } from './accounts.js';
 import { projectFileMime } from './work/project-files.js';
 import { clipReportText, reportTextOfReport } from './work/report-text.js';
 import { isEffort } from './work/efforts.js';
+import { parseEventCursor } from './work/sse-v2.js';
 
 export const MOBILE_PAIR_TTL_MS = 5 * 60 * 1000;
 export const MOBILE_DEVICE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
@@ -155,7 +156,9 @@ export function sanitizeMobileTicket(value) {
   const planId = text(source?.planId, 100);
   const planStep = integer(source?.planStep);
   const planTotal = integer(source?.planTotal);
+  const approvalId = text(source?.approvalId, 100);
   if (title !== undefined) ticket.title = title;
+  if (approvalId) ticket.approvalId = approvalId;
   if (summary !== undefined) ticket.summary = summary;
   if (parentTicketId !== undefined) ticket.parentTicketId = parentTicketId;
   if (handoffDepth !== undefined && handoffDepth >= 0 && handoffDepth <= 3) ticket.handoffDepth = handoffDepth;
@@ -268,6 +271,42 @@ export function sanitizeMobileActivity(value) {
   return result;
 }
 
+// P0.2：手机端审批只下发决定所需字段；raw input、路径细节一律不下发。
+export function sanitizeMobileApproval(value) {
+  const source = object(value);
+  if (!source) return null;
+  const id = text(source.id, 100);
+  if (!id) return null;
+  const result = {
+    id,
+    kind: ['ticket', 'run', 'tool', 'command', 'write', 'network', 'secret', 'access'].includes(source.kind) ? source.kind : 'ticket',
+    title: text(source.title, 120) || '等待确认',
+    summary: text(source.summary, 600) || '',
+    options: Array.isArray(source.options)
+      ? source.options.filter(item => ['allow_once', 'allow_session', 'allow_always', 'deny'].includes(item)).slice(0, 4)
+      : ['allow_once', 'deny'],
+    risk: ['low', 'medium', 'high'].includes(source.risk) ? source.risk : 'medium',
+    status: ['pending', 'resolved', 'expired', 'cancelled'].includes(source.status) ? source.status : 'pending'
+  };
+  const threadId = text(source.threadId, 100);
+  if (threadId) result.threadId = threadId;
+  const ticketId = text(source.ticketId, 100);
+  if (ticketId) result.ticketId = ticketId;
+  const runId = text(source.runId, 100);
+  if (runId) result.runId = runId;
+  const createdAt = timestamp(source.createdAt);
+  if (createdAt) result.createdAt = createdAt;
+  const expiresAt = integer(source.expiresAt);
+  if (expiresAt !== undefined) result.expiresAt = expiresAt;
+  const decision = text(source.decision, 40);
+  if (decision && ['allow_once', 'deny'].includes(decision)) result.decision = decision;
+  const decidedBy = text(source.decidedBy, 100);
+  if (decidedBy) result.decidedBy = decidedBy;
+  const resolvedAt = timestamp(source.resolvedAt);
+  if (resolvedAt) result.resolvedAt = resolvedAt;
+  return result;
+}
+
 export function pageMobileTurns(turns, { limit = 30, before = null } = {}) {
   const list = Array.isArray(turns) ? turns : [];
   const size = Math.max(1, Math.min(50, Number(limit) || 30));
@@ -348,6 +387,8 @@ export function sanitizeMobileBootstrap(value, notificationState = {}) {
     capabilities: { work: true },
     tickets,
     attention: tickets.filter(ticket => ticket.attention).map(ticket => ({ ticketId: ticket.id, ...ticket.attention })),
+    // P0.2：统一审批收件箱；旧 attention 保留，旧客户端不受影响。
+    ...(Array.isArray(source.approvals) ? { approvals: source.approvals.slice(0, 100).map(sanitizeMobileApproval).filter(Boolean) } : {}),
     agents: Array.isArray(source.agents) ? source.agents.slice(0, 50).map(item => {
       const agent = pick(item, ['id', 'name', 'kind', 'status']);
       if (Array.isArray(object(item)?.capabilities)) agent.capabilities = item.capabilities.filter(entry => typeof entry === 'string').slice(0, 20).map(entry => entry.slice(0, 80));
@@ -399,10 +440,12 @@ export function sanitizeMobileDetail(value) {
   return result;
 }
 
-export function mobileWorkEvent(event) {
+export function mobileWorkEvent(event, envelope = null) {
   const payload = object(event?.payload) || {};
   const safe = pick(payload, ['status']);
   if (typeof payload.id === 'string' && event?.type === 'report') safe.reportId = payload.id.slice(0, 100);
+  // P0.2：审批事件只透出 id 与状态，客户端据此刷新收件箱，不下发输入内容。
+  if (event?.type === 'approval' && typeof payload.approvalId === 'string') safe.approvalId = payload.approvalId.slice(0, 100);
   // 思考过程走同一条 SSE，只透出白名单字段并限制长度。
   if (Array.isArray(payload.activity)) {
     const activity = payload.activity.slice(-40).map(sanitizeMobileActivity).filter(Boolean);
@@ -411,7 +454,9 @@ export function mobileWorkEvent(event) {
   return {
     type: String(event?.type || 'event').slice(0, 40),
     ticketId: typeof event?.ticketId === 'string' ? event.ticketId.slice(0, 100) : null,
-    payload: safe
+    payload: safe,
+    ...(Number.isSafeInteger(envelope?.seq) ? { seq: envelope.seq } : {}),
+    ...(typeof envelope?.eventType === 'string' ? { eventType: envelope.eventType.slice(0, 60) } : {})
   };
 }
 
@@ -835,13 +880,13 @@ export class MobileGateway {
     return Boolean(row && row.owner_id === client.ownerId && row.token_hash === client.tokenHash && row.revoked_at === null && row.expires_at > current);
   }
 
-  connect(req, res, { ownerId, device, onConnect } = {}) {
+  connect(req, res, { ownerId, device, onConnect, replay } = {}) {
     if (this.closed) throw mobileError('移动网关已关闭', 503);
     const authenticated = device || (req?.mobileAuthenticated === true && req.mobileDevice) || this.authenticateRequest(req, { ownerId });
     if (!authenticated || (ownerId !== undefined && authenticated.ownerId !== ownerId)) throw mobileError('设备认证失败，请重新配对', 401);
     res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     res.flushHeaders?.();
-    const client = { res, deviceId: authenticated.id, ownerId: authenticated.ownerId, tokenHash: authenticated.tokenHash, timer: null };
+    const client = { res, deviceId: authenticated.id, ownerId: authenticated.ownerId, tokenHash: authenticated.tokenHash, timer: null, lastSeq: 0 };
     const cleanup = () => {
       if (client.timer) clearInterval(client.timer);
       client.timer = null;
@@ -852,6 +897,21 @@ export class MobileGateway {
     this.clients.set(client.deviceId, this.clients.get(client.deviceId) || new Set());
     this.clients.get(client.deviceId).add(client);
     res.write(': connected\n\n');
+    // 手机断线重连：按 after_seq 补发该 owner 可见的事件；游标过期则发 reset 让前端重拉 bootstrap。
+    if (typeof replay === 'function') {
+      try {
+        const plan = replay(parseEventCursor(req)) || {};
+        if (plan.reset) {
+          res.write(`event: reset\ndata: ${JSON.stringify(plan.reset)}\n\n`);
+          if (Number.isSafeInteger(plan.reset.latestSeq)) client.lastSeq = plan.reset.latestSeq;
+        }
+        for (const item of Array.isArray(plan.frames) ? plan.frames : []) {
+          if (!Number.isSafeInteger(item?.seq) || item.seq <= client.lastSeq) continue;
+          res.write(`id: ${item.seq}\ndata: ${JSON.stringify(item.data)}\n\n`);
+          client.lastSeq = item.seq;
+        }
+      } catch { /* 补发失败不阻断实时流；前端仍会按通知/定时刷新。 */ }
+    }
     client.timer = setInterval(() => {
       if (!this.deviceCurrent(client)) { cleanup(); res.end(); return; }
       try { res.write(': heartbeat\n\n'); } catch { cleanup(); res.end(); }
@@ -862,11 +922,16 @@ export class MobileGateway {
     return authenticated;
   }
 
-  publishToOwner(ownerId, data) {
+  publishToOwner(ownerId, data, seq = null) {
     for (const [deviceId, clients] of [...this.clients]) {
       for (const client of [...clients]) {
         if (client.ownerId !== ownerId) continue;
-        try { client.res.write(data); }
+        // 客户端已经通过补发拿到这条事件时不再重复推送。
+        if (Number.isSafeInteger(seq) && client.lastSeq >= seq) continue;
+        try {
+          client.res.write(data);
+          if (Number.isSafeInteger(seq)) client.lastSeq = seq;
+        }
         catch {
           if (client.timer) clearInterval(client.timer);
           clients.delete(client);
@@ -881,11 +946,12 @@ export class MobileGateway {
     this.publishToOwner(ownerId, `event: notification\ndata: ${JSON.stringify(mobileNotificationEvent(notification))}\n\n`);
   }
 
-  publish(ownerId, event) {
+  publish(ownerId, event, envelope = null) {
     let notification = null;
     try { notification = this.recordNotification(ownerId, event); } catch { /* Notification persistence must not break Work delivery. */ }
     this.publishNotification(ownerId, notification);
-    this.publishToOwner(ownerId, `data: ${JSON.stringify(mobileWorkEvent(event))}\n\n`);
+    const seq = Number.isSafeInteger(envelope?.seq) ? envelope.seq : null;
+    this.publishToOwner(ownerId, `data: ${JSON.stringify(mobileWorkEvent(event, envelope))}\n\n`, seq);
   }
 
   closeDeviceConnections(deviceId) {
@@ -931,7 +997,7 @@ export function registerMobilePairingRoutes(app, gateway, { desktopOwner } = {})
   });
 }
 
-export function registerMobileWorkRoutes(app, gateway, { engine, executors, ownerId, onConnect } = {}) {
+export function registerMobileWorkRoutes(app, gateway, { engine, executors, ownerId, onConnect, runEvents = null, approvals = null, decideApproval = null } = {}) {
   if (!gateway || !engine) throw new TypeError('移动 Work 路由需要 gateway 与 engine');
   const auth = req => {
     if (req.mobileAuthenticated === true && req.mobileDevice) {
@@ -977,6 +1043,23 @@ export function registerMobileWorkRoutes(app, gateway, { engine, executors, owne
   app.get('/api/mobile/bootstrap', (req, res) => {
     const device = auth(req);
     res.json(sanitizeMobileBootstrap(engine.bootstrap(), { unread: gateway.unreadNotificationCount(device.ownerId) }));
+  });
+  // P0.2：手机审批收件箱；与桌面共用同一实体，决议后两端同步收到 approval.resolved。
+  app.get('/api/mobile/approvals', (req, res) => {
+    auth(req);
+    if (!approvals) return res.status(404).json({ error: '审批中心未启用', code: 'APPROVALS_DISABLED' });
+    const status = req.query?.status === 'all' ? null : (typeof req.query?.status === 'string' && req.query.status ? req.query.status : 'pending');
+    res.json({ approvals: approvals.list({ status, limit: 100 }).map(sanitizeMobileApproval).filter(Boolean) });
+  });
+  app.post('/api/mobile/approvals/:id/decision', async (req, res) => {
+    const device = auth(req);
+    if (!decideApproval) return res.status(404).json({ error: '审批中心未启用', code: 'APPROVALS_DISABLED' });
+    try {
+      const result = await decideApproval(req.params.id, req.body?.decision, { by: String(device?.id || 'mobile').slice(0, 100) });
+      res.json({ approval: sanitizeMobileApproval(result?.approval) });
+    } catch (error) {
+      res.status(error?.status || 500).json({ error: error?.message || '审批处理失败', code: error?.code });
+    }
   });
   app.get('/api/mobile/models', (req, res) => {
     auth(req);
@@ -1210,8 +1293,28 @@ export function registerMobileWorkRoutes(app, gateway, { engine, executors, owne
     }
     res.json({ ticket: sanitizeMobileTicket(engine.action(req.params.id, req.body?.action, req.body?.input)) });
   });
+  // 手机只补发该 owner 可见的事件；上限 200，控制移动网络流量。
+  const mobileReplay = after => {
+    if (!runEvents) return null;
+    const cursor = Number.isSafeInteger(after) && after > 0 ? after : null;
+    if (cursor === null) return { reset: null, frames: [] };
+    const oldest = runEvents.oldestSeq({ ownerId });
+    const latest = runEvents.latestSeq({ ownerId });
+    const reset = (reason) => ({ reset: { reason, oldestSeq: oldest, latestSeq: latest }, frames: [] });
+    if (latest !== null && cursor > latest) return reset('cursor_ahead');
+    if (oldest !== null && cursor < oldest - 1) return reset('retention');
+    if (latest !== null && latest - cursor > 200) return reset('gap');
+    const frames = runEvents.listAfter(cursor, 200, { ownerId }).map(row => ({
+      seq: row.seq,
+      data: mobileWorkEvent(
+        { type: row.workType || row.type, ticketId: row.ticketId, payload: row.payload },
+        { seq: row.seq, eventType: row.type }
+      )
+    }));
+    return { reset: null, frames };
+  };
   app.get('/api/mobile/events', (req, res) => {
     const device = auth(req);
-    gateway.connect(req, res, { ownerId, device, onConnect });
+    gateway.connect(req, res, { ownerId, device, onConnect, replay: runEvents ? mobileReplay : null });
   });
 }

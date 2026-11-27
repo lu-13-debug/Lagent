@@ -267,7 +267,9 @@ test('Work默认关闭，开启后契约路由与 SSE 可用', async t => {
     if (state.ticket.status === 'awaiting_review') approve();
   }
   assert.equal(read().ticket.status, 'completed');
-  const messages = chunks.filter(chunk => chunk.startsWith('data: ')).map(chunk => JSON.parse(chunk.slice(6)));
+  const messages = chunks
+    .filter(chunk => chunk.split('\n').some(line => line.startsWith('data: ')))
+    .map(chunk => JSON.parse(chunk.split('\n').find(line => line.startsWith('data: ')).slice(6)));
   assert.deepEqual(new Set(messages.map(message => message.type)), new Set(['ticket', 'assignment', 'report']));
 });
 

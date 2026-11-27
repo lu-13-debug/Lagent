@@ -29,7 +29,7 @@ export function appendWorkEvent(store, type, payload) {
   return event;
 }
 
-export function workStore(store, publish) {
+export function workStore(store, publish, { runEvents = null } = {}) {
   const api = {
     get:(kind,id)=>store.get(`work-${kind}`,id),
     list:kind=>store.list(`work-${kind}`),
@@ -51,6 +51,8 @@ export function workStore(store, publish) {
       const result = store.atomic(() => {
         const outcome = fn(transaction);
         pruneWorkEvents(store);
+        // 与工单状态同一事务写 run-event：工单提交了，事件就不会丢。
+        if (runEvents && events.length) runEvents.recordMany(events);
         return outcome;
       });
       events.forEach(publish);
