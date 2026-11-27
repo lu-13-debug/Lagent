@@ -84,8 +84,6 @@ export function ModelHubSettings({ onWorkflowChanged, compact = false }: { onWor
   </section>;
 }
 
-export function StageWorkflowSettings({ onChanged }: { onChanged?: () => void | Promise<void> }) { return <ModelHubSettings compact onWorkflowChanged={onChanged} />; }
-
 export function WorkflowSettings({ workflow, profiles, skills, onSave }: { workflow: WorkflowConfig; profiles: HubModelProfile[]; skills: WorkflowSkill[]; onSave: (workflow: WorkflowConfig) => Promise<void> }) {
   const [draft, setDraft] = useState(() => completeWorkflow(workflow, skills));
   const [busy, setBusy] = useState(false);

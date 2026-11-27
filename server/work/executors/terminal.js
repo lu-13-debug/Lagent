@@ -77,11 +77,6 @@ export function validateTerminalInput(input) {
   return normalized;
 }
 
-export const terminalCommandText = input => {
-  const command = validateTerminalInput(input);
-  return [command.program, ...command.args].join(' ');
-};
-
 function sanitizedPath(value, cwd) {
   const fallback = path.dirname(process.execPath);
   const entries = String(value || '').split(path.delimiter).filter(Boolean).filter(entry => {

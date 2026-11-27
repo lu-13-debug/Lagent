@@ -59,7 +59,3 @@ export function resolveWorkbuddyExe(env = process.env) {
   cached = { env, path: resolved };
   return resolved;
 }
-
-export function resetWorkbuddyExeCache() {
-  cached = null;
-}

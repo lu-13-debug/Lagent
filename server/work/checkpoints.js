@@ -330,5 +330,3 @@ export function createCheckpointService(store, {
 
   return { capture, list, get, preview, restore, restores, prune, remove, root: () => root };
 }
-
-export const CHECKPOINT_LIMITS = { MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES };

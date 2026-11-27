@@ -73,12 +73,6 @@ export const AgentBundleBody = z.object({
   skills: list(20).optional().default([])
 });
 
-export const MarketQuery = z.object({
-  source: z.enum(['local', 'remote', 'all']).optional().default('all')
-});
-
-export const RemotePublishBody = AgentBundleBody;
-
 export const ToolRegistryBody = z.object({
   enabled: z.boolean().optional(),
   risk: z.enum(['low', 'medium', 'high']).optional()
@@ -87,12 +81,6 @@ export const ToolRegistryBody = z.object({
 export const ThreadQuery = z.object({
   after_seq: z.coerce.number().int().min(0).optional(),
   limit: z.coerce.number().int().min(1).max(2000).optional()
-});
-
-export const CheckpointQuery = z.object({
-  projectId: identifier.optional(),
-  threadId: identifier.optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional()
 });
 
 /**

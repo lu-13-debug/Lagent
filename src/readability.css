@@ -48,9 +48,6 @@
   .saved-key {
     font-size: var(--text-xs);
   }
-  .modal-footer .subtle-label {
-    font-size: var(--text-xs);
-  }
   .report-list-actions .button {
     font-size: var(--text-base);
   }
@@ -73,9 +70,6 @@
     color: var(--text-1);
   }
   .skill-version,.eyebrow,.nav-label,.agent-status,.agent-mini-label,.step-title>span,.tabs button {
-    color: var(--muted);
-  }
-  .timeline-step.pending .step-title,.timeline-step.pending .step-description {
     color: var(--muted);
   }
   .status-chip {
@@ -102,9 +96,6 @@
   .model-choice .text-button {
     color: var(--text-2);
   }
-  .mode-option.selected {
-    border-color: var(--line-strong);
-  }
   .form-success {
     color: var(--text-2);
   }
@@ -124,9 +115,6 @@
   }
 }
 @media screen and (max-width:600px) {
-  .page-heading .eyebrow {
-    font-size: var(--text-xs);
-  }
   .chart-controls select,.segmented.small button {
     font-size: var(--text-base);
   }
@@ -155,8 +143,6 @@
   .button { min-height: 36px; height: auto; padding-top: 8px; padding-bottom: 8px; }
   .button > svg, .text-button > svg { flex-shrink: 0; }
   .button:disabled, .text-button:disabled { cursor: not-allowed; }
-  .metric-change.up { color: var(--accent); }
-  .metric-change.down { color: var(--warning); }
   .card-description, .finding p, .report-summary, .report-finding p, .methodology, .recommendations { line-height: var(--leading-body); }
   .modal-body { min-height: 0; }
   .modal-footer { flex-wrap: wrap; row-gap: 12px; }
@@ -164,7 +150,5 @@
   .inline-empty, .loading-row, .app-loading p { font-size: var(--text-base); line-height: var(--leading-body); }
 }
 @media screen and (max-width: 600px) {
-  .page-heading .eyebrow { font-size: var(--text-xs); line-height: 1.7; letter-spacing: 1px; }
   .report-ready .text-button { margin-left: 0; }
-  .modal-footer .analysis-price { max-width: 100%; }
 }

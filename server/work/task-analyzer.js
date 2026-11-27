@@ -295,5 +295,3 @@ export function analyzeTask(input) {
     }))
   };
 }
-
-export const taskAnalyzerInternals = { pickCategory, guessScope, overlaps, writeGroups, projectShape };

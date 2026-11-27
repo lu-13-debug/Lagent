@@ -45,7 +45,3 @@ export function classifyCommand(command) {
   }
   return { level: 'write', reasons: ['未识别的命令，按写入处理'], policy };
 }
-
-export function isBlockedCommand(command) {
-  return classifyCommand(command).level === 'blocked';
-}

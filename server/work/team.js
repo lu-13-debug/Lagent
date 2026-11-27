@@ -142,23 +142,3 @@ export function decideTeamProposal(task, nodeId, proposalId, decision) {
   task.artifacts.team = artifact;
   return projectTeamTask(task);
 }
-
-export function mergeTeamDecisions(snapshot, previous) {
-  if (!snapshot || !Array.isArray(snapshot.nodes)) return snapshot;
-  const oldNodes = new Map((previous?.team?.nodes || []).map(node => [node?.id, node]));
-  for (const node of snapshot.nodes) {
-    const old = oldNodes.get(node?.id);
-    if (!old) continue;
-    if (old.status === 'accepted') node.status = 'accepted';
-    if (old.status === 'pending' && Number.isSafeInteger(old.retries) && old.retries > (node.retries || 0)) {
-      node.status = 'pending';
-      node.retries = old.retries;
-    }
-    const decisions = new Map((old.proposals || []).map(proposal => [proposal?.id, proposal]));
-    for (const proposal of node.proposals || []) {
-      const decided = decisions.get(proposal?.id);
-      if (decided && ['accepted', 'rejected'].includes(decided.status)) proposal.status = decided.status;
-    }
-  }
-  return snapshot;
-}

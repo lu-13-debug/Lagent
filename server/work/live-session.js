@@ -4,7 +4,6 @@ import { workError } from './domain.js';
 // 实时观察：只保存最近一帧到内存，1 秒轮询；识别到敏感窗口标题立即暂停采集。
 // 画面不落盘、不写事件表，SSE 断开后也不会补发历史帧。
 export const SENSITIVE_TITLE = /支付|银行|密码|验证码|身份证|信用卡|钱包|助记词|恢复码|wallet|payment|password|passwd|passcode|2fa|otp|one[- ]time|secret|private\s*key/i;
-export const LIVE_STATUSES = Object.freeze(['live', 'paused', 'takeover', 'error']);
 
 const text = (value, label, max) => {
   const result = typeof value === 'string' ? value.trim() : '';

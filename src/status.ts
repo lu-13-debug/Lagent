@@ -16,28 +16,3 @@ export const STATUS_LABELS: Record<string, string> = {
   interrupted: '已停止',
   failed: '失败'
 };
-
-export const RUN_STATUS_LABELS: Record<string, string> = {
-  drafting: '分析中',
-  awaiting_approval: '需要你',
-  running: '执行中',
-  verifying: '执行中',
-  repairing: '执行中',
-  completed: '已完成',
-  failed: '失败',
-  cancelled: '已停止',
-  interrupted: '已停止',
-  paused: '已暂停'
-};
-
-export const RUN_STEP_LABELS: Record<string, string> = {
-  pending: '排队中',
-  waiting: '排队中',
-  running: '执行中',
-  completed: '已完成',
-  failed: '失败',
-  skipped: '已跳过'
-};
-
-// 工单还在推进：这些状态需要轮询，别把它当历史记录。
-export const ACTIVE_TICKET_STATUS = new Set(['queued', 'working', 'awaiting_review', 'waiting', 'pending', 'running']);

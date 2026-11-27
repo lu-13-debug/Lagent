@@ -20,19 +20,6 @@ export const fileSize = (bytes?: number) => {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 };
 
-export const triggerDownload = (url: string, name: string) => {
-  // Android 外壳的下载器从签名 URL 里读不到真实文件名，先通过桥接传过去。
-  const bridge = (window as unknown as { LagentDownload?: { setFileName?: (value: string) => void } }).LagentDownload;
-  try { bridge?.setFileName?.(name); } catch { /* 浏览器里没有桥接。 */ }
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = name;
-  anchor.rel = 'noopener';
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-};
-
 export const time = (value?: string) => value
   ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
   : '—';

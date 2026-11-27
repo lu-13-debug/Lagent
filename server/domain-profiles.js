@@ -32,11 +32,8 @@ const baseMethodology = [
 ];
 
 const SUCCESS_PAYMENT = ['success', 'paid', 'completed', 'succeeded', '已支付', '支付成功', '成功', '1'];
-const CANCELLED = ['cancelled', 'canceled', 'cancel', 'refunded', 'refund', '已取消', '取消', '退款', '已退款', '未履约'];
 const ACTIVE_SUBSCRIPTION = ['active', 'paid', 'success', 'succeeded', 'renewed', '续费', '已续费', '生效中', '成功'];
-const TRIAL = ['trial', 'trialing', '试用', '试用中'];
 const WON = ['won', 'closed_won', 'signed', '成交', '赢单', '已赢单', '签约', '已签约'];
-const LOST = ['lost', 'closed_lost', '输单', '失败', '已失败'];
 
 const profile = (input) => Object.freeze({
   enabled: true,
@@ -347,7 +344,3 @@ export const DOMAIN_PROFILES = {
 };
 
 export function getProfile(id = 'game') { return DOMAIN_PROFILES[id] || DOMAIN_PROFILES.game; }
-export function enabledProfiles() { return Object.values(DOMAIN_PROFILES).filter(profile => profile.enabled); }
-export const CANCELLED_STATUSES = new Set(CANCELLED);
-export const TRIAL_STATUSES = new Set(TRIAL);
-export const LOST_STATUSES = new Set(LOST);

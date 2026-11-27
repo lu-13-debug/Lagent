@@ -2,9 +2,7 @@
 // 这一层不碰数据库、网络或进程环境，方便引擎、路由和测试共用同一套判定。
 
 export const LAGENT_EXECUTOR_ID = 'model';
-export const LAGENT_DISPLAY_NAME = 'Lagent';
 export const MAX_COLLABORATORS = 3;
-export const MAX_TURN_AGENTS = MAX_COLLABORATORS + 1;
 export const CONVERSATION_ROLES = Object.freeze(['answer', 'synthesis', 'step', 'coordination', 'verify']);
 
 const AGENT_ID = /^[A-Za-z0-9._:-]{1,60}$/;

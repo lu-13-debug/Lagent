@@ -30,14 +30,6 @@ export function forAgent(items, executorId = '') {
     .map(item => item.text);
 }
 
-/** 只取明确指向该执行器的条目（library-sync 的「按 Agent」分节用）。 */
-export function taggedForAgent(items, executorId = '') {
-  return (Array.isArray(items) ? items : [])
-    .map(splitAgentTag)
-    .filter(item => item.text && item.target === executorId)
-    .map(item => item.text);
-}
-
 const charLength = value => [...String(value)].length;
 
 /** 按字符（而不是 UTF-16 码元）截断，避免把中文或 emoji 切坏。 */

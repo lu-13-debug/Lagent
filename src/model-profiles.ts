@@ -1,10 +1,4 @@
 export interface ModelProfile { baseUrl: string; model: string; provider: string }
-export const providerPresets = [
-  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', protocol: 'Chat Completions · 文本对话' },
-  { name: 'Claude', baseUrl: 'https://api.anthropic.com/v1', protocol: 'Messages · 文本对话' },
-  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', protocol: 'Chat Completions · 文本对话' },
-  { name: 'OpenCode Go', baseUrl: 'https://opencode.ai/inference/go/openai/v1', protocol: 'Chat Completions · 文本对话' },
-];
 export const profileKey = (mode: string, user: string | undefined, origin: string) => `lagent:model-profiles:v1:${mode}:${encodeURIComponent(origin)}:${mode === 'cloud' ? encodeURIComponent(user || 'anonymous') : 'local'}`;
 function clean(value: unknown): ModelProfile | null {
   if (!value || typeof value !== 'object') return null;

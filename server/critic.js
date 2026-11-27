@@ -10,15 +10,6 @@ export const FAILURE_MODES = Object.freeze([
   'incorrect_verification'
 ]);
 
-export const FAILURE_MODE_LABELS = Object.freeze({
-  step_repetition: '步骤重复',
-  missing_clarification: '该澄清不澄清',
-  task_drift: '任务偏航',
-  information_withholding: '隐瞒信息',
-  incomplete_verification: '无或不完整验证',
-  incorrect_verification: '错误验证'
-});
-
 const MODE_BY_CODE = Object.freeze({
   CRITIC_DUPLICATE: 'step_repetition',
   CRITIC_PLAN_BLOCKED: 'missing_clarification',

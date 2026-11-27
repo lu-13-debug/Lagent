@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
-import { Check, CheckCircle2, LoaderCircle, X } from 'lucide-react';
+import { CheckCircle2, LoaderCircle, X } from 'lucide-react';
 
 let scrollLocks = 0;
 let bodyOverflow = '';
@@ -49,14 +49,8 @@ export function Modal({ title, subtitle, children, close, wide = false, dismissi
   </div>;
 }
 export function Spinner({ size = 16 }: { size?: number }) { return <LoaderCircle className="spin" size={size} aria-label="处理中" />; }
-export function Empty({ icon, title, description, action }: { icon: ReactNode; title: string; description: string; action?: ReactNode }) {
-  return <div className="empty-state"><span className="empty-icon">{icon}</span><h3>{title}</h3><p>{description}</p>{action}</div>;
-}
 export function Toast({ message, error = false, close }: { message: string; error?: boolean; close: () => void }) {
   return <div className={`toast ${error ? 'toast-error' : ''}`} role={error ? 'alert' : 'status'}>{error ? <X size={17} /> : <CheckCircle2 size={17} />}<span>{message}</span><button onClick={close} aria-label="关闭提示"><X size={15} /></button></div>;
 }
-export function Checked({ value }: { value: boolean }) { return <span className={`custom-check ${value ? 'checked' : ''}`}>{value && <Check size={12} />}</span>; }
 export const number = (value: number | null | undefined, digits = 0) => value == null ? '—' : new Intl.NumberFormat('zh-CN', { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(value);
 export const date = (value: string) => value ? new Date(value).toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit' }) : '—';
-export const dateTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
-export function downloadText(name: string, text: string, type = 'text/csv;charset=utf-8') { const url = URL.createObjectURL(new Blob(['\uFEFF', text], { type })); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }

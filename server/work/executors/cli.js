@@ -546,5 +546,3 @@ export function createCliExecutor({
     }
   };
 }
-
-export const cliBinaryStatus = binary => executableStatus(binary);

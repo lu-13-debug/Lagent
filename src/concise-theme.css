@@ -31,45 +31,23 @@ html[data-view="concise"] {
   --muted: var(--text-2); --faint: var(--text-3); --border: var(--line);
   background: var(--surface-0); color: var(--text-1);
 }
-html[data-view="concise"] :where(body,.app-shell,.app-main,.page-content) { background: var(--surface-0); color: var(--text-1); }
 html[data-view="concise"] .sidebar { background: var(--surface-2); color: var(--text-1); border-color: var(--line); }
-html[data-view="concise"] :where(.topbar,.run-panel,.modal,.modal-footer,.dropdown-menu,.metric-card,.data-table,.dataset-card,.report-list-card,.account-card,.agent-composer,.agent-composer form,.explore-box,.explore-box form) { background: var(--surface-1); color: var(--text-1); border-color: var(--line); }
-html[data-view="concise"] :where(.brand,.project-select strong,.credit-balance,.metric-value,.modal-header h2,.report-summary,.data-table td,.data-table th,.agent-identity strong) { color: var(--text-1); }
-html[data-view="concise"] :where(.project-select,.sidebar-new,.credit-card,.segmented,.run-status-card,.agent-intro,.source-pill,.info-strip,.settings-notice) { background: var(--surface-2); color: var(--text-1); border-color: var(--line); }
-html[data-view="concise"] :where(.nav-item.active,.recent-task.selected,.segmented button.selected,.button.secondary) { background: var(--surface-3); color: var(--text-1); border-color: var(--line-strong); }
-html[data-view="concise"] :where(.nav-item,.recent-task,.sidebar-new,.button.secondary,.icon-button,.text-button,.segmented button):hover { background: var(--surface-3); color: var(--text-1); }
-html[data-view="concise"] :where(.button.primary,.explore-submit) { background: var(--primary-bg); color: var(--primary-text); border-color: var(--primary-bg); }
-html[data-view="concise"] :where(.button.primary,.explore-submit):hover { background: var(--primary-hover); color: var(--primary-text); }
 html[data-view="concise"] :where(input,textarea,select) { background: var(--surface-1); color: var(--text-1); border-color: var(--line-strong); }
 html[data-view="concise"] :where(input,textarea)::placeholder { color: var(--text-3); opacity: 1; }
-html[data-view="concise"] :where(button,input:not([type="checkbox"]):not([type="radio"]),select,.nav-item,.recent-task,.appearance-segment button) { min-height: 36px; }
 html[data-view="concise"] :where(.icon-button,.mobile-panel-close,.mobile-sidebar-close) { min-width: 36px; min-height: 36px; }
 /* 44px 是触控下限，不是桌面行高；鼠标环境保留 36px 密度。 */
 @media (pointer: coarse), (max-width: 760px) {
-  html[data-view="concise"] :where(button,input:not([type="checkbox"]):not([type="radio"]),select,.nav-item,.recent-task,.appearance-segment button) { min-height: 44px; }
   html[data-view="concise"] :where(.icon-button,.mobile-panel-close,.mobile-sidebar-close) { min-width: 44px; min-height: 44px; }
 }
 html[data-view="concise"] :where(button,a,input,textarea,select,summary,[tabindex]):focus-visible { outline: 2px solid var(--text-1); outline-offset: 3px; }
-html[data-view="concise"] :where(.data-table th,.data-table tbody tr:hover) { background: var(--surface-2); }
-html[data-view="concise"] :where(.data-table td,.data-table th) { border-color: var(--line); }
 html[data-view="concise"] ::selection { background: var(--selection); color: var(--text-1); }
 /* Execution details are an explicit drawer on both desktop and mobile. */
-html[data-view="concise"] .concise-workspace-shell .app-main { margin-right: 0; }
-html[data-view="concise"] .concise-workspace-shell .run-panel { transform: translateX(100%); visibility: hidden; pointer-events: none; width: min(380px, 94vw); z-index: 45; box-shadow: var(--shadow-float); transition: transform .2s ease, visibility .2s; }
-html[data-view="concise"] .concise-workspace-shell .run-panel-open { transform: translateX(0); visibility: visible; pointer-events: auto; }
-html[data-view="concise"] .concise-workspace-shell .mobile-panel-close { display: inline-flex; align-items: center; justify-content: center; }
-html[data-view="concise"] .concise-workspace-shell .run-panel-shade { display: block; position: fixed; inset: 0; background: rgb(0 0 0 / .3); z-index: 44; cursor: default; border: 0; }
 @media (max-width: 600px) {
   html[data-view="concise"] .topbar { height: auto; min-height: 62px; }
-  html[data-view="concise"] .page-toolbar { position: static; }
-  html[data-view="concise"] .sidebar:not(.sidebar-open) { visibility: hidden; pointer-events: none; }
-  html[data-view="concise"] .sidebar.sidebar-open { visibility: visible; pointer-events: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   html[data-view="concise"] *, html[data-view="concise"] *::before, html[data-view="concise"] *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }
 @media print {
   html[data-view="concise"][data-theme] { color-scheme: light; --surface-0: #ffffff; --surface-1: #ffffff; --surface-2: #ffffff; --surface-3: #ffffff; --text-1: #222222; --text-2: #444444; --text-3: #555555; --line: #cccccc; --line-strong: #999999; --success: #345d43; --warning: #715016; --danger: #943d35; --accent: #222222; --accent-on: #ffffff; --primary-bg: #222222; --primary-text: #ffffff; background: #ffffff; color: #222222; }
-  html[data-view="concise"] :where(.sidebar,.topbar,.run-panel,.run-panel-shade,.mobile-agent-toggle) { display: none !important; }
-  html[data-view="concise"] .concise-workspace-shell .app-main { margin: 0; }
 }
