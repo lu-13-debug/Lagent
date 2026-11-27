@@ -315,6 +315,25 @@ export interface WorkProject {
   /** worktree：任务在独立工作树里执行，主工作区不动；缺省为直接执行。 */
   isolation?: 'worktree';
 }
+/** 工作流：可重复执行的多步计划模板。 */
+export interface WorkWorkflowStep { executorId: string; text: string; dependsOn?: number[]; }
+export interface WorkWorkflow {
+  id: string; name: string; goal: string; steps: WorkWorkflowStep[];
+  projectId?: string; projectChatId?: string;
+  runs: { planId: string; at: string; autoRun: boolean }[];
+  lastRunAt?: string; createdAt: string; updatedAt: string;
+}
+/** 评测快照：把真实工单汇成一张对比表。 */
+export interface WorkEvalTicket {
+  ticketId: string; title: string; executor: string; status: string;
+  outcome: 'passed' | 'failed' | 'incomplete' | string; verify: 'passed' | 'failed' | 'none' | 'unknown' | string;
+  durationMs: number; calls: number; tokens: number; cost: number; files: number; createdAt: string | null;
+}
+export interface WorkEvalSummary {
+  total: number; passed: number; failed: number; incomplete: number;
+  passRate: number; verified: number; avgDurationMs: number; totalTokens: number; totalCost: number;
+}
+export interface WorkEval { id: string; name: string; at: string; ticketIds: string[]; summary: WorkEvalSummary; tickets: WorkEvalTicket[] }
 /** 隔离执行的独立工作树：改动提交到 lagent/xxxxxxxx 分支，等人工合并。 */
 export interface WorkWorktree {
   id: string; ticketId?: string; threadId?: string; projectPath: string; path: string;

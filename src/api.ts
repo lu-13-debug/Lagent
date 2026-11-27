@@ -1,5 +1,5 @@
 import type { ModelUsageReport, Bootstrap, PublicReport, ModelCatalog, Runtime, Settings, User } from './types';
-import type { WorkAction, WorkAcceptance, WorkApproval, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkCheckpointRestore, WorkWorktree, WorkConversation, WorkConversationSummary, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveFrame, WorkLiveSession, WorkMcpServer, WorkMcpToken, WorkPlan, WorkPlanStep, WorkPlugins, WorkPolicy, WorkProfile, WorkProfilesActive, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectFileList, WorkProjectFilePreview, WorkProjectFileSearch, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkReportDetail, WorkReportList, WorkReview, WorkRoomMessage, WorkRosterEntry, WorkRoutine, WorkRun, WorkSkill, WorkSkillCatalogEntry, WorkSkillPreview, WorkSkillScope, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamRoom, WorkTeamTemplate, WorkThread, WorkThreadSummary, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
+import type { WorkAction, WorkAcceptance, WorkApproval, WorkBootstrap, WorkCheckpoint, WorkCheckpointPreview, WorkCheckpointRestore, WorkWorktree, WorkWorkflow, WorkWorkflowStep, WorkEval, WorkConversation, WorkConversationSummary, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveFrame, WorkLiveSession, WorkMcpServer, WorkMcpToken, WorkPlan, WorkPlanStep, WorkPlugins, WorkPolicy, WorkProfile, WorkProfilesActive, WorkProject, WorkProjectBrief, WorkProjectChange, WorkProjectChat, WorkProjectFileList, WorkProjectFilePreview, WorkProjectFileSearch, WorkProjectMemory, WorkProjectSession, WorkPromptOption, WorkReportDetail, WorkReportList, WorkReview, WorkRoomMessage, WorkRosterEntry, WorkRoutine, WorkRun, WorkSkill, WorkSkillCatalogEntry, WorkSkillPreview, WorkSkillScope, WorkTaskAnalysis, WorkTaskContract, WorkTeam, WorkTeamRoom, WorkTeamTemplate, WorkThread, WorkThreadSummary, WorkThreadTimelineRow, WorkTicket, WorkTicketDetail, WorkTrace, WorkUsageReport, WorkVerifySpec } from './superagent';
 
 const sessionExpiredListeners = new Set<() => void>();
 let sessionBoundary = 0;
@@ -62,6 +62,14 @@ export const api = {
   workProjectBriefMarkdown: (id: string) => request<{ project: WorkProject; brief: WorkProjectBrief; changes: WorkProjectChange[]; markdown: string }>(`/work/projects/${encodeURIComponent(id)}/brief.md`),
   workProjectChanges: (id: string) => request<{ changes: WorkProjectChange[] }>(`/work/projects/${encodeURIComponent(id)}/changes`),
   // 隔离执行：项目开关 + 工作树列表 / 提交 / 清理。服务端默认关闭，未启用时返回 409。
+  // P4：工作流模板与评测快照。
+  workWorkflows: () => request<{ workflows: WorkWorkflow[] }>('/work/workflows'),
+  workSaveWorkflow: (input: { id?: string; name: string; goal: string; steps: WorkWorkflowStep[]; projectId?: string }) => request<{ workflow: WorkWorkflow }>('/work/workflows', { method: 'POST', body: JSON.stringify(input) }),
+  workDeleteWorkflow: (id: string) => request<{ id: string; removed: boolean }>(`/work/workflows/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  workRunWorkflow: (id: string, autoRun = false) => request<{ workflow: WorkWorkflow; plan: unknown }>(`/work/workflows/${encodeURIComponent(id)}/run`, { method: 'POST', body: JSON.stringify({ autoRun }) }),
+  workEvals: (limit = 20) => request<{ evals: WorkEval[] }>(`/work/evals?limit=${limit}`),
+  workEval: (id: string) => request<{ eval: WorkEval }>(`/work/evals/${encodeURIComponent(id)}`),
+  workEvaluate: (input: { ticketIds?: string[]; name?: string; limit?: number } = {}) => request<{ eval: WorkEval }>('/work/evals', { method: 'POST', body: JSON.stringify(input) }),
   workSetIsolation: (id: string, mode: 'direct' | 'worktree') => request<{ project: WorkProject }>(`/work/projects/${encodeURIComponent(id)}/isolation`, { method: 'POST', body: JSON.stringify({ mode }) }),
   workProjectWorktrees: (id: string, status = 'active') => request<{ worktrees: WorkWorktree[] }>(`/work/projects/${encodeURIComponent(id)}/worktrees?status=${encodeURIComponent(status)}`),
   workWorktree: (id: string) => request<{ worktree: WorkWorktree }>(`/work/worktrees/${encodeURIComponent(id)}`),

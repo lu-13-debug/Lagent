@@ -10,6 +10,8 @@ import { createApprovalService } from './approvals.js';
 import { createThreadProjection } from './thread-projection.js';
 import { createCheckpointService } from './checkpoints.js';
 import { createWorktreeService } from './worktrees.js';
+import { createWorkflowService } from './workflows.js';
+import { createEvalService } from './evals.js';
 import { mergeRuns, planToRun, taggedRun } from './run-projection.js';
 import { registerMobileWorkRoutes } from '../mobile-gateway.js';
 import { registerMcpRoutes } from './mcp.js';
@@ -136,6 +138,12 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     enabled: (process.env.LAGENT_WORKTREE || '').trim() === '1'
   });
   const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain,runEvents,approvals,checkpoints,worktrees,outboxEnabled:process.env.LAGENT_WORK_OUTBOX==='1'});
+  // P4：工作流模板与评测快照。工作流执行复用 plan 的调度，不另起一套。
+  const workflows = createWorkflowService(store, {
+    startPlan: input => engine.plan(input),
+    listExecutors: () => { try { return executor.list().map(item => item.id); } catch { return []; } }
+  });
+  const evals = createEvalService(store);
   // P0.3：只读 thread 投影，默认 1 秒缓存；开关关闭时路由不存在，旧客户端不受影响。
   const threadApiOn=(process.env.LAGENT_THREAD_API||'').trim()==='1';
   const threads=threadApiOn?createThreadProjection({
@@ -261,6 +269,30 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   app.post('/api/work/conversations/:id/messages',async(req,res)=>res.status(201).json(await engine.conversationMessage(req.params.id,req.body||{})));
   app.post('/api/work/conversations/:id/turns/:turnId/synthesize',(req,res)=>res.status(201).json(engine.conversationSynthesize(req.params.id,req.params.turnId,req.body||{})));
   // 报告中心：默认按会话聚合最近结论；工单页仍是执行记录索引。
+  // 工作流：保存多步计划模板并重复执行；每次运行返回新的计划。
+  app.get('/api/work/workflows',(_req,res)=>res.json({workflows:workflows.list()}));
+  app.post('/api/work/workflows',(req,res)=>{
+    try{res.status(201).json({workflow:workflows.save(req.body||{})});}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'保存工作流失败'});}
+  });
+  app.delete('/api/work/workflows/:id',(req,res)=>{
+    try{res.json(workflows.remove(req.params.id));}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'删除工作流失败'});}
+  });
+  app.post('/api/work/workflows/:id/run',(req,res)=>{
+    try{res.status(201).json(workflows.run(req.params.id,{autoRun:req.body?.autoRun===true,clientRequestId:req.body?.clientRequestId}));}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'运行工作流失败'});}
+  });
+  // 评测：把真实工单汇总成对比表并留存快照；不执行任务、不重新打分。
+  app.get('/api/work/evals',(req,res)=>res.json({evals:evals.list({limit:Number(req.query?.limit)||20})}));
+  app.get('/api/work/evals/:id',(req,res)=>{
+    try{res.json({eval:evals.get(req.params.id)});}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'读取评测失败'});}
+  });
+  app.post('/api/work/evals',(req,res)=>{
+    try{res.status(201).json({eval:evals.evaluate({ticketIds:req.body?.ticketIds,name:req.body?.name,limit:Number(req.body?.limit)||20})});}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'评测失败'});}
+  });
   app.get('/api/work/reports',(req,res)=>res.json(engine.listReports(req.query||{})));
   app.get('/api/work/reports/:id',(req,res)=>res.json(engine.getReport(req.params.id)));
   app.get('/api/work/reports/:id/markdown',(req,res)=>res.type('text/markdown; charset=utf-8').send(engine.reportMarkdown(req.params.id)));

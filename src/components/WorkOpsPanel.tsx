@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, Bot, MessageSquare, Play, RefreshCw, ShieldCheck, Sparkles, Square, Users } from 'lucide-react';
+import { Activity, BookOpen, Bot, GitBranch, MessageSquare, Play, RefreshCw, ShieldCheck, Sparkles, Square, Users } from 'lucide-react';
 import { api } from '../api';
-import type { WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveSession, WorkMcpServer, WorkProject, WorkRoutine, WorkRoutineKind, WorkRoutineSchedule, WorkTeamRoom } from '../superagent';
+import type { WorkEval, WorkImChannel, WorkImConfig, WorkLibraryPreview, WorkLibrarySync, WorkLiveSession, WorkMcpServer, WorkProject, WorkRoutine, WorkRoutineKind, WorkRoutineSchedule, WorkTeamRoom, WorkWorkflow, WorkWorkflowStep } from '../superagent';
 import { Spinner } from './ui';
 import { STATUS_LABELS } from '../status';
 
-type Tab = 'library' | 'routines' | 'mcp' | 'im' | 'rooms' | 'live';
+type Tab = 'library' | 'routines' | 'workflows' | 'evals' | 'mcp' | 'im' | 'rooms' | 'live';
 type Notify = (message: string, error?: boolean) => void;
 
 const TABS: { id: Tab; label: string; icon: typeof BookOpen }[] = [
   { id: 'library', label: 'Library 同步', icon: BookOpen },
   { id: 'routines', label: '例行任务', icon: RefreshCw },
+  { id: 'workflows', label: '工作流', icon: GitBranch },
+  { id: 'evals', label: '评测', icon: Activity },
   { id: 'mcp', label: 'MCP 客户端', icon: Bot },
   { id: 'im', label: 'IM 通知', icon: MessageSquare },
   { id: 'rooms', label: '团队房间', icon: Users },
@@ -52,12 +54,120 @@ export function WorkOpsPanel({ projects, executors, windows, notify }: { project
     <div className="sa-ops-body">
       {tab === 'library' && <LibraryPanel projectId={projectId} notify={notify} />}
       {tab === 'routines' && <RoutinesPanel projectId={projectId} projects={projects} executors={executors} notify={notify} />}
+      {tab === 'workflows' && <WorkflowsPanel projectId={projectId} executors={executors} notify={notify} />}
+      {tab === 'evals' && <EvalsPanel notify={notify} />}
       {tab === 'mcp' && <McpPanel notify={notify} />}
       {tab === 'im' && <ImPanel notify={notify} />}
       {tab === 'rooms' && <RoomsPanel projectId={projectId} projects={projects} notify={notify} />}
       {tab === 'live' && <LivePanel windows={windows} notify={notify} />}
     </div>
   </article>;
+}
+
+function parseWorkflowSteps(textValue: string): WorkWorkflowStep[] {
+  // 每行一步：执行器 | 说明。默认串成流水线（第 N 步依赖第 N-1 步），
+  // 需要并行时把依赖写在行尾，例如 `-> 1,2`，序号从 1 开始。
+  return textValue.split(/[\r\n]+/).map(line => line.trim()).filter(Boolean).map((line, index) => {
+    const [executorId, ...rest] = line.split('|');
+    const body = rest.join('|').trim();
+    const dependsMatch = /->\s*([\d,]+)\s*$/.exec(body);
+    const dependsOn = dependsMatch
+      ? dependsMatch[1].split(',').map(value => Number(value.trim()) - 1).filter(value => Number.isInteger(value) && value >= 0 && value < index)
+      : (index ? [index - 1] : []);
+    const text = dependsMatch ? body.slice(0, dependsMatch.index).trim() : body;
+    return { executorId: executorId.trim(), text, ...(dependsOn.length ? { dependsOn } : {}) };
+  });
+}
+
+function WorkflowsPanel({ projectId, executors, notify }: { projectId: string; executors: string[]; notify: Notify }) {
+  const [rows, setRows] = useState<WorkWorkflow[]>([]);
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [goal, setGoal] = useState('');
+  const [stepsText, setStepsText] = useState('');
+  const [busy, setBusy] = useState('');
+  const load = async () => { const result = await attempt(notify, () => api.workWorkflows()); if (result) setRows(result.workflows); };
+  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const save = async () => {
+    const steps = parseWorkflowSteps(stepsText);
+    setBusy('save');
+    const result = await attempt(notify, () => api.workSaveWorkflow({ name: name.trim(), goal: goal.trim(), steps, ...(projectId ? { projectId } : {}) }));
+    setBusy('');
+    if (!result) return;
+    setRows(previous => [result.workflow, ...previous.filter(row => row.id !== result.workflow.id)]);
+    setOpen(false); setName(''); setGoal(''); setStepsText('');
+    notify('工作流已保存，可以重复运行。');
+  };
+  return <div className="sa-ops-section">
+    <div className="sa-ops-list">{rows.map(row => <div className="sa-ops-row" key={row.id}>
+      <div>
+        <strong>{row.name}</strong>
+        <span>{row.goal} · {row.steps.length} 步 · {row.steps.map(step => step.executorId).join(' → ')}{row.lastRunAt ? ` · 上次 ${new Date(row.lastRunAt).toLocaleString('zh-CN')}` : ''}</span>
+      </div>
+      <div className="sa-ops-row-actions">
+        <button type="button" className="sa-link" onClick={() => void attempt(notify, async () => { const result = await api.workRunWorkflow(row.id, false); notify(`已创建计划，确认后开始执行（${result.plan ? '计划已生成' : '等待批准'}）。`); await load(); })}>运行</button>
+        <button type="button" className="sa-link" onClick={() => void attempt(notify, async () => { await api.workDeleteWorkflow(row.id); await load(); })}>删除</button>
+      </div>
+    </div>)}</div>
+    {!rows.length && <p className="sa-inline-note">还没有工作流。把常用的多步计划存下来，下次一条命令重跑。</p>}
+    {open ? <div className="sa-ops-form">
+      <label>名称<input value={name} onChange={event => setName(event.target.value)} placeholder="例如：发布前检查" /></label>
+      <label>目标<input value={goal} onChange={event => setGoal(event.target.value)} placeholder="这次运行要达成的结果" /></label>
+      <label>步骤（每行一步：执行器 | 说明，行尾可写 -&gt; 1,2 指定依赖）<textarea rows={5} value={stepsText} onChange={event => setStepsText(event.target.value)} placeholder={`model | 检查最近的改动并列出风险
+claude-code | 跑测试并修复失败`} /></label>
+      <div className="sa-ops-form-actions">
+        <button type="button" className="sa-link" onClick={() => setOpen(false)}>取消</button>
+        <button type="button" className="sa-button" disabled={busy === 'save' || !name.trim() || !goal.trim()} onClick={() => void save()}>{busy === 'save' ? '保存中…' : '保存工作流'}</button>
+      </div>
+      {executors.length ? <p className="sa-inline-note">可用执行器：{executors.join('、')}</p> : null}
+    </div> : <button type="button" className="sa-link" onClick={() => setOpen(true)}>新建工作流</button>}
+  </div>;
+}
+
+function EvalsPanel({ notify }: { notify: Notify }) {
+  const [rows, setRows] = useState<WorkEval[]>([]);
+  const [current, setCurrent] = useState<WorkEval | null>(null);
+  const [busy, setBusy] = useState('');
+  const load = async () => { const result = await attempt(notify, () => api.workEvals(20)); if (result) setRows(result.evals); };
+  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const run = async () => {
+    setBusy('run');
+    const result = await attempt(notify, () => api.workEvaluate({ limit: 20 }));
+    setBusy('');
+    if (!result) return;
+    setCurrent(result.eval);
+    notify(`评测完成：${result.eval.summary.passed}/${result.eval.summary.total} 通过。`);
+    await load();
+  };
+  return <div className="sa-ops-section">
+    <div className="sa-ops-row">
+      <div><strong>最近 20 个已结束工单</strong><span>按真实运行记录汇总状态、耗时、Token、成本与验证结果，不重新执行任务。</span></div>
+      <div className="sa-ops-row-actions"><button type="button" className="sa-link" disabled={busy === 'run'} onClick={() => void run()}>{busy === 'run' ? '评测中…' : '开始评测'}</button></div>
+    </div>
+    {current ? <div className="sa-eval">
+      <div className="sa-eval-summary">
+        <span><b>{current.summary.total}</b>工单</span>
+        <span><b>{Math.round(current.summary.passRate * 100)}%</b>通过率</span>
+        <span><b>{current.summary.verified}</b>验证通过</span>
+        <span><b>{current.summary.avgDurationMs ? `${Math.round(current.summary.avgDurationMs / 1000)}s` : '—'}</b>平均耗时</span>
+        <span><b>{current.summary.totalTokens}</b>Token</span>
+        <span><b>{current.summary.totalCost}</b>成本</span>
+      </div>
+      <ul className="sa-eval-rows">{current.tickets.map(row => <li key={row.ticketId} data-outcome={row.outcome}>
+        <span className="sa-eval-title">{row.title || row.ticketId.slice(0, 8)}</span>
+        <span>{row.executor}</span>
+        <span>{row.outcome === 'passed' ? '通过' : row.outcome === 'failed' ? '失败' : '未完成'}</span>
+        <span>{row.verify === 'passed' ? '已验证' : row.verify === 'failed' ? '验证失败' : '未验证'}</span>
+        <span>{row.durationMs ? `${Math.round(row.durationMs / 1000)}s` : '—'}</span>
+        <span>{row.tokens} tok</span>
+        <span>{row.files} 文件</span>
+      </li>)}</ul>
+    </div> : null}
+    {rows.length ? <div className="sa-ops-list">{rows.map(row => <div className="sa-ops-row" key={row.id}>
+      <div><strong>{row.name}</strong><span>{new Date(row.at).toLocaleString('zh-CN')} · {row.summary.passed}/{row.summary.total} 通过 · {row.summary.totalTokens} Token</span></div>
+      <div className="sa-ops-row-actions"><button type="button" className="sa-link" onClick={() => void attempt(notify, async () => { const result = await api.workEval(row.id); setCurrent(result.eval); })}>查看</button></div>
+    </div>)}</div> : null}
+  </div>;
 }
 
 function LibraryPanel({ projectId, notify }: { projectId: string; notify: Notify }) {
