@@ -79,6 +79,8 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
   const db = workStore(store, publish, { runEvents: options.runEvents || null });
   // 检查点：执行前给项目工作区拍一张可回滚的存档，未注入时整段跳过。
   const checkpoints = options.checkpoints || null;
+  // 隔离工作树：项目显式开启 worktree 模式时，任务在独立工作树里跑，主工作区不动。
+  const worktrees = options.worktrees || null;
   // P0.2：审批中心按开关注入。没有注入时所有审批逻辑整段跳过，旧路径完全不变。
   const approvals = options.approvals || null;
   const requestApproval = input => {
@@ -618,12 +620,25 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
     if (!target) return ticket;
     if (['cli', 'model'].includes(target.kind)) {
       const current = ticket.executorInput && typeof ticket.executorInput === 'object' && !Array.isArray(ticket.executorInput) ? ticket.executorInput : {};
+      // 项目开了隔离执行：第一次启动时准备工作树，之后同一工单复用；
+      // 准备失败退回主工作区，不阻断任务。
+      let isolated = null;
+      if (worktrees && context.project.isolation === 'worktree') {
+        try {
+          isolated = worktrees.byTicket(ticket.id) || worktrees.prepare({
+            projectPath: context.project.path,
+            ticketId: ticket.id,
+            threadId: ticket.conversationId || ticket.projectChatId || ''
+          });
+        } catch { isolated = null; }
+      }
       return {
         ...ticket,
+        ...(isolated ? { worktreeId: isolated.id, worktreeBranch: isolated.branch } : {}),
         executorInput: {
           ...current,
           prompt: typeof current.prompt === 'string' && current.prompt.trim() ? current.prompt : String(ticket.command || ''),
-          workspace: context.project.path,
+          workspace: isolated?.path || context.project.path,
           write: current.write === undefined ? context.chat.writable !== false : current.write === true,
           ...(context.chat.sessionId && !current.resume ? { resume: context.chat.sessionId } : {})
         }
@@ -1066,7 +1081,11 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
           // （model 的 artifacts.cli.artifacts、CLI 的 files），否则变更档案里永远是空的。
           // 失败也要记：文件确实被改过，这件事跟这次任务算不算成功无关。
           const reported = reportedFiles(task);
-          const gitFiles = status === 'completed' ? changedSinceSnapshot(ticket.id, project.path) : [];
+          // 隔离执行时改动发生在工作树里：按基线差集取文件，主工作区的快照不适用。
+          const isolated = worktrees?.byTicket(ticket.id) || null;
+          const gitFiles = isolated
+            ? worktrees.changedSince(isolated.id)
+            : (status === 'completed' ? changedSinceSnapshot(ticket.id, project.path) : []);
           // 非 Git 项目没有 diff 可用：按执行开始时间扫 mtime，否则产物页永远只有执行器主动报告的少数文件。
           const scanStart = Date.parse(assignment?.startedAt || ticket.startedAt || ticket.createdAt || '') || 0;
           const touched = project && !projects.isGitRepo(project.path) && scanStart
@@ -1090,6 +1109,14 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
             } catch { /* 变更档案写入失败不影响工单状态。 */ }
           }
           if (project && status !== 'completed') changedSinceSnapshot(ticket.id, project.path);
+          // 工作树里的改动提交到独立分支 lagent/<短 id>，然后释放目录；不合回、不推送。
+          // 提交失败就保留工作树，让人能看到现场。
+          if (isolated) {
+            try {
+              worktrees.commit(isolated.id, `lagent: ${String(ticket.title || '').slice(0, 120)}`);
+              worktrees.release(isolated.id);
+            } catch { /* 保留工作树待人工处理。 */ }
+          }
           if (project) {
             recordProjectMemory(project, {
               ticket,
@@ -2654,6 +2681,7 @@ export function createWorkEngine(store, executor, publish = () => {}, options = 
       return plan.projectChatId?db.get('project-chat',plan.projectChatId)?.projectId||null:null;
     },
     getProject(id){return projects.getProject(id);},
+    setProjectIsolation(id,mode){return projects.setIsolation(id,mode);},
     importProject(input){return projects.importProject(input);},
     deleteProject(id){
       const project=projects.getProject(id);

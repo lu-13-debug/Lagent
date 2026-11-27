@@ -9,6 +9,7 @@ import { createJsonlArchive } from './run-events-archive.js';
 import { createApprovalService } from './approvals.js';
 import { createThreadProjection } from './thread-projection.js';
 import { createCheckpointService } from './checkpoints.js';
+import { createWorktreeService } from './worktrees.js';
 import { mergeRuns, planToRun, taggedRun } from './run-projection.js';
 import { registerMobileWorkRoutes } from '../mobile-gateway.js';
 import { registerMcpRoutes } from './mcp.js';
@@ -129,7 +130,12 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
   const checkpoints = (process.env.LAGENT_CHECKPOINTS || '1') === '0' ? null : createCheckpointService(store, {
     dataDir: path.dirname(store.dbPath)
   });
-  const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain,runEvents,approvals,checkpoints,outboxEnabled:process.env.LAGENT_WORK_OUTBOX==='1'});
+  // 隔离工作树默认关闭；开启后项目可在 worktree 模式下执行。
+  const worktrees = createWorktreeService(store, {
+    dataDir: path.dirname(store.dbPath),
+    enabled: (process.env.LAGENT_WORKTREE || '').trim() === '1'
+  });
+  const engine=createWorkEngine(store,executor,publish,{planner,windowBridge,workspace,brain,runEvents,approvals,checkpoints,worktrees,outboxEnabled:process.env.LAGENT_WORK_OUTBOX==='1'});
   // P0.3：只读 thread 投影，默认 1 秒缓存；开关关闭时路由不存在，旧客户端不受影响。
   const threadApiOn=(process.env.LAGENT_THREAD_API||'').trim()==='1';
   const threads=threadApiOn?createThreadProjection({
@@ -167,6 +173,33 @@ export function registerWork(app,store,executor,{isSessionValid,onConnect,mobile
     res.sendFile(file.absolute);
   });
   app.delete('/api/work/projects/:id',(req,res)=>res.json(engine.deleteProject(req.params.id)));
+  // 隔离执行：项目级开关 + 工作树查询/提交/清理。未开启 LAGENT_WORKTREE=1 时写入会被拒绝。
+  app.post('/api/work/projects/:id/isolation',(req,res)=>{
+    try{
+      if(!worktrees.enabled) throw Object.assign(new Error('隔离执行未启用（LAGENT_WORKTREE=1）'),{status:409,code:'WORKTREE_DISABLED'});
+      res.json({project:engine.setProjectIsolation(req.params.id, req.body?.mode)});
+    }catch(error){res.status(error?.status||500).json({error:error?.message||'设置隔离模式失败',...(error?.code?{code:error.code}:{})});}
+  });
+  app.get('/api/work/projects/:id/worktrees',(req,res)=>{
+    try{res.json({worktrees:worktrees.list({projectPath:engine.getProject(req.params.id).path,status:req.query?.status??'active'})});}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'读取工作树失败'});}
+  });
+  app.get('/api/work/worktrees/:id',(req,res)=>{
+    try{res.json({worktree:worktrees.status(req.params.id)});}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'读取工作树失败'});}
+  });
+  app.post('/api/work/worktrees/:id/commit',(req,res)=>{
+    try{res.json({worktree:worktrees.commit(req.params.id, req.body?.message)});}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'提交工作树失败'});}
+  });
+  app.delete('/api/work/worktrees/:id',(req,res)=>{
+    try{res.json(worktrees.release(req.params.id,{deleteBranch:req.query?.deleteBranch==='1'}));}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'清理工作树失败'});}
+  });
+  app.post('/api/work/worktrees/prune',(req,res)=>{
+    try{res.json({removed:worktrees.prune({days:Number(req.body?.days)||undefined})});}
+    catch(error){res.status(error?.status||500).json({error:error?.message||'清理工作树失败'});}
+  });
   app.patch('/api/work/projects/:id',(req,res)=>res.json({project:engine.renameProject(req.params.id,req.body)}));
   app.get('/api/work/projects/:id/sessions',(req,res)=>res.json({sessions:engine.scanProjectSessions(req.params.id,req.query?.executor)}));
   app.post('/api/work/projects/:id/sessions',(req,res)=>res.status(201).json(engine.importProjectSession(req.params.id,req.body)));

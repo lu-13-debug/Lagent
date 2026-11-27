@@ -509,6 +509,19 @@ export function projectService(db, { environment = process.env, home = os.homedi
     return { ...project, chatCount: chats.length, lastActivity, chats: enriched };
   }
 
+  // 隔离执行开关：worktree 模式下任务在独立工作树里跑，主工作区不动。
+  // 只允许 git 仓库开启，避免非 git 项目开了之后回退成直接执行还不自知。
+  function setIsolation(id, mode) {
+    const project = getProject(id);
+    const value = mode === 'worktree' ? 'worktree' : mode === 'direct' || !mode ? 'direct' : '';
+    if (!value) throw workError('隔离模式只能是 direct 或 worktree', 400);
+    if (value === 'worktree' && !isGitRepo(project.path)) throw workError('只有 git 仓库才能开启隔离执行', 400);
+    const next = { ...project, isolation: value, updatedAt: now() };
+    if (value === 'direct') delete next.isolation;
+    db.put('project', next);
+    return next;
+  }
+
   // 只列文件夹，供浏览器端选择项目目录；不读取或返回任何文件内容。
   function listDirectory(input = {}) {
     const raw = typeof input.path === 'string' ? input.path.trim() : '';
@@ -779,6 +792,7 @@ export function projectService(db, { environment = process.env, home = os.homedi
     renameChat,
     setChatPermission,
     setChatCollaborators,
+    setIsolation,
     adoptTitle,
     touchChat,
     scanSessions,
