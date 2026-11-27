@@ -4,7 +4,8 @@ import { createWorkEngine } from './engine.js';
 import { createBackupService } from './backup.js';
 import { scanHistoricalUsage } from './session-usage.js';
 import { workEvents } from './effects.js';
-import { createRunEventLog } from './run-events.js';
+import { createRunEventLog, RUN_EVENT_LIMITS } from './run-events.js';
+import { createJsonlArchive } from './run-events-archive.js';
 import { createApprovalService } from './approvals.js';
 import { createThreadProjection } from './thread-projection.js';
 import { mergeRuns, planToRun, taggedRun } from './run-projection.js';
@@ -40,7 +41,19 @@ export function projectStateOf(workspace) {
 export function registerWork(app,store,executor,{isSessionValid,onConnect,mobileGateway,mobileOwnerId,onMobileEventConnect,planner,windowBridge,providerRegistry,workspace,brain,ownerId='local',allowFilesystemBrowser=false,mcpTokenIndex=null}={}) {
   // P0.1：开关打开后双写 run-event，并让 SSE 带上 id/after_seq。默认关闭，便于灰度与回滚。
   const runEventsOn=(process.env.LAGENT_RUN_EVENTS||'').trim()==='1';
-  const runEvents=runEventsOn?createRunEventLog(store,{ownerId,lookupRun:id=>store.get('work-run',id)}):null;
+  const positiveInt=(value,fallback)=>{const n=Number(value);return Number.isSafeInteger(n)&&n>0?n:fallback;};
+  // 保留策略可调；裁剪前默认按天归档到 data/run-events-archive，设 0 可关闭归档。
+  const archiveSetting=(process.env.LAGENT_RUN_EVENT_ARCHIVE_DIR||'').trim();
+  const archiveDir=archiveSetting==='0'?'':(archiveSetting||path.join(process.cwd(),'data','run-events-archive'));
+  const runEvents=runEventsOn?createRunEventLog(store,{
+    ownerId,
+    lookupRun:id=>store.get('work-run',id),
+    limits:{
+      perThread:positiveInt(process.env.LAGENT_RUN_EVENT_PER_THREAD,RUN_EVENT_LIMITS.perThread),
+      maxAgeDays:positiveInt(process.env.LAGENT_RUN_EVENT_MAX_AGE_DAYS,RUN_EVENT_LIMITS.maxAgeDays)
+    },
+    archive:archiveDir?createJsonlArchive(archiveDir):null
+  }):null;
   const sseV2=Boolean(runEvents)&&(process.env.LAGENT_SSE_V2||'').trim()!=='0';
   const events=workEvents({ store, log:sseV2?runEvents:null, replayLimit:500, ownerId:null });
   const stopRunEvents=runEvents?runEvents.startMaintenance():null;

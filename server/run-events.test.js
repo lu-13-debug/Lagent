@@ -96,6 +96,32 @@ test('prune 按 thread 保留最近 N 条并按天数清旧事件', t => {
   assert.equal(next.seq, 9, '裁剪不回收 seq');
 });
 
+test('prune 先归档再删除，归档失败时保留数据', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'lagent-run-events-archive-'));
+  const store = new Store(dir);
+  const archived = [];
+  const log = createRunEventLog(store, { ownerId: 'local', archive: rows => archived.push(...rows) });
+  t.after(() => { log.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
+
+  for (let index = 0; index < 4; index++) log.record({ type: 'ticket', ticketId: 't1', payload: { id: 't1' } });
+  log.record({ type: 'ticket', ticketId: 't9', payload: { id: 't9' }, createdAt: '2026-01-01T00:00:00.000Z' });
+
+  const result = log.prune({ perThread: 2, maxAgeDays: 30, now: Date.parse('2026-11-26T00:00:00.000Z') });
+  assert.equal(result.aged, 1);
+  assert.ok(archived.length >= 3, '被裁剪的事件都先进了归档');
+  assert.ok(archived.some(row => row.threadId === 't9'), '按天过期的事件也进归档');
+  assert.equal(log.listAfter(0, 100).filter(event => event.threadId === 't1').length, 2);
+
+  const dir2 = mkdtempSync(join(tmpdir(), 'lagent-run-events-archive-fail-'));
+  const store2 = new Store(dir2);
+  const log2 = createRunEventLog(store2, { ownerId: 'local', archive: () => { throw new Error('disk full'); } });
+  t.after(() => { log2.close(); store2.close(); rmSync(dir2, { recursive: true, force: true }); });
+  for (let index = 0; index < 3; index++) log2.record({ type: 'ticket', ticketId: 'c1', payload: { id: 'c1' } });
+  const failed = log2.prune({ perThread: 1, maxAgeDays: 0 });
+  assert.equal(failed.threads, 0, '归档失败时不删除');
+  assert.equal(log2.listAfter(0, 100).filter(event => event.threadId === 'c1').length, 3);
+});
+
 test('SSE v2：after_seq 补发、id 帧与旧字段兼容', t => {
   const { log } = fixture(t);
   log.record({ id: 'e1', type: 'ticket', ticketId: 't1', payload: { id: 't1', status: 'queued' } });

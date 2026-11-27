@@ -112,7 +112,7 @@ export function wireEvent(event) {
   };
 }
 
-export function createRunEventLog(store, { ownerId = 'local', lookupRun = null, limits = {} } = {}) {
+export function createRunEventLog(store, { ownerId = 'local', lookupRun = null, limits = {}, archive = null } = {}) {
   if (!store?.db) throw new TypeError('run-event 日志需要 Store');
   const config = { ...RUN_EVENT_LIMITS, ...limits };
   // run-chat 会告诉我们 run 属于哪个会话；后续 run/run-step 不必每次查库。
@@ -233,22 +233,49 @@ export function createRunEventLog(store, { ownerId = 'local', lookupRun = null, 
     },
 
     // 每 thread 保留最近 N 条 + 超过保留天数的清掉；只删旧事件，不动 seq 计数。
+    // 配置了归档时先把要删的行交给归档器；归档失败则保留数据，宁可多占空间也不丢审计。
     prune({ perThread = config.perThread, maxAgeDays = config.maxAgeDays, now = Date.now() } = {}) {
       const run = () => {
+        const archiveThenDelete = (selectSql, deleteSql, params) => {
+          if (archive) {
+            let rows;
+            try { rows = store.db.prepare(selectSql).all(...params).map(row => JSON.parse(row.body)); }
+            catch (error) { console.error('[run-events] 读取待归档事件失败', error?.message || error); return 0; }
+            try { archive(rows); }
+            catch (error) { console.error('[run-events] 归档失败，暂停本次清理', error?.message || error); return 0; }
+          }
+          return store.db.prepare(deleteSql).run(...params).changes || 0;
+        };
         let threads = 0;
         if (Number.isSafeInteger(perThread) && perThread > 0) {
-          threads = store.db.prepare(`DELETE FROM entities WHERE kind='run-event' AND rowid IN (
-            SELECT rowid FROM (
-              SELECT rowid, ROW_NUMBER() OVER (
-                PARTITION BY json_extract(body,'$.threadId')
-                ORDER BY json_extract(body,'$.seq') DESC
-              ) AS rn FROM entities WHERE kind='run-event'
-            ) WHERE rn > ?)`).run(perThread).changes || 0;
+          threads = archiveThenDelete(
+            `SELECT body FROM entities WHERE kind='run-event' AND rowid IN (
+              SELECT rowid FROM (
+                SELECT rowid, ROW_NUMBER() OVER (
+                  PARTITION BY json_extract(body,'$.threadId')
+                  ORDER BY json_extract(body,'$.seq') DESC
+                ) AS rn FROM entities WHERE kind='run-event'
+              ) WHERE rn > ?
+            )`,
+            `DELETE FROM entities WHERE kind='run-event' AND rowid IN (
+              SELECT rowid FROM (
+                SELECT rowid, ROW_NUMBER() OVER (
+                  PARTITION BY json_extract(body,'$.threadId')
+                  ORDER BY json_extract(body,'$.seq') DESC
+                ) AS rn FROM entities WHERE kind='run-event'
+              ) WHERE rn > ?
+            )`,
+            [perThread]
+          );
         }
         let aged = 0;
         if (Number.isFinite(maxAgeDays) && maxAgeDays > 0) {
           const cutoff = new Date(now - maxAgeDays * 86400000).toISOString();
-          aged = store.db.prepare("DELETE FROM entities WHERE kind='run-event' AND json_extract(body,'$.createdAt')<?").run(cutoff).changes || 0;
+          aged = archiveThenDelete(
+            "SELECT body FROM entities WHERE kind='run-event' AND json_extract(body,'$.createdAt')<?",
+            "DELETE FROM entities WHERE kind='run-event' AND json_extract(body,'$.createdAt')<?",
+            [cutoff]
+          );
         }
         return { threads, aged };
       };

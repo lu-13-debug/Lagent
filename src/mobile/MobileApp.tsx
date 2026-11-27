@@ -159,8 +159,12 @@ function MobileHome({ device, onSignOut }: { device: MobileDevice; onSignOut: ()
   const [bootstrap, setBootstrap] = useState<MobileBootstrap | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<'chat' | 'inbox' | 'tickets' | 'settings'>('chat');
-  const [detailId, setDetailId] = useState('');
+  const [tab, setTab] = useState<'chat' | 'inbox' | 'tickets' | 'settings'>(() => {
+    const raw = new URLSearchParams(window.location.search).get('tab');
+    return raw === 'inbox' || raw === 'tickets' || raw === 'settings' ? raw : 'chat';
+  });
+  // 深链：电脑上复制的 ?ticket= 链接在手机上直接落到同一个工单。
+  const [detailId, setDetailId] = useState(() => new URLSearchParams(window.location.search).get('ticket') || '');
   const [detail, setDetail] = useState<MobileDetail | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [notice, setNotice] = useState('');
@@ -185,6 +189,14 @@ function MobileHome({ device, onSignOut }: { device: MobileDevice; onSignOut: ()
   const online = useServerEvents(device.deviceToken, onEvent, unauthorized);
 
   useEffect(() => () => { if (reloadTimer.current !== null) window.clearTimeout(reloadTimer.current); }, []);
+
+  // 手机端深链：tab 与工单写回地址栏，刷新、分享、换设备都能落到同一处。
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (tab === 'chat') url.searchParams.delete('tab'); else url.searchParams.set('tab', tab);
+    if (detailId) url.searchParams.set('ticket', detailId); else url.searchParams.delete('ticket');
+    window.history.replaceState(null, '', url);
+  }, [tab, detailId]);
 
   useEffect(() => {
     let alive = true;
