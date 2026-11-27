@@ -59,6 +59,10 @@ function mainHarness({ savedState, displays = [{ workArea: { x: 0, y: 0, width: 
   });
   const electron = {
     app, BrowserWindow, screen: { getAllDisplays: () => displays }, session: { defaultSession: session },
+    Tray: class Tray extends EventEmitter {
+      constructor(icon) { super(); this.icon = icon; this.menu = null; }
+      setToolTip() {} setContextMenu(value) { this.menu = value; } destroy() {}
+    },
     Menu: { setApplicationMenu(value) { menu = value; }, buildFromTemplate: value => value, getApplicationMenu() { return null; } },
     clipboard: { writeText(value) { if (failClipboard) throw new Error('private clipboard error'); copied.push(value); } },
     ipcMain: { handle() {} }, dialog: { showErrorBox() {}, showMessageBox: async (...args) => { dialogs.push(args.at(-1)); return { response: choices.shift() }; } },
@@ -259,7 +263,7 @@ test('桌面托盘接收当前主框架摘要，关闭窗口隐藏且切换服�
   const remote = h.run('window');
   assert.match(remote.options.webPreferences.preload, /desktop-preload\.cjs$/);
   h.run('startTray()');
-  assert.equal(h.run('trayController.shouldHide()'), false);
+  assert.equal(h.run('trayController.shouldHide()'), true, '默认关闭窗口时留在托盘，任务不中断');
   const event = { sender: remote.webContents, senderFrame: remote.webContents.mainFrame };
   assert.equal(h.run('handleTraySummary')(event, [{ id: '1', title: '测试', status: 'running' }]), true);
   assert.equal(h.run('handleTraySummary')({ ...event, senderFrame: { url: remote.url } }, []), false);

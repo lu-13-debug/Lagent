@@ -12,7 +12,7 @@
  *   LAGENT_NODE_STATE      节点状态目录（存 nodeId / token）
  *   LAGENT_NODE_WORKSPACE  默认工作目录，默认 ~/Lagent Workspace
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { claudeCodeExecutor } from '../server/work/executors/claude-code.js';
@@ -25,7 +25,28 @@ const origin = String(process.env.LAGENT_NODE_URL || '').replace(/\/+$/, '');
 const stateDir = process.env.LAGENT_NODE_STATE || path.join(homedir(), '.lagent-node');
 const workspace = process.env.LAGENT_NODE_WORKSPACE || path.join(homedir(), 'Lagent Workspace');
 const stateFile = path.join(stateDir, 'node-state.json');
+const pidFile = path.join(stateDir, 'node.pid');
 const log = (...args) => console.log(new Date().toISOString(), ...args);
+
+// 单实例锁：pid 文件里记着还活着的节点，新进程直接退出，交给旧节点继续领任务。
+function acquireNodeLock() {
+  try {
+    const previous = Number(readFileSync(pidFile, 'utf8').trim());
+    if (Number.isSafeInteger(previous) && previous > 0 && previous !== process.pid) {
+      try { process.kill(previous, 0); return false; } catch { /* 旧进程已退出，接管锁 */ }
+    }
+  } catch { /* 没有锁文件 */ }
+  try { writeFileSync(pidFile, String(process.pid)); } catch { /* 锁不可写时仍继续运行 */ }
+  return true;
+}
+
+function releaseNodeLock() {
+  try {
+    if (readFileSync(pidFile, 'utf8').trim() === String(process.pid)) unlinkSync(pidFile);
+  } catch { /* 已被清理 */ }
+}
+
+process.on('exit', releaseNodeLock);
 
 if (!origin) {
   console.error('缺少 LAGENT_NODE_URL');
@@ -244,6 +265,11 @@ async function runJob(state, job) {
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function main() {
+  // 窗口退出后节点继续驻留；再次打开应用时用 pid 锁复用它，避免同一账号起两个节点。
+  if (!acquireNodeLock()) {
+    console.error(`已有本机执行节点在运行（pid ${readFileSync(pidFile, 'utf8').trim()}），本次启动退出。`);
+    process.exit(0);
+  }
   let state = readState();
   let refreshing = null;
   const ensureState = async () => {

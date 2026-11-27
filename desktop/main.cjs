@@ -47,7 +47,12 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (window && !window.isDestroyed()) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
   app.on('window-all-closed', () => app.quit());
-  app.on('before-quit', () => { quitting = true; stopNodeHost(); trayController?.destroy(); });
+  app.on('before-quit', () => {
+    quitting = true;
+    // 节点默认常驻：退出界面后任务继续跑完；LAGENT_NODE_PERSIST=0 恢复旧行为。
+    if (nodeHostPersists()) detachNodeHost(); else stopNodeHost();
+    trayController?.destroy();
+  });
   app.whenReady().then(start).catch(fail);
 }
 
@@ -102,8 +107,12 @@ function handleTrayState(event, state) {
   return true;
 }
 function startTray() {
-  let closeToTray = false;
-  try { closeToTray = JSON.parse(readFileSync(traySettingsFile, 'utf8'))?.closeToTray === true; } catch {}
+  // 默认关闭窗口时留在托盘：任务不随窗口消失，托盘菜单可改回「关闭即退出」。
+  let closeToTray = true;
+  try {
+    const saved = JSON.parse(readFileSync(traySettingsFile, 'utf8'));
+    if (typeof saved?.closeToTray === 'boolean') closeToTray = saved.closeToTray;
+  } catch {}
   trayController = createTrayController({
     create: () => new Tray(path.join(__dirname, '..', 'build', 'tray.png')),
     buildMenu: value => Menu.buildFromTemplate(value), show: showMainWindow,
@@ -242,6 +251,14 @@ function stopNodeHost() {
   nodeHost = null;
 }
 
+// 窗口退出时不杀节点，让它把手上任务跑完；下次启动由 pid 锁复用同一个进程。
+const nodeHostPersists = () => process.env.LAGENT_NODE_PERSIST !== '0';
+
+function detachNodeHost() {
+  stopNodeCookieWatch();
+  nodeHost = null;
+}
+
 async function startNodeHost() {
   stopNodeHost();
   if (!cloudOrigin || isLocalServerUrl(cloudOrigin)) return;
@@ -255,8 +272,11 @@ async function startNodeHost() {
     nodeHost = spawn(process.execPath, [path.join(__dirname, 'node-host.mjs')], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', LAGENT_NODE_URL: cloudOrigin, LAGENT_NODE_STATE: dir },
       stdio: ['ignore', out, out],
-      windowsHide: true
+      windowsHide: true,
+      // 与界面脱钩：窗口退出后进程继续存活，由节点自己的 pid 锁避免重复实例。
+      detached: true
     });
+    nodeHost.unref();
     nodeHost.on('exit', code => { log(`本机执行节点退出（${code}）`); nodeHost = null; });
     log('本机执行节点已启动。');
   } catch (error) {
