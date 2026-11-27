@@ -2874,15 +2874,21 @@ export function SuperAgentShell({ user, runtime, settings, onSettingsSaved, noti
 type PlanStepDraft = { executorId: string; text: string; dependsOn: number[]; windowHandle: string };
 
 function PlanBuilder({ agents, allowedExecutors, windows, initialGoal, close, onCreated }: {
-  agents: { id: string; name: string; status: string }[];
+  agents: { id: string; name: string; status: string; capabilities?: string[] }[];
   allowedExecutors: string[];
   windows: { id: string; handle: number; pid: number; process: string; title: string }[];
   initialGoal: string;
   close: () => void;
   onCreated: (plan: WorkPlan) => void;
 }) {
-  const targets = agents.filter(agent => allowedExecutors.includes(agent.id) && agent.status === 'available' && (['codex', 'claude-code', 'window'].includes(agent.id) || agent.id.endsWith('-acp')) && (agent.id !== 'window' || windows.length > 0));
-  const defaultExecutor = targets.find(agent => agent.id === 'codex')?.id || targets[0]?.id || '';
+  // 能力声明取代执行器 id 判断：新执行器只要声明能力就能进计划，不用再改这里。
+  const can = (id: string, capability: string) => Boolean(agents.find(agent => agent.id === id)?.capabilities?.includes(capability));
+  const isWindowAgent = (id: string) => can(id, 'window');
+  const wantsPrompt = (id: string) => can(id, 'stream-json') || can(id, 'jsonl');
+  const targets = agents.filter(agent => allowedExecutors.includes(agent.id) && agent.status === 'available'
+    && (can(agent.id, 'project-write') || can(agent.id, 'window') || can(agent.id, 'acp'))
+    && (!isWindowAgent(agent.id) || windows.length > 0));
+  const defaultExecutor = targets.find(agent => can(agent.id, 'project-write'))?.id || targets[0]?.id || '';
   const [goal, setGoal] = useState(initialGoal);
   const [steps, setSteps] = useState<PlanStepDraft[]>([
     { executorId: defaultExecutor, text: initialGoal, dependsOn: [], windowHandle: '' },
@@ -2899,7 +2905,7 @@ function PlanBuilder({ agents, allowedExecutors, windows, initialGoal, close, on
     setSuggesting(true); setError('');
     try {
       const result = await api.suggestWorkPlan(value, targets.map(target => target.id));
-      setSteps(result.steps.map(step => ({ executorId: step.executorId, text: step.text, dependsOn: Array.isArray(step.dependsOn) ? step.dependsOn.filter(index => Number.isInteger(index) && index >= 0) : [], windowHandle: step.executorInput?.handle ? String(step.executorInput.handle) : (step.executorId === 'window' ? (windows[0]?.id || '') : '') })));
+      setSteps(result.steps.map(step => ({ executorId: step.executorId, text: step.text, dependsOn: Array.isArray(step.dependsOn) ? step.dependsOn.filter(index => Number.isInteger(index) && index >= 0) : [], windowHandle: step.executorInput?.handle ? String(step.executorInput.handle) : (isWindowAgent(step.executorId) ? (windows[0]?.id || '') : '') })));
     } catch (cause) { setError((cause as Error).message); }
     finally { setSuggesting(false); }
   };
@@ -2909,7 +2915,7 @@ function PlanBuilder({ agents, allowedExecutors, windows, initialGoal, close, on
     if (!value) { setError('请填写计划目标。'); return; }
     if (steps.length < 2) { setError('至少需要两步。'); return; }
     // 空步骤会回落到计划总目标（见下方 payload），这里不再做恒假的「每一步都需要说明」校验。
-    if (steps.some(step => step.executorId === 'window' && !step.windowHandle)) { setError('请为窗口 Agent 步骤选择目标窗口。'); return; }
+    if (steps.some(step => isWindowAgent(step.executorId) && !step.windowHandle)) { setError('请为窗口 Agent 步骤选择目标窗口。'); return; }
     setBusy(true); setError('');
     try {
       const payload = steps.map(step => {
@@ -2917,8 +2923,8 @@ function PlanBuilder({ agents, allowedExecutors, windows, initialGoal, close, on
         return {
           executorId: step.executorId,
           text,
-          ...(step.executorId === 'codex' || step.executorId === 'claude-code' ? { executorInput: { prompt: text } } : {}),
-          ...(step.executorId === 'window' ? { executorInput: { handle: Number(step.windowHandle), text, submit: true, ...(windows.find(item => item.id === step.windowHandle)?.process ? { process: windows.find(item => item.id === step.windowHandle)!.process } : {}), ...(windows.find(item => item.id === step.windowHandle)?.title ? { title: windows.find(item => item.id === step.windowHandle)!.title } : {}) } } : {}),
+          ...(wantsPrompt(step.executorId) ? { executorInput: { prompt: text } } : {}),
+          ...(isWindowAgent(step.executorId) ? { executorInput: { handle: Number(step.windowHandle), text, submit: true, ...(windows.find(item => item.id === step.windowHandle)?.process ? { process: windows.find(item => item.id === step.windowHandle)!.process } : {}), ...(windows.find(item => item.id === step.windowHandle)?.title ? { title: windows.find(item => item.id === step.windowHandle)!.title } : {}) } } : {}),
           ...(step.dependsOn.length ? { dependsOn: step.dependsOn } : {}),
         };
       });
@@ -2936,7 +2942,7 @@ function PlanBuilder({ agents, allowedExecutors, windows, initialGoal, close, on
         <span className="sa-plan-index">{index + 1}</span>
         <select value={step.executorId} onChange={event => update(index, { executorId: event.target.value })} aria-label={`第${index + 1} 步执行器`}>{targets.length ? targets.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>) : <option value="">没有可用执行器</option>}</select>
         <input value={step.text} onChange={event => update(index, { text: event.target.value })} placeholder={index === 0 ? '第一步做什么' : '下一步做什么'} aria-label={`第${index + 1} 步说明`} />
-        {step.executorId === 'window' && <select value={step.windowHandle} onChange={event => update(index, { windowHandle: event.target.value })} aria-label={`第${index + 1} 步窗口`}><option value="">选择窗口</option>{windows.map(item => <option key={item.id} value={item.id}>{item.process} · {item.title}</option>)}</select>}
+        {isWindowAgent(step.executorId) && <select value={step.windowHandle} onChange={event => update(index, { windowHandle: event.target.value })} aria-label={`第${index + 1} 步窗口`}><option value="">选择窗口</option>{windows.map(item => <option key={item.id} value={item.id}>{item.process} · {item.title}</option>)}</select>}
         {index > 0 && <input className="sa-plan-deps" value={step.dependsOn.map(item => item + 1).join(',')} onChange={event => update(index, { dependsOn: parseDependencies(event.target.value, index) })} placeholder="依赖 1,2" aria-label={`第${index + 1} 步依赖`} />}
         {steps.length > 2 && <button type="button" className="sa-icon" aria-label={`删除第${index + 1} 步`} onClick={() => removeStep(index)}><X size={15} /></button>}
       </div>)}</div>
